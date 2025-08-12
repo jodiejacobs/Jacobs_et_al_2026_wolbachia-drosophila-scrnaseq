@@ -1,0 +1,66 @@
+genome='/private/groups/russelllab/jodie/scRNAseq/wolbachia_titer/rRNA_analysis/genome/Drosophila_melanogaster_wMel_ASM1658442v1.filtered.fa'
+
+gtf='/private/groups/russelllab/jodie/scRNAseq/wolbachia_titer/rRNA_analysis/genome/Drosophila_melanogaster_wMel_ASM1658442v1.corrected.gtf'
+
+# Pull out all rRNA genes, and make a consensus sequence:
+grep 'rRNA/ribosomal' $gtf > rRNA_genes.gtf
+
+gffread Dmel_rRNA.5.8S.gtf -g $genome -w Dmel_rRNA.5.8S.fasta
+gffread Dmel_rRNA.18S.gtf -g $genome -w Dmel_rRNA.18S.fasta
+gffread Dmel_rRNA.28S.gtf -g $genome -w Dmel_rRNA.28S.fasta
+
+# Align all rRNA genes to the consensus and calculate information content 
+for orig in Dmel_rRNA.*.fasta; do
+    base=$(basename "$orig" .fasta)
+    cat "$orig" "${base}_consensus.fasta" > "${base}_with_consensus.fasta"
+    mafft --auto "${base}_with_consensus.fasta" > "${base}_aligned.fasta"
+done
+
+python analyze_rRNA.py Dmel_rRNA.5.8S.fasta Dmel_rRNA.18S_consensus.fasta
+python analyze_rRNA.py Dmel_rRNA.18S.fasta Dmel_rRNA.18S_consensus.fasta
+python analyze_rRNA.py Dmel_rRNA.28S.fasta Dmel_rRNA.18S_consensus.fasta
+
+INPUTBAM='/path/to/scRNAseq/bam'
+BAM='/path/to/sorted/bam'
+
+# Prepare the input BAM file
+samtools sort -o $BAM $INPUTBAM
+samtools index $BAM
+
+# Pull the rRNA reads out from the .bam alignements
+samtools view -b -L Dmel_rRNA_combined.bed $BAM > rRNA_reads.bam
+
+# Align the reads to the rRNA genes to get the coverage 
+cat Dmel_rRNA.*_consensus.fasta > rRNA_consensus_all.fasta
+minimap2 -ax map-ont rRNA_consensus_all.fasta rRNA_reads.bam > rRNA_vs_consensus.sam
+samtools view -Sb rRNA_vs_consensus.sam | samtools sort -o rRNA_vs_consensus.sorted.bam
+samtools index rRNA_vs_consensus.sorted.bam
+
+# Calculate depth:
+samtools depth rRNA_vs_consensus.sorted.bam > rRNA_coverage.tsv
+
+
+# Calculate the coverage for all the cells:
+for bam in /path/to/directory/*.bam; do
+    sbatch scripts/sort_bam.sh "$bam"
+done
+
+# Plot the coverage:
+find ../data/pipseq/cell/ -name "*_coverage.tsv" > coverage_files_pip_cells.txt
+python plot_coverage.py coverage_files_pip_cells.txt --output-dir rRNA_plots_pipseq_cells
+
+
+# # Plot:
+# import pandas as pd
+# import matplotlib.pyplot as plt
+
+# df = pd.read_csv("rRNA_coverage.tsv", sep="\t", header=None, names=["ref", "pos", "depth"])
+
+# for name, group in df.groupby("ref"):
+#     plt.figure(figsize=(10, 4))
+#     plt.plot(group["pos"], group["depth"], label=name)
+#     plt.title(f"Coverage for {name}")
+#     plt.xlabel("Position (bp)")
+#     plt.ylabel("Depth")
+#     plt.tight_layout()
+#     plt.savefig(f"{name}_coverage_plot.png")
