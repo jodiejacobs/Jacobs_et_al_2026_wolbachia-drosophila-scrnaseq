@@ -1,0 +1,149 @@
+genome='/private/groups/russelllab/jodie/scRNAseq/wolbachia_titer/rRNA_analysis/genome/Drosophila_melanogaster_wMel_ASM1658442v1.filtered.fa'
+
+gtf='/private/groups/russelllab/jodie/scRNAseq/wolbachia_titer/rRNA_analysis/genome/Drosophila_melanogaster_wMel_ASM1658442v1.corrected.gtf'
+
+# Pull out all rRNA genes, and make a consensus sequence:
+grep 'rRNA/ribosomal' $gtf > rRNA_genes.gtf
+
+gffread Dmel_rRNA.5.8S.gtf -g $genome -w Dmel_rRNA.5.8S.fasta
+gffread Dmel_rRNA.18S.gtf -g $genome -w Dmel_rRNA.18S.fasta
+gffread Dmel_rRNA.28S.gtf -g $genome -w Dmel_rRNA.28S.fasta
+
+# Align all rRNA genes to the consensus and calculate information content 
+for orig in Dmel_rRNA.*.fasta; do
+    base=$(basename "$orig" .fasta)
+    cat "$orig" "${base}_consensus.fasta" > "${base}_with_consensus.fasta"
+    mafft --auto "${base}_with_consensus.fasta" > "${base}_aligned.fasta"
+done
+
+python analyze_rRNA.py Dmel_rRNA.5.8S.fasta Dmel_rRNA.18S_consensus.fasta
+python analyze_rRNA.py Dmel_rRNA.18S.fasta Dmel_rRNA.18S_consensus.fasta
+python analyze_rRNA.py Dmel_rRNA.28S.fasta Dmel_rRNA.18S_consensus.fasta
+
+INPUTBAM='/path/to/scRNAseq/bam'
+BAM='/path/to/sorted/bam'
+
+# Prepare the input BAM file
+samtools sort -o $BAM $INPUTBAM
+samtools index $BAM
+
+# Pull the rRNA reads out from the .bam alignements
+samtools view -b -L Dmel_rRNA_combined.bed $BAM > rRNA_reads.bam
+
+# Align the reads to the rRNA genes to get the coverage 
+cat Dmel_rRNA.*_consensus.fasta > rRNA_consensus_all.fasta
+minimap2 -ax map-ont rRNA_consensus_all.fasta rRNA_reads.bam > rRNA_vs_consensus.sam
+samtools view -Sb rRNA_vs_consensus.sam | samtools sort -o rRNA_vs_consensus.sorted.bam
+samtools index rRNA_vs_consensus.sorted.bam
+
+# Calculate depth:
+samtools depth rRNA_vs_consensus.sorted.bam > rRNA_coverage.tsv
+
+
+# Calculate the coverage for all the cells:
+for bam in /path/to/directory/*.bam; do
+    sbatch scripts/sort_bam.sh "$bam"
+done
+
+# Plot the coverage:
+find data/pipseq/cell/ -name "*_coverage.tsv" > coverage_files_pip_cells.txt
+python plot_coverage.py coverage_files_pip_cells.txt --output-dir rRNA_plots_pipseq_cells
+
+
+# # Plot:
+# import pandas as pd
+# import matplotlib.pyplot as plt
+
+# df = pd.read_csv("rRNA_coverage.tsv", sep="\t", header=None, names=["ref", "pos", "depth"])
+
+# for name, group in df.groupby("ref"):
+#     plt.figure(figsize=(10, 4))
+#     plt.plot(group["pos"], group["depth"], label=name)
+#     plt.title(f"Coverage for {name}")
+#     plt.xlabel("Position (bp)")
+#     plt.ylabel("Depth")
+#     plt.tight_layout()
+#     plt.savefig(f"{name}_coverage_plot.png")
+
+# for ALIGN in data/pipseq/ovary/*_aligned*.bam ; do echo "${ALIGN} ; done
+
+for ALIGN in data/pipseq/ovary/*_aligned*.bam ; do READ_COUNT=$(samtools view -c $ALIGN); echo "${ALIGN}: $READ_COUNT" >> read_counts.txt ; done
+for ALIGN in data/pipseq/cell/*_aligned*.bam ; do READ_COUNT=$(samtools view -c $ALIGN); echo "${ALIGN}: $READ_COUNT" >> read_counts.txt ; done
+for ALIGN in data/10X/*_aligned*.bam ; do READ_COUNT=$(samtools view -c $ALIGN); echo "${ALIGN}: $READ_COUNT" >> read_counts.txt ; done
+
+
+# Exploring the rRNA coverage in ovary uninfected/wMel infected ovaries:
+for bam in data/pipseq/ovary/*2_aligned.bam data/pipseq/ovary/*1_aligned.bam; do \
+samtools view -h $bam GQX67_00940::NZ_CP046925.1:182273-185045 GQX67_00945::NZ_CP046925.1:185107-185214 GQX67_05945::NZ_CP046925.1:1167785-1169290 | samtools fastq \
+ > "${bam%.bam}_GQX67_reads.fastq";done # can do samtools fasta instead 
+
+
+# 16S only: Also did for cell and 10X
+for bam in data/pipseq/ovary/*2_aligned.bam data/pipseq/ovary/*1_aligned.bam; do \ 
+samtools view -h $bam GQX67_05945::NZ_CP046925.1:1167785-1169290 | samtools fasta \
+ > "${bam%.bam}_GQX67_16S.fasta";done # can do samtools fastq instead 
+
+# Notes for blastn database:
+# 1. Access 16S database
+update_blastdb.pl --decompress 16S_ribosomal_RNA
+# 2. Add Wolbachia wMel 16S 
+# Extract all sequences with proper headers
+blastdbcmd -db 16S_ribosomal_RNA -entry all > original_16S.fasta
+# Add Wolbachia sequence
+cat original_16S.fasta wolbachia_16S.fasta > combined_16S.fasta
+# Create new database with proper parsing
+makeblastdb -in combined_16S.fasta -dbtype nucl -out 16S_ribosomal_RNA_plus_wolbachia -parse_seqids
+# Test the new database
+blastdbcmd -db 16S_ribosomal_RNA_plus_wolbachia -info
+
+ # Blast the reads aligned to the rRNA genes to look for bacterial contamination:
+for fasta in data/pipseq/ovary/*16S.fasta; do
+    blastn -db 16S_ribosomal_RNA -query $fasta \
+    -out "$(dirname $fasta)/$(basename $fasta | cut -d'_' -f1).blast" \
+    -num_threads 64 \
+    -outfmt 6 -max_target_seqs 5 -evalue 1e-5
+    echo "Completed BLAST for $(basename $fasta)"
+done
+
+# Slurm script for blast:
+/private/groups/russelllab/jodie/scRNAseq/wolbachia_titer/rRNA_analysis/scripts/blast_16S.sh
+
+
+# Summarize the blast results:
+for blast in *.blast; do # One-liner version (replace input.blast with your file)
+awk '{count[$2]++; if($3 > best[$2]) best[$2]=$3} END {for(s in count) printf "%6d %s (%.3f%% identity)\n", count[s], s, best[s]}' $blast | sort -k1,1nr -k3,3nr > $blast.summary; done
+# Loop to submit the blast jobs for each 16S fasta file: 
+mamba activate sra-tools
+for fasta in data/pipseq/cell/*16S.fasta; do # Also did for cell and 10X
+    sbatch scripts/blast_16S.sh $fasta
+done
+
+# Summarize the blast results:
+# Plot the results as a pie chart:
+mkdir -p blast_plots
+for summary in data/pipseq/ovary/*.summary; do 
+    echo "Processing $(basename $summary)..."
+    python scripts/plot_blast_pie_charts.py "$summary" --output-dir blast_plots
+done
+
+# Pull out the 16S highly represented sequences:
+cut -f2 blast_results.txt | sort | uniq -c | awk '$1 >= 100 {print $2}' > abundant_16S_ids.txt # At least 100 reads
+blastdbcmd -db 16S_ribosomal_RNA -entry_batch top_16S_ids.txt -out highly_represented_16S.fasta
+
+
+#Script to analyze the top hits:
+sbatch scripts/combine_blast_extract_fasta.sh scripts/blast_files.txt results/combined_analysis 1000
+# First, standardize headers to just organism names, then deduplicate
+cat 10x/top_100_sequences.fasta ovary/top_100_sequences.fasta cell/top_100_sequences.fasta | \
+sed 's/ |.*$//' | \
+seqkit rmdup -n > highly_represented_16S.fasta
+
+# Notes for building a tree of the 16S sequences:
+# 1. Align sequences
+mafft --auto highly_represented_16S.fasta > highly_represented_16S_aligned.fasta
+# 2. Build tree
+FastTree -nt highly_represented_16S_aligned.fasta > highly_represented_16S_aligned.tree
+# 3. Visualize (upload all_hits.tree to iTOL or open in FigTree)
+
+
+
