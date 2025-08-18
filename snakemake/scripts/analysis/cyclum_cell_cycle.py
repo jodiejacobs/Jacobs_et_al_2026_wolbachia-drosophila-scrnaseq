@@ -1,10 +1,14 @@
 import cyclum 
-from cyclum import cyclum.models
-from cyclum import cyclum.tuning 
+import cyclum.models
+import cyclum.tuning 
+import cyclum.illustration
 import scanpy as sc 
 import argparse
 import os
 import sklearn
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 adata = sc.read_h5ad(file_path)
@@ -25,7 +29,8 @@ pseudotime = model.predict_pseudotime(adata.raw.X.toarray())
 # Flatten pseudotime and create labels
 pseudotime_flat = pseudotime.flatten()
 
-"""Assign cell cycle stages based on pseudotime distribution"""
+def assign_cell_cycle_stage(pseudotime_flat):
+    """Assign cell cycle stages based on pseudotime distribution"""
     # Sort to find balanced boundaries
     sorted_pt = np.sort(pseudotime_flat)
     n = len(sorted_pt)
@@ -42,11 +47,33 @@ pseudotime_flat = pseudotime.flatten()
             stages.append('s')
         else:
             stages.append('g2/m')
+    
+    return stages
 
+# Flatten pseudotime and create labels
+pseudotime_flat = pseudotime.flatten()
+stages = assign_cell_cycle_stage(pseudotime_flat)
+
+# Create a label dictionary like in the tutorial
 label = {'stage': np.array(stages)}
 
+# Check the distribution
 unique_stages, counts = np.unique(stages, return_counts=True)
+print("Cell cycle stage distribution:")
+for stage, count in zip(unique_stages, counts):
+    print(f"{stage}: {count} cells")
 
 adata.obs['cyclum_stage'] = stages
 adata.obs['cyclum_pseudotime'] = pseudotime_flat
+
+print("\nAdded to adata.obs:")
+print(f"cyclum_stage: {len(adata.obs['cyclum_stage'])} cells")
+print(f"cyclum_pseudotime: {len(adata.obs['cyclum_pseudotime'])} cells")
+
+# Define color map (exactly like tutorial)
+color_map = {'stage': {"g0/g1": "red", "s": "green", "g2/m": "blue"},
+             'subcluster': {"intact": "cyan", "perturbed": "violet"}}
+
+# Create the plot (exactly like tutorial)
+fig = cyclum.illustration.plot_round_distr_color(pseudotime_flat, label['stage'], color_map['stage'])
 
