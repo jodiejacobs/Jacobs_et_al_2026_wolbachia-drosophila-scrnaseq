@@ -281,6 +281,40 @@ def process_single_file(args_tuple):
     plt.savefig(f"{output_dir}/{safe_sample_name}_16S_genus_pie_chart_95pct.svg", bbox_inches='tight')
     plt.close()
     
+    # Create individual bar plot
+    fig_bar, ax_bar = plt.subplots(1, 1, figsize=(10, 8))
+    
+    # Bar chart with italicized genus names
+    y_pos = np.arange(len(df_major))
+    bars = ax_bar.barh(y_pos, df_major['count'], color=colors)
+    ax_bar.set_yticks(y_pos)
+    
+    # Y-axis labels with italicized genus names
+    y_labels = []
+    for _, row in df_major.iterrows():
+        italicized_genus = italicize_genus_name(row['genus'])
+        if pd.notna(row.get('avg_identity')):
+            y_labels.append(f"{italicized_genus}\n({row['avg_identity']:.1f}% ID)")
+        else:
+            y_labels.append(italicized_genus)
+    ax_bar.set_yticklabels(y_labels, fontsize=max(6, 11))  # Minimum 6pt font
+    
+    ax_bar.set_xlabel('Number of Reads', fontsize=max(6, 12))
+    ax_bar.set_title(f'{sample_name}\nRead Counts by Genus (≥95% identity, ≥2%)\n(with average % identity)', 
+                     fontsize=max(6, 14), fontweight='bold')
+    ax_bar.grid(axis='x', alpha=0.3)
+    
+    # Add count labels efficiently
+    for bar, count in zip(bars, df_major['count']):
+        ax_bar.text(bar.get_width() + total_reads*0.01, bar.get_y() + bar.get_height()/2, 
+                   f'{count:,}', ha='left', va='center', fontsize=max(6, 10))
+    
+    plt.tight_layout()
+    
+    # Save individual bar plot
+    plt.savefig(f"{output_dir}/{safe_sample_name}_16S_genus_bar_plot_95pct.svg", bbox_inches='tight')
+    plt.close()
+    
     return {
         'sample': sample_name,
         'total_reads': total_reads,
