@@ -7,6 +7,17 @@ import argparse
 from pathlib import Path
 import sys
 
+# Configure matplotlib for Adobe Illustrator compatibility
+plt.rcParams['svg.fonttype'] = 'none'  # Keep fonts as text, not paths
+plt.rcParams['font.size'] = 6  # 6pt font size
+plt.rcParams['axes.titlesize'] = 6
+plt.rcParams['axes.labelsize'] = 6
+plt.rcParams['xtick.labelsize'] = 6
+plt.rcParams['ytick.labelsize'] = 6
+plt.rcParams['legend.fontsize'] = 6
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+
 def load_coverage_file(filepath):
     """Load coverage file and return DataFrame"""
     try:
@@ -29,7 +40,7 @@ def plot_coverage_by_region(coverage_files, output_dir="plots"):
     # Define color dictionary for cell types
     color_dict = {
         'JW18DOX-SV': '#F3CA40', # Saffron
-        'JW18DOX-Ctrl': '#3D2B56', # Giants orange
+        'JW18DOX-Ctrl': '#F46036', # Giants orange
         'JW18wMel-SV': '#35ABAF', # Verdris
         'JW18wMel-Ctrl': '#2E294E', # Space cadet
         'mei-P26-uninf': '#E28413', # Light Orange
@@ -64,12 +75,13 @@ def plot_coverage_by_region(coverage_files, output_dir="plots"):
     # Get unique regions
     regions = combined_df['region'].unique()
     print(f"Found {len(regions)} rRNA regions")
+    
     # Create plots for each region
     for region in regions:
         region_data = combined_df[combined_df['region'] == region]
         
-        # Create figure
-        plt.figure(figsize=(12, 6))
+        # Create figure with 3x2 inch size
+        fig, ax = plt.subplots(figsize=(3, 2))
         
         # Plot each sample as a line
         samples = region_data['sample'].unique()
@@ -77,48 +89,59 @@ def plot_coverage_by_region(coverage_files, output_dir="plots"):
         for sample in samples:
             sample_data = region_data[region_data['sample'] == sample]
             color = get_sample_color(sample, color_dict)
-            plt.plot(sample_data['position'], sample_data['coverage'], 
-                    label=sample, linewidth=1.5, color=color)
+            ax.plot(sample_data['position'], sample_data['coverage'], 
+                   label=sample, linewidth=0.75, color=color)
         
-        plt.xlabel('Position')
-        plt.ylabel('Coverage')
-        plt.title(f'{region}')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.grid(True, alpha=0.3)
+        ax.set_xlabel('Position')
+        ax.set_ylabel('Coverage')
+        ax.set_title(f'{region}')
         
-        # Save linear plot with vector text
+        # Adjust legend to fit in smaller plot
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', frameon=False)
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        
+        # Reduce tick density for cleaner look
+        ax.locator_params(axis='x', nbins=4)
+        ax.locator_params(axis='y', nbins=4)
+        
+        # Save linear plot
         safe_region_name = region.replace(':', '_').replace('-', '_')
         plt.tight_layout()
-        plt.savefig(f"{output_dir}/{safe_region_name}.png", dpi=300, bbox_inches='tight')
-        plt.savefig(f"{output_dir}/{safe_region_name}.svg", bbox_inches='tight')
+        plt.savefig(f"{output_dir}/{safe_region_name}.svg", 
+                   bbox_inches='tight', pad_inches=0.05)
         plt.close()
         
-        # Create log plot
-        plt.figure(figsize=(12, 6))
+        # Create log plot with same dimensions
+        fig, ax = plt.subplots(figsize=(3, 2))
         
         for sample in samples:
             sample_data = region_data[region_data['sample'] == sample]
             color = get_sample_color(sample, color_dict)
             # Add 1 to avoid log(0) issues
-            plt.plot(sample_data['position'], sample_data['coverage'] + 1, 
-                    label=sample, linewidth=1.5, color=color)
+            ax.plot(sample_data['position'], sample_data['coverage'] + 1, 
+                   label=sample, linewidth=0.75, color=color)
         
-        plt.xlabel('Position')
-        plt.ylabel('Coverage + 1 (log scale)')
-        plt.yscale('log')
-        plt.title(f'{region} (Log Scale)')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.grid(True, alpha=0.3)
+        ax.set_xlabel('Position')
+        ax.set_ylabel('Coverage + 1 (log scale)')
+        ax.set_yscale('log')
+        ax.set_title(f'{region} (Log Scale)')
+        
+        # Adjust legend to fit in smaller plot
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', frameon=False)
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        
+        # Reduce tick density for cleaner look
+        ax.locator_params(axis='x', nbins=4)
         
         plt.tight_layout()
-        # plt.savefig(f"{output_dir}/{safe_region_name}_log.png", dpi=300, bbox_inches='tight')
-        plt.savefig(f"{output_dir}/{safe_region_name}_log.svg", bbox_inches='tight')
+        plt.savefig(f"{output_dir}/{safe_region_name}_log.svg", 
+                   bbox_inches='tight', pad_inches=0.05)
         plt.close()
         
-        print(f"Saved: {safe_region_name}.png/.svg and {safe_region_name}_log.png/.svg")
+        print(f"Saved: {safe_region_name}.svg and {safe_region_name}_log.svg")
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot rRNA coverage lines for each region')
+    parser = argparse.ArgumentParser(description='Plot rRNA coverage lines for each region (Illustrator-ready)')
     parser.add_argument('file_list', help='Text file with list of coverage.tsv files')
     parser.add_argument('--output-dir', default='rRNA_plots', help='Output directory')
     
