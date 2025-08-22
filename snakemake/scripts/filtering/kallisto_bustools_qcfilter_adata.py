@@ -342,17 +342,17 @@ def qc_plots(adata, output_prefix=""):
     # Get mitochondrial genes that are actually present in the data
     valid_mito_genes = [gene for gene in mito_genes if gene in adata.var_names]
     
-    # Filter out by mitochondrial genes (only if we found any)
-    if len(valid_mito_genes) > 0:
-        # print(f"Using {len(valid_mito_genes)} mitochondrial genes for filtering:")
-        # for gene in valid_mito_genes:
-        #     print(f"  {gene}")
+    # # Filter out by mitochondrial genes (only if we found any) 
+    # if len(valid_mito_genes) > 0:
+    #     # print(f"Using {len(valid_mito_genes)} mitochondrial genes for filtering:")
+    #     # for gene in valid_mito_genes:
+    #     #     print(f"  {gene}")
             
-        adata.obs['percent_mito'] = np.sum(
-            adata[:, valid_mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
-    else:
-        print("No mitochondrial genes found in dataset, setting percent_mito to 0")
-        adata.obs['percent_mito'] = 0
+    #     adata.obs['percent_mito'] = np.sum(
+    #         adata[:, valid_mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
+    # else:
+    #     print("No mitochondrial genes found in dataset, setting percent_mito to 0")
+    #     adata.obs['percent_mito'] = 0
     # add the total counts per cell as observations-annotation to adata
     adata.obs['n_counts'] = adata.X.sum(axis=1).A1
 
@@ -362,8 +362,8 @@ def qc_plots(adata, output_prefix=""):
     # plt.savefig(f"{output_prefix}/mito_scatter.pdf", bbox_inches='tight', pad_inches=0.1)
     # plt.close(fig)
 
-    # Filter cells with high mitochondrial content (only if we have mito genes)
-    valid_mito_genes = [gene for gene in mito_genes if gene in adata.var_names]
+    # # Filter cells with high mitochondrial content (only if we have mito genes)
+    # valid_mito_genes = [gene for gene in mito_genes if gene in adata.var_names]
     
     # Remove the mito filtering for now (Wolbachia can effect mito expression)
     # if len(valid_mito_genes) > 0:
