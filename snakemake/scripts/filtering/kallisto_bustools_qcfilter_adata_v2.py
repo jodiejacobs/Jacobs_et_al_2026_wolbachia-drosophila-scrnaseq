@@ -18,19 +18,22 @@ import shutil
 import gc #Garbage Collection to remove old data 
 import argparse
 
+# Set up the Argument Parser
 parser = argparse.ArgumentParser(description="Kallisto Bustools QC Filter")
-parser.add_argument("--input", type=str, required=True, help="Input h5ad file")
-parser.add_argument("--output", type=str, required=True, help="Output h5ad file")
+parser.add_argument("--input", type=str, required=True, help="Input h5ad file", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/h5ad_results/JW18DOX-Ctrl-1_10x.h5ad")
+parser.add_argument("--output", type=str, required=True, help="Output h5ad file", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/")
 
 args = parser.parse_args()
 input = args.input
 output = args.output    
 
+# Get the basename for the h5ad input (remove the .h5ad):
+sample_name = os.path.basename(input).replace(".h5ad", "")
+
 # Set figdir for scanpy:
-out_dir = "/Users/jodiejacobs/Library/CloudStorage/GoogleDrive-jomojaco@ucsc.edu/My Drive/scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/"
 h5ad_dir = ""
 sc.settings.autosave = True
-sc.settings.figdir = out_dir
+sc.settings.figdir = f"{output}/{sample_name}_"
 
 dataset = Dataset(name='dmelanogaster_gene_ensembl', host='http://www.ensembl.org')
 
@@ -45,27 +48,27 @@ mito_genes = mito_genes['Gene stable ID'].values.flatten()
 # File with all the matrix paths, open as dictionary
 # matrix_paths = pd.read_csv('/Users/jodiejacobs/Downloads/matrix_paths.csv').to_dict(orient='records')
 
-# Matix file paths:
-matrix = {
-    # Kallisto bustools 10X
-    'kallisto_JW18DOX-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_10x.h5ad',
-    'kallisto_JW18DOX-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_10x.h5ad',
-    'kallisto_JW18DOX-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_10x.h5ad',
-    'kallisto_JW18DOX-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_10x.h5ad',
-    'kallisto_JW18wMel-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_10x.h5ad',
-    'kallisto_JW18wMel-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_10x.h5ad',
-    'kallisto_JW18wMel-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_10x.h5ad',
-    'kallisto_JW18wMel-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_10x.h5ad',
-    # Kallisto bustools pipseq
-    'kallisto_JW18DOX-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_pipseq.h5ad',
-    'kallisto_JW18DOX-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_pipseq.h5ad',
-    'kallisto_JW18DOX-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_pipseq.h5ad',
-    'kallisto_JW18DOX-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_pipseq.h5ad',
-    'kallisto_JW18wMel-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_pipseq.h5ad',
-    'kallisto_JW18wMel-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_pipseq.h5ad',
-    'kallisto_JW18wMel-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_pipseq.h5ad',
-    'kallisto_JW18wMel-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_pipseq.h5ad',
-}
+# # Matix file paths:
+# matrix = {
+#     # Kallisto bustools 10X
+#     'kallisto_JW18DOX-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_10x.h5ad',
+#     'kallisto_JW18DOX-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_10x.h5ad',
+#     'kallisto_JW18DOX-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_10x.h5ad',
+#     'kallisto_JW18DOX-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_10x.h5ad',
+#     'kallisto_JW18wMel-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_10x.h5ad',
+#     'kallisto_JW18wMel-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_10x.h5ad',
+#     'kallisto_JW18wMel-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_10x.h5ad',
+#     'kallisto_JW18wMel-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_10x.h5ad',
+#     # Kallisto bustools pipseq
+#     'kallisto_JW18DOX-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_pipseq.h5ad',
+#     'kallisto_JW18DOX-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_pipseq.h5ad',
+#     'kallisto_JW18DOX-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_pipseq.h5ad',
+#     'kallisto_JW18DOX-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_pipseq.h5ad',
+#     'kallisto_JW18wMel-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_pipseq.h5ad',
+#     'kallisto_JW18wMel-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_pipseq.h5ad',
+#     'kallisto_JW18wMel-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_pipseq.h5ad',
+#     'kallisto_JW18wMel-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_pipseq.h5ad',
+# }
 
 # Add a function here to identify the cell cycle:
 
@@ -547,30 +550,31 @@ def process_data_with_metrics(key, dictionary):
     return all_metrics
 
 
-keys = list(matrix.keys())
-all_sample_metrics = []  # Store metrics from all samples
+# keys = list(matrix.keys())
+# all_sample_metrics = []  # Store metrics from all samples
 
-for key in keys:
-    print(f"Analyzing {key}, {matrix[key]}")
-    
-    # Redirect stdout to log file for this sample
-    log_file = open(f"{out_dir}/{key}_stats.txt", 'w')
-    original_stdout = sys.stdout
-    sys.stdout = log_file
-    
-    # Get metrics from processing (returns list of metrics for each stage)
-    sample_metrics = process_data_with_metrics(key, matrix)
-    
-    # Restore stdout
-    sys.stdout = original_stdout
-    log_file.close()
-    
-    # Add to overall collection
-    all_sample_metrics.extend(sample_metrics)
-    
-    print(f"Completed {key}")
+# for key in keys:
+
+print(f"Analyzing {sample_name}, {input}")
+
+# Redirect stdout to log file for this sample
+log_file = open(f"{output}/{sample_name}_stats.txt", 'w')
+original_stdout = sys.stdout
+sys.stdout = log_file
+
+# Get metrics from processing (returns list of metrics for each stage)
+sample_metrics = process_data_with_metrics(sample_name, input)
+
+# Restore stdout
+sys.stdout = original_stdout
+log_file.close()
+
+# Add to overall collection
+# all_sample_metrics.extend(sample_metrics)
+
+print(f"Completed {sample_name}")
 
 # Save combined metrics for all samples
-save_metrics_to_csv(all_sample_metrics, f"{out_dir}/all_samples_qc_metrics.csv")
-print(f"All QC metrics saved to {out_dir}/all_samples_qc_metrics.csv")
+# save_metrics_to_csv(sample_metrics, f"{output}/all_samples_qc_metrics.csv")
+# print(f"All QC metrics saved to {output}/all_samples_qc_metrics.csv")
 

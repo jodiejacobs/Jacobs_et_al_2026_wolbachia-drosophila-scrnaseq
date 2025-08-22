@@ -1,3 +1,8 @@
+'''
+This script annotates cell cycle stages using Cyclum. 
+    Input: Filtered h5ad file
+    Output: Cell cycle plots and annotated h5ad file
+'''
 import cyclum 
 import cyclum.models
 import cyclum.tuning 
