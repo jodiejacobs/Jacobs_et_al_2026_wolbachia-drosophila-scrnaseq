@@ -1,16 +1,22 @@
+'''
+Filtering script for kallisto bustools aligned single cell data. 
+    Input: raw data object 
+    Output: QC plots and filtered adata object
+'''
+
 import scanpy as sc
 import anndata as ad
 import pandas as pd
 import numpy as np
 import scrublet as scr
 from scipy.io import mmread
+from scipy.interpolate import interpn
 from sklearn.decomposition import TruncatedSVD
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 from scipy.sparse import csr_matrix
 import os
-matplotlib.rcParams.update({'font.size': 22})
 from pybiomart import Dataset
 import sys
 import gzip
@@ -20,8 +26,8 @@ import argparse
 
 # Set up the Argument Parser
 parser = argparse.ArgumentParser(description="Kallisto Bustools QC Filter")
-parser.add_argument("--input", type=str, required=True, help="Input h5ad file", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/h5ad_results/JW18DOX-Ctrl-1_10x.h5ad")
-parser.add_argument("--output", type=str, required=True, help="Output h5ad file", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/")
+parser.add_argument("--input", type=str, required=False, help="Input h5ad file", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/h5ad_results/JW18DOX-Ctrl-1_10x.h5ad")
+parser.add_argument("--output", type=str, required=False, help="Output directory", default="/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/")
 
 args = parser.parse_args()
 input = args.input
@@ -31,9 +37,28 @@ output = args.output
 sample_name = os.path.basename(input).replace(".h5ad", "")
 
 # Set figdir for scanpy:
-h5ad_dir = ""
 sc.settings.autosave = True
 sc.settings.figdir = f"{output}/{sample_name}_"
+
+# Set global matplotlib parameters
+matplotlib.rcParams.update({
+    'font.size': 6,
+    'figure.figsize': [2, 2],
+    'axes.titlesize': 6,
+    'axes.labelsize': 6,
+    'xtick.labelsize': 6,
+    'ytick.labelsize': 6,
+    'legend.fontsize': 6,
+    'figure.titlesize': 6
+})
+
+# Set scanpy figure parameters
+sc.settings.set_figure_params(
+    dpi=300,  # High resolution
+    dpi_save=300,
+    figsize=(2, 2),  # 2x2 inches
+    fontsize=6
+)
 
 dataset = Dataset(name='dmelanogaster_gene_ensembl', host='http://www.ensembl.org')
 
@@ -44,37 +69,7 @@ mito_genes = dataset.query(
 )
 mito_genes = mito_genes['Gene stable ID'].values.flatten()
 
-
-# File with all the matrix paths, open as dictionary
-# matrix_paths = pd.read_csv('/Users/jodiejacobs/Downloads/matrix_paths.csv').to_dict(orient='records')
-
-# # Matix file paths:
-# matrix = {
-#     # Kallisto bustools 10X
-#     'kallisto_JW18DOX-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_10x.h5ad',
-#     'kallisto_JW18DOX-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_10x.h5ad',
-#     'kallisto_JW18DOX-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_10x.h5ad',
-#     'kallisto_JW18DOX-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_10x.h5ad',
-#     'kallisto_JW18wMel-Ctrl-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_10x.h5ad',
-#     'kallisto_JW18wMel-Ctrl-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_10x.h5ad',
-#     'kallisto_JW18wMel-SV-1_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_10x.h5ad',
-#     'kallisto_JW18wMel-SV-2_X': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_10x.h5ad',
-#     # Kallisto bustools pipseq
-#     'kallisto_JW18DOX-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-1_pipseq.h5ad',
-#     'kallisto_JW18DOX-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-Ctrl-2_pipseq.h5ad',
-#     'kallisto_JW18DOX-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-1_pipseq.h5ad',
-#     'kallisto_JW18DOX-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18DOX-SV-2_pipseq.h5ad',
-#     'kallisto_JW18wMel-Ctrl-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-1_pipseq.h5ad',
-#     'kallisto_JW18wMel-Ctrl-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-Ctrl-2_pipseq.h5ad',
-#     'kallisto_JW18wMel-SV-1_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-1_pipseq.h5ad',
-#     'kallisto_JW18wMel-SV-2_P': 'scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/h5ad_results_raw/JW18wMel-SV-2_pipseq.h5ad',
-# }
-
-# Add a function here to identify the cell cycle:
-
-
 # density display for PCA plot
-from scipy.interpolate import interpn
 
 def identify_doublets(adata, output_prefix):
     '''
@@ -349,40 +344,42 @@ def qc_plots(adata, output_prefix=""):
     print(f'After knee plot thresholding:')
     print(adata)
 
+    # Annotate mitochondrial genes
     print("Annotating mitochondrial genes")
     # Get mitochondrial genes that are actually present in the data
     valid_mito_genes = [gene for gene in mito_genes if gene in adata.var_names]
-    
-    # # Filter out by mitochondrial genes (only if we found any) 
-    # if len(valid_mito_genes) > 0:
-    #     # print(f"Using {len(valid_mito_genes)} mitochondrial genes for filtering:")
-    #     # for gene in valid_mito_genes:
-    #     #     print(f"  {gene}")
+
+    # Calculate percent mitochondrial
+    if len(valid_mito_genes) > 0:
+        print(f"Using {len(valid_mito_genes)} mitochondrial genes for filtering:")
+        for gene in valid_mito_genes:
+            print(f"  {gene}")
             
-    #     adata.obs['percent_mito'] = np.sum(
-    #         adata[:, valid_mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
-    # else:
-    #     print("No mitochondrial genes found in dataset, setting percent_mito to 0")
-    #     adata.obs['percent_mito'] = 0
+        # Calculate mitochondrial percentage
+        mito_counts = adata[:, valid_mito_genes].X.sum(axis=1)
+        total_counts = adata.X.sum(axis=1)
+        
+        # Handle sparse matrices properly
+        if hasattr(mito_counts, 'A1'):
+            mito_counts = mito_counts.A1
+        if hasattr(total_counts, 'A1'):
+            total_counts = total_counts.A1
+            
+        adata.obs['percent_mito'] = mito_counts / total_counts
+    else:
+        print("No mitochondrial genes found in dataset, setting percent_mito to 0")
+        adata.obs['percent_mito'] = 0.0
+
     # add the total counts per cell as observations-annotation to adata
-    adata.obs['n_counts'] = adata.X.sum(axis=1).A1
+    adata.obs['n_counts'] = adata.X.sum(axis=1)
+    if hasattr(adata.obs['n_counts'], 'A1'):
+        adata.obs['n_counts'] = adata.obs['n_counts'].A1
 
     # Create the scatter plot and properly close it
     fig, ax = plt.subplots(figsize=(10, 7))
     sc.pl.scatter(adata, x='n_counts', y='percent_mito', ax=ax, show=False)
-    # plt.savefig(f"{output_prefix}/mito_scatter.pdf", bbox_inches='tight', pad_inches=0.1)
-    # plt.close(fig)
-
-    # # Filter cells with high mitochondrial content (only if we have mito genes)
-    # valid_mito_genes = [gene for gene in mito_genes if gene in adata.var_names]
-    
-    # Remove the mito filtering for now (Wolbachia can effect mito expression)
-    # if len(valid_mito_genes) > 0:
-    #     print(f"Before mito filtering: {adata.n_obs} cells")
-    #     adata = adata[adata.obs.percent_mito < 0.40]
-    #     print(f"After mito filtering (<40%): {adata.n_obs} cells")
-    # else:
-    #     print("Skipping mitochondrial filtering (no mito genes found)")
+    plt.savefig(f"{output_prefix}/mito_scatter.pdf", bbox_inches='tight', pad_inches=0.1)
+    plt.close(fig)
 
     print(f"Mitochondrial percentage stats:")
     print(f"Mean: {adata.obs['percent_mito'].mean():.3f}")
@@ -398,9 +395,9 @@ def qc_plots(adata, output_prefix=""):
     print(adata)
 
     # Create violin plot and save it
-    # sc.pl.violin(adata, ['n_genes', 'n_counts', 'percent_mito'], jitter=0.4, multi_panel=True, show=False)
-
-    return adata
+    sc.pl.violin(adata, ['n_genes', 'n_counts', 'percent_mito'], jitter=0.4, multi_panel=True, show=False)
+    plt.savefig(f"{output_prefix}/violin_plot.pdf", bbox_inches='tight', pad_inches=0.1)
+    plt.close()
 
 # Add a function here for Wolbachia titer:
 
@@ -411,20 +408,6 @@ def analyze_filtered_adata(adata, output_prefix=""):
     print(f"Cells before doublet removal: {adata.n_obs}")
     adata = adata[~adata.obs['predicted_doublet']]
     print(f"Cells after doublet removal: {adata.n_obs}")
-    
-    # # UMAP with doublet scores (continuous variable - works fine)
-    # sc.pl.umap(adata, color='doublet_score', cmap='viridis', show=False, save= '_doublet_score.pdf')
-    # # plt.savefig(f"{output_prefix}/umap_doublet_score.pdf", bbox_inches='tight', pad_inches=0.1)
-    # plt.close()
-    
-    # sc.pl.umap(adata, color='predicted_doublet_cat', show=False, save='_predicted_doublet.pdf')
-    # # plt.savefig(f"{output_prefix}/umap_predicted_doublet.pdf", bbox_inches='tight', pad_inches=0.1)
-    # plt.close()
-
-    # # Filter out the doublets:
-    # print(f"Cells before doublet removal: {adata.n_obs}")
-    # adata = adata[~adata.obs['predicted_doublet']]
-    # print(f"Cells after doublet removal: {adata.n_obs}")
 
     #Normalize the filtered counts:
     sc.pp.normalize_per_cell(adata, counts_per_cell_after=1e4)
@@ -452,12 +435,6 @@ def analyze_filtered_adata(adata, output_prefix=""):
     sc.pl.pca(adata, color='leiden', show=False)
     plt.close()
 
-    # Visualize cells with t-SNE. The n_pcs parameter sets the number of principal components to project to prior to 
-    # sc.tl.tsne(adata, n_pcs=10, use_rep='X_pca')
-    # sc.pl.tsne(adata, color='leiden', show=False)
-    # plt.savefig(f"{output_prefix}/tsne_leiden.pdf", bbox_inches='tight', pad_inches=0.1)
-    # plt.close()
-
     sc.tl.umap(adata)
     sc.pl.umap(adata, color='leiden', show=False)
     # plt.savefig(f"{output_prefix}/umap_leiden.pdf", bbox_inches='tight', pad_inches=0.1)
@@ -471,110 +448,71 @@ def analyze_filtered_adata(adata, output_prefix=""):
     print(adata)
     return adata 
 
-
-# def process_data(key, dictionary):
-#     matrix = dictionary[key]
-#     # Load the matrix as a sparse matrix
-#     adata = ad.read_h5ad(matrix)
-
-#     output_dir = f'/Users/jodiejacobs/Library/CloudStorage/GoogleDrive-jomojaco@ucsc.edu/My Drive/scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/{key}'
-#     os.makedirs(output_dir, exist_ok=True)
-    
-#     # Set the output directory for all scanpy objects
-#     sc.settings.figdir = output_dir
-
-#     filtered_adata = qc_plots(adata, output_dir)
-#     normalized_adata = analyze_filtered_adata(filtered_adata, output_dir)
-
-#     h5ad_path = f"{out_dir}/{key}.h5ad"
-#     # Save the filtered adata object
-#     normalized_adata.write(h5ad_path)
-    
-#     # Gzip the saved .h5ad file
-#     gzipped_path = f"{h5ad_path}.gz"
-#     with open(h5ad_path, 'rb') as f_in:
-#         with gzip.open(gzipped_path, 'wb') as f_out:
-#             shutil.copyfileobj(f_in, f_out)
-
-def process_data_with_metrics(key, dictionary):
-
-    matrix = dictionary[key]
+def process_data_with_metrics(key, matrix, log_to_file=True):
     # Load the matrix as a sparse matrix
     adata = ad.read_h5ad(matrix)
 
-    output_dir = f'/Users/jodiejacobs/Library/CloudStorage/GoogleDrive-jomojaco@ucsc.edu/My Drive/scRNAseq_pilot_study/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/{key}'
+    output_dir = f'/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/results_kallisto_bustools/filtered_h5ad/{key}'
     os.makedirs(output_dir, exist_ok=True)
     
-    # Set the output directory for all scanpy objects
-    sc.settings.figdir = output_dir
+    # Set up logging if requested
+    if log_to_file:
+        log_file = open(f"{output_dir}/{key}_stats.txt", 'w')
+        original_stdout = sys.stdout
+        sys.stdout = log_file
     
-    # Store metrics at each stage
-    all_metrics = []
-    
-    # Raw data metrics
-    raw_metrics = calculate_qc_metrics(adata, sample_name=key, stage="raw")
-    all_metrics.append(raw_metrics)
-    print_qc_summary(raw_metrics)
-    
-    # Apply QC filtering
-    filtered_adata = qc_plots(adata, output_dir)
-    # Identify doublets:
-    filtered_adata = identify_doublets(adata, output_dir)
-    
-    # Post-filtering metrics
-    filtered_metrics = calculate_qc_metrics(filtered_adata, sample_name=key, stage="filtered")
-    all_metrics.append(filtered_metrics)
-    print_qc_summary(filtered_metrics)
-    
-    # Apply normalization and analysis
-    normalized_adata = analyze_filtered_adata(filtered_adata, output_dir)
-    
-    # Save metrics to CSV
-    metrics_csv_path = f"{output_dir}/{key}_qc_metrics.csv"
-    save_metrics_to_csv(all_metrics, metrics_csv_path)
-    
-    h5ad_path = f"{out_dir}/{key}.h5ad"
-    # Save the filtered adata object
-    normalized_adata.write(h5ad_path)
-    
-    # Gzip the saved .h5ad file
-    gzipped_path = f"{h5ad_path}.gz"
-    with open(h5ad_path, 'rb') as f_in:
-        with gzip.open(gzipped_path, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+    try:
+        # Set the output directory for all scanpy objects
+        sc.settings.figdir = output_dir
+        
+        # Store metrics at each stage
+        all_metrics = []
+        
+        # Raw data metrics
+        raw_metrics = calculate_qc_metrics(adata, sample_name=key, stage="raw")
+        all_metrics.append(raw_metrics)
+        print_qc_summary(raw_metrics)
+        
+        # Apply QC filtering
+        filtered_adata = qc_plots(adata, output_dir)
+        # Identify doublets:
+        filtered_adata = identify_doublets(adata, output_dir)
+        
+        # Post-filtering metrics
+        filtered_metrics = calculate_qc_metrics(filtered_adata, sample_name=key, stage="filtered")
+        all_metrics.append(filtered_metrics)
+        print_qc_summary(filtered_metrics)
+        
+        # Apply normalization and analysis
+        normalized_adata = analyze_filtered_adata(filtered_adata, output_dir)
+        
+        # Save metrics to CSV
+        metrics_csv_path = f"{output_dir}/{key}_qc_metrics.csv"
+        save_metrics_to_csv(all_metrics, metrics_csv_path)
+        
+        h5ad_path = f"{output.rstrip('/')}/{key}.h5ad"  # Fix the output path
+        # Save the filtered adata object
+        normalized_adata.write(h5ad_path)
+        
+        # Gzip the saved .h5ad file
+        gzipped_path = f"{h5ad_path}.gz"
+        with open(h5ad_path, 'rb') as f_in:
+            with gzip.open(gzipped_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
 
-    # Remove the uncompressed version to save space
-    os.remove(h5ad_path)
-    print(f"Saved compressed file: {gzipped_path}")
+        # Remove the uncompressed version to save space
+        os.remove(h5ad_path)
+        print(f"Saved compressed file: {gzipped_path}")
+        
+    finally:
+        # Always restore stdout
+        if log_to_file:
+            sys.stdout = original_stdout
+            log_file.close()
     
     return all_metrics
 
-
-# keys = list(matrix.keys())
-# all_sample_metrics = []  # Store metrics from all samples
-
-# for key in keys:
-
 print(f"Analyzing {sample_name}, {input}")
-
-# Redirect stdout to log file for this sample
-log_file = open(f"{output}/{sample_name}_stats.txt", 'w')
-original_stdout = sys.stdout
-sys.stdout = log_file
-
-# Get metrics from processing (returns list of metrics for each stage)
 sample_metrics = process_data_with_metrics(sample_name, input)
-
-# Restore stdout
-sys.stdout = original_stdout
-log_file.close()
-
-# Add to overall collection
-# all_sample_metrics.extend(sample_metrics)
-
 print(f"Completed {sample_name}")
-
-# Save combined metrics for all samples
-# save_metrics_to_csv(sample_metrics, f"{output}/all_samples_qc_metrics.csv")
-# print(f"All QC metrics saved to {output}/all_samples_qc_metrics.csv")
 
