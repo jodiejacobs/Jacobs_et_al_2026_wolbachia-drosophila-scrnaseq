@@ -6,7 +6,7 @@ import pandas as pd
 import os
 
 # Configuration
-configfile: "config.yaml"
+configfile: "config/config.yaml"
 SCANPY_ENV = config["scanpy_env"]
 
 # Load samples information
@@ -137,8 +137,61 @@ rule map_10x:
         # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
         """
+# Filter h5ad output and output qc:
+rule filter_h5ad:
+    input:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+    output:
+        filtered_h5ad = "results/h5ad_results/{sample_id}_filtered.h5ad"
+    params:
+        min_genes = 200,
+        min_cells = 3,
+        script = config["filter_script"]
+    log:
+        "logs/filter/{sample_id}.log"
+    threads:
+        config["filter_threads"]
+    resources:
+        slurm_partition = config["filter_partition"],
+        mem_mb = config["filter_mem"],
+        time = config["filter_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
 
+        python {params.script} \
+            --input {input.h5ad} \
+            --output {output.filtered_h5ad} \
+            --min_genes {params.min_genes} \
+            --min_cells {params.min_cells}
+        """
 
+# Cell cycle Annotation
+rule annotate_cell_cycle: # This needs the cyclum connda environement
+    input:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad" # Output of filtered script 
+    output:
+        annotated_h5ad = "results/h5ad_results/{sample_id}_annotated.h5ad"
+    params:
+        script = config["cell_cycle_script"]
+    log:
+        "logs/annotate/{sample_id}.log"
+    threads:
+        config["cell_cycle_threads"]
+    resources:
+        slurm_partition = config["cell_cycle_partition"],
+        mem_mb = config["cell_cycle_mem"],
+        time = config["cell_cycle_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input {input.h5ad} \
+            --output {output.annotated_h5ad}
+        """
 
 # Combine files by condition and platform
 rule combine_files_by_condition_platform:
