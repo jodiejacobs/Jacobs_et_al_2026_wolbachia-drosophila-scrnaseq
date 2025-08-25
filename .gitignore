@@ -2,3 +2,10 @@ reference_genome/Drosophila_melanogaster_wMel_ASM1658442v1/star/SA
 reference_genome/Drosophila_melanogaster_wMel_ASM1658442v1/star/Genome
 reference_genome/Drosophila_melanogaster_wMel_ASM1658442v1/fasta/genome.fa
 reference_genome/Drosophila_melanogaster_wMel_ASM1658442v1/star/SAindex
+reference/
+*.sa
+*.sa.*
+**/star/
+**/SAindex
+**/SA
+**/Genome
