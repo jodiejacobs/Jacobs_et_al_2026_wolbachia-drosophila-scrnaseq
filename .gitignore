@@ -3,3 +3,4 @@ snakemake/.snakemake/
 .snakemake/
 snakemake/results/
 snakemake/logs/
+snakemake/results/
