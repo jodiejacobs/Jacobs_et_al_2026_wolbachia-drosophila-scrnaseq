@@ -1,0 +1,74 @@
+# Configuration file for the Snakemake pipeline
+
+# Path to the CSV file containing sample information
+samples_file: "config/samples.csv"
+
+# Path to output directory
+output_dir: "/private/groups/russelllab/jodie/scRNAseq/19MAY2025_analysis"  # Add the path to the output directory
+
+# Path to conda environment
+scanpy_env: '/private/home/jomojaco/miniforge3/envs/scanpy'
+
+# Software paths
+cellranger_transcriptome: "/private/groups/russelllab/jodie/scRNAseq/reference/10X_Drosophila_melanogaster_wMel_combined_16S" # Add theh path to the cellranger transcriptome reference
+star_index_path: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S" # Add the path to the STAR index reference
+fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
+cellranger_path: "/private/home/jomojaco/cellranger/cellranger-8.0.0/cellranger " # Add the path to the cellranger executable
+pipseeker_path: "/private/home/jomojaco/pipseeker/pipseeker-v3.3.0-linux/pipseeker" 
+pipseq_to_h5ad_script: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/convert_pipseq_to_h5ad.py"
+10x_to_h5ad_script: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/convert_10x_to_h5ad.py"
+combine_script: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/integrate_h5ad_by_condition_v2.py"
+titer_script: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/wolbachia_titer_analysis.py"
+summary_script: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/summary_statistics.py"
+kallisto_index: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/kallisto_bus/transcripts.idx"
+transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/kallisto_bus/transcripts_to_genes.txt"
+filter_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/filtering/kallisto_bustools_qcfilter_adata.py"
+cell_cycle_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/cyclum_cell_cycle.py"
+
+# Compute resources for cellranger 
+cellranger_threads: 16
+cellranger_cpus: 16
+cellranger_mem: 500000  # MB
+cellranger_time: "2:00:00"  # HH:MM:SS
+cellranger_partition: "medium"  # SLURM partition for cellranger jobs
+
+# Compute resources for pipseeker
+pipseeker_threads: 16
+pipseeker_cpus: 16
+pipseeker_mem: 1000000  # MB
+pipseeker_time: "2:00:00"  # HH:MM:SS
+pipseeker_partition: "medium"  # SLURM partition for pipseeker jobs
+
+# Compute resources for convert
+convert_threads: 128
+convert_cpus: 16
+convert_mem: 32000  # MB
+convert_time: "02:00:00"  # HH:MM:SS
+convert_partition: "medium"  # SLURM partition for convert jobs
+
+# Compute resources for combining files
+combine_threads: 128
+combine_cpus: 4
+combine_mem: 16000  # MB
+combine_time: "2:00:00"  # HH:MM:SS
+combine_partition: "medium"  # SLURM partition for combine jobs
+
+# Compute resources for filter
+filter_threads: 128
+filter_cpus: 4
+filter_mem: 32000  # MB
+filter_time: "4:00:00"  # HH:MM:SS
+filter_partition: "medium"  # SLURM partition for filter jobs
+
+# Compute resources for cell cycle
+cell_cycle_threads: 16           # Instead of 128
+cell_cycle_mem: 32000           # Instead of 32000  
+cell_cycle_time: "2:00:00"     # More time
+cell_cycle_partition: "medium"  # More reliable than short
+
+# Compute resources for summary statistics
+summary_threads: 128
+summary_cpus: 4
+summary_mem: 16000  # MB
+summary_time: "2:00:00"  # HH:MM:SS
+summary_partition: "medium"  # SLURM partition for summary jobs

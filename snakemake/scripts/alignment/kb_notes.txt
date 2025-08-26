@@ -1,0 +1,39 @@
+mamba create -n kallisto_env -c bioconda kallisto bustools gffread
+conda activate kallisto_env
+
+fasta=/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.fa
+gtf=/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.gtf
+
+# Extract transcript sequences
+gffread "$gtf" -g "$fasta" -w transcripts.fa
+
+# Build kallisto index
+(kallisto_bustools) jomojaco@emerald:/private/groups/russelllab/jodie/scRNAseq/scripts/snakemake_pipeline/kallisto_bus$ kb ref \
+>   --kallisto ~/kallisto/build/src/kallisto \
+>   -i transcripts.idx \
+>   -g transcripts_to_genes.txt \
+>   -f1 transcripts.fa \
+>   "$fasta" "$gtf"
+[2025-07-08 12:23:07,223]    INFO [ref] Skipping cDNA FASTA generation because transcripts.fa already exists. Use --overwrite flag to overwrite
+[2025-07-08 12:23:07,226]    INFO [ref] Creating transcript-to-gene mapping at transcripts_to_genes.txt
+[2025-07-08 12:23:08,333]    INFO [ref] Indexing transcripts.fa to transcripts.idx
+
+# Run Kallisto Counting:
+ ~/kallisto/build/src/kallisto bus  -i transcripts.idx   -o bus_output   -x 0,0,16:0,16,28:1,0,0   -t 8 /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-Ctrl-1_S33_L003_R1_001.fastq.gz  /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-Ctrl-1_S33_L003_R2_001.fastq.gz 
+
+# Count transcripts:
+kb count \
+  --kallisto ~/kallisto/build/src/kallisto \
+  -i transcripts.idx \
+  -g transcripts_to_genes.txt \
+  -x 0,0,16:0,16,28:1,0,0 \
+  -o bus_output \
+  -t 8 \
+  R1.fastq.gz R2.fastq.gz
+
+# For 10X
+kb count -i transcripts.idx -g transcripts_to_genes.txt -x 10xv3 \
+    -o kb_output -t 8 \
+    --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+    /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-1_S67_L006_R1_001.fastq.gz \
+    /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-1_S67_L006_R2_001.fastq.gz

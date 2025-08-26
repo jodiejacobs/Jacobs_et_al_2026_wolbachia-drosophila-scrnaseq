@@ -1,0 +1,5 @@
+
+snakemake/.snakemake/
+.snakemake/
+snakemake/results/
+snakemake/logs/

@@ -1,0 +1,256 @@
+# Snakefile for processing scRNA-seq data with Snakemake and kallisto bustools
+# mamba activate snakemake #Needs snakemake>=9.0
+# snakemake --executor slurm --default-resources slurm_partition=medium slurm_time="2:00:00" runtime=120 mem_mb=8000 -j 16 -n 
+
+import pandas as pd
+import os
+
+# Configuration
+configfile: "config/config.yaml"
+SCANPY_ENV = config["scanpy_env"]
+# CYCLUM_ENV = config["cyclum_env"]
+
+
+# Load samples information
+samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
+samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+# Change index format to use hyphen between condition and replicate
+samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
+
+CONDITIONS = samples_df[0].unique().tolist()
+SAMPLES_pipseqIP = samples_df[samples_df[1] == 'pipseq'].index.tolist()
+SAMPLES_10x = samples_df[samples_df[1] == '10x'].index.tolist()
+REPLICATES = samples_df[2].unique().tolist()
+PLATFORMS = samples_df[1].unique().tolist()
+
+# Sample lookup by sample name; samples_df.loc['sample_name'][3] gives the R1 path
+print(f"Conditions: {CONDITIONS}")
+print(f"Replicates: {REPLICATES}")
+print(f"Platforms: {PLATFORMS}")
+
+# # Establish rule precedence
+# ruleorder: map_pipseq > combine_files_by_condition_platform
+# ruleorder: map_10x > combine_files_by_condition_platform
+
+# Helper function to get fastq files for a sample
+def get_fastq_files(sample_id):
+    """Get R1 and R2 fastq files for a sample."""
+    sample_info = samples_df.loc[sample_id]
+    r1_path = sample_info[3]  # R1 path is in column 3 (0-indexed)
+    r2_path = sample_info[4]  # R2 path is in column 4 (0-indexed)
+    return r1_path, r2_path
+
+# Main rule that defines the final output
+rule all:
+    input:
+        expand("results/combined/{condition}_{platform}.h5ad",
+               condition=CONDITIONS,
+               platform=PLATFORMS)
+
+# # Process PIPseq samples with kallisto bustools
+# rule map_pipseq:
+#     input:
+#         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+#         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+#     output:
+#         h5ad = "results/h5ad_results/{sample_id}.h5ad"
+#     params:
+#         sample_id = "{sample_id}",
+#         outdir = "results/pipseq/{sample_id}",
+#         kallisto_index = config["kallisto_index"],
+#         transcripts_to_genes = config["transcripts_to_genes"]
+#     wildcard_constraints:
+#         sample_id = "*_pipseq"  # Only match samples ending with _pipseq
+#     log:
+#         "logs/pipseq/{sample_id}.log"
+#     threads: 
+#         config["pipseeker_threads"]
+#     resources:
+#         slurm_partition = config["pipseeker_partition"],
+#         mem_mb = config["pipseeker_mem"],
+#         slurm_time = config["pipseeker_time"]
+#     shell:
+#         """
+#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+#         conda activate kallisto_bustools
+
+#         kb count \
+#             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+#             -i {params.kallisto_index} \
+#             -g {params.transcripts_to_genes} \
+#             -x 0,0,16:0,16,28:1,0,0 \
+#             -o {params.outdir} \
+#             -t {threads} \
+#             --h5ad \
+#             {input.read1} {input.read2} 
+
+#         # Move the h5ad file to the expected location
+#         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+#         """
+
+# # Process 10X samples with kallisto bustools
+# rule map_10x:
+#     input:
+#         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+#         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+#     output:
+#         h5ad = "results/h5ad_results/{sample_id}.h5ad"
+#     params:
+#         sample_id = "{sample_id}",
+#         outdir = "results/10x/{sample_id}",
+#         kallisto_index = config["kallisto_index"],
+#         transcripts_to_genes = config["transcripts_to_genes"]
+#     wildcard_constraints:
+#         sample_id = "*_10x"  # Only match samples ending with _10x
+#     log:
+#         "logs/10x/{sample_id}.log"
+#     threads:
+#         config["cellranger_threads"] 
+#     resources:
+#         slurm_partition = config["cellranger_partition"],
+#         mem_mb = config["cellranger_mem"],
+#         slurm_time = config["cellranger_time"]
+#     shell:
+#         """
+#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+#         conda activate kallisto_bustools
+        
+#         kb count \
+#             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+#             -i {params.kallisto_index} \
+#             -g {params.transcripts_to_genes} \
+#             -x 10xv3 \
+#             -o {params.outdir} \
+#             -t {threads} \
+#             --h5ad \
+#             {input.read1} {input.read2} 
+
+#         # Move the h5ad file to the expected location
+#         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+#         """
+# Filter h5ad output and output qc:
+rule filter_h5ad:
+    input: "results/h5ad_results/{sample_id}.h5ad"
+    output:
+        filtered_h5ad = "results/filtered_h5ad/{sample_id}.h5ad"
+    params:
+        script = config["filter_script"]
+    log:
+        "logs/filter/{sample_id}.log"
+    threads:
+        config["filter_threads"]
+    resources:
+        slurm_partition = config["filter_partition"],
+        mem_mb = config["filter_mem"],
+        slurm_time = config["filter_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input {input} \
+            --output {output.filtered_h5ad} 
+        """
+
+# Cell cycle Annotation
+rule annotate_cell_cycle: # This needs the cyclum connda environement
+    input:
+        h5ad = "results/filtered_h5ad/{sample_id}.h5ad" # Output of filtered script 
+    output:
+        annotated_h5ad = "results/annotated_h5ad/{sample_id}.h5ad"
+    params:
+        script = config["cell_cycle_script"]
+    log:
+        "logs/annotate/{sample_id}.log"
+    threads:
+        config["cell_cycle_threads"]
+    resources:
+        slurm_partition = config["cell_cycle_partition"],
+        mem_mb = config["cell_cycle_mem"],
+        slurm_time = config["cell_cycle_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate cyclum
+
+        python {params.script} \
+            --input {input.h5ad} \
+            --output {output.annotated_h5ad}
+        
+        gzip {input.h5ad}
+        """
+
+# Combine files by condition and platform
+rule combine_files_by_condition_platform:
+    input:
+        input_files = lambda wildcards: (
+            expand("results/annotated_h5ad/{condition}-{replicate}_pipseq.h5ad", 
+                  condition=wildcards.condition, 
+                  replicate=REPLICATES
+                  ) if wildcards.platform == "pipseq" else
+            expand("results/annotated_h5ad/{condition}-{replicate}_10x.h5ad", 
+                  condition=wildcards.condition, 
+                  replicate=REPLICATES) if wildcards.platform == "10x" else []
+        )
+    output:
+        combined = "results/combined/{condition}_{platform}.h5ad"
+    params:
+        combine_script = config["combine_script"],
+        condition = "{condition}",
+        platform = "{platform}",
+        temp_dir = "results/{condition}_{platform}",
+        sample_type_pattern = "^([^-]+)-([^-]+)"
+    log:
+        "logs/combine/{condition}_{platform}.log"
+    threads: 
+        config["combine_threads"]
+    resources:
+        slurm_partition = config["combine_partition"],
+        mem_mb = config["combine_mem"],
+        slurm_time = config["combine_time"]
+    shell:
+        """
+        # Activate conda environment
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        # Create temporary input directory
+        mkdir -p {params.temp_dir}
+        
+        # Copy all input files to the temporary directory with unique names
+        counter=1
+        for file in {input.input_files}; do
+            # Extract replicate number from filename for unique naming
+            basename_file=$(basename "$file" .h5ad)
+            cp "$file" {params.temp_dir}/"${{basename_file}}.h5ad"
+        done
+        
+        # Create combined output directory
+        mkdir -p results/combined
+        
+        # Run the integration script with appropriate parameters
+        python {params.combine_script} \
+            --input_dir {params.temp_dir} \
+            --output_dir $(dirname {output.combined}) \
+            --sample_type_pattern "{params.sample_type_pattern}" \
+            --prefix "{params.condition}-{params.platform}" \
+            --batch_key "batch" \
+            --min_cells 3 \
+            --min_genes 200 \
+            --n_pcs 50 \
+            --n_neighbors 20 \
+            --method "both" \
+            --calculate_titer 
+            
+        # Rename the output file to match the expected output name
+        for file in $(dirname {output.combined})/*_integrated.h5ad; do
+            if [ -f "$file" ]; then
+                mv "$file" {output.combined}
+                break
+            fi
+        done
+        
+        # Clean up temporary directory
+        rm -rf {params.temp_dir}
+        """

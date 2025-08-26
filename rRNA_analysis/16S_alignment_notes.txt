@@ -1,0 +1,89 @@
+# Make a 16S rRNA gtf:
+#!/bin/bash
+# Complete FASTA to GTF conversion for 16S rRNA sequences
+
+# Step 0: Set path names
+fasta='/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S_filtered.fasta'
+bed='/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S_filtered.bed'
+isoforms='/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S_filtered.isoforms'
+gtf_annotation='/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S_filtered.gtf'
+gtf_final='/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S_filtered.final.gtf'
+
+# Step 1: Convert FASTA to BED with custom chromosome naming
+bioawk -c fastx '{
+    chr_name = "Bacterial_16S_" NR
+    gene_name = "16S_gene_" NR
+    print chr_name"\t0\t"length($seq)"\t"gene_name"\t1000\t+"
+}' $fasta > $bed
+
+# Step 2: Create gene-transcript mapping
+awk '{
+    gene_id = $4
+    transcript_id = $4 ".1"
+    print gene_id "\t" transcript_id
+}' $bed > $isoforms
+
+# Step 3: Convert BED to GTF
+bed2gtf -b $bed -i $isoforms -0 $gtf_annotation
+
+# Step 4: Add rRNA biotype attributes
+awk -F'\t' 'BEGIN{OFS="\t"} {
+    if ($3 == "gene") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; gene_name \"16S ribosomal RNA\";", $9)
+    } else if ($3 == "transcript") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; transcript_biotype \"rRNA\"; gene_name \"16S_ribosomal_RNA\"; product \"16S_ribosomal_RNA\";", $9)
+    } else if ($3 == "exon") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; transcript_biotype \"rRNA\"; gene_name \"16S_ribosomal_RNA\"; product \"16S_ribosomal_RNA\";", $9)
+    }
+    print $0
+}' $gtf_annotation > $gtf_final
+
+# Step 5: Validate the output
+echo "Validation results:"
+gffread -v $gtf_final
+echo "Conversion complete. Output: $gtf_final"
+
+
+# This actually worked:
+# Step 1: Convert BED directly to GTF
+awk 'BEGIN{OFS="\t"} {
+    chrom = $1
+    start = $2 + 1  # Convert from 0-based to 1-based coordinates
+    end = $3
+    gene_id = $4
+    strand = $6
+    transcript_id = gene_id ".1"
+    
+    # Gene feature
+    print chrom, "bed2gtf", "gene", start, end, ".", strand, ".", "gene_id \"" gene_id "\"; transcript_id \"" transcript_id "\";"
+    
+    # Transcript feature  
+    print chrom, "bed2gtf", "transcript", start, end, ".", strand, ".", "gene_id \"" gene_id "\"; transcript_id \"" transcript_id "\";"
+    
+    # Exon feature
+    print chrom, "bed2gtf", "exon", start, end, ".", strand, ".", "gene_id \"" gene_id "\"; transcript_id \"" transcript_id "\"; exon_number \"1\";"
+}' $bed > $gtf_annotation
+
+# Step 2: Add rRNA biotype attributes
+awk -F'\t' 'BEGIN{OFS="\t"} {
+    if ($3 == "gene") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; gene_name \"16S ribosomal RNA\";", $9)
+    } else if ($3 == "transcript") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; transcript_biotype \"rRNA\"; gene_name \"16S_ribosomal_RNA\"; product \"16S_ribosomal_RNA\";", $9)
+    } else if ($3 == "exon") {
+        gsub(/;$/, "; gene_biotype \"rRNA\"; transcript_biotype \"rRNA\"; gene_name \"16S_ribosomal_RNA\"; product \"16S_ribosomal_RNA\"; exon_number \"1\";", $9)
+    }
+    print $0
+}' $gtf_annotation > $gtf_final
+
+# Step 3: Verify the files were created
+echo "Files created:"
+ls -la $gtf_annotation $gtf_final
+
+# Step 4: Check the first few lines
+echo "First 9 lines of final GTF:"
+head -9 $gtf_final
+
+# Step 5: Validate
+gffread -v $gtf_final
+
