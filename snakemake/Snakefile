@@ -28,10 +28,6 @@ print(f"Conditions: {CONDITIONS}")
 print(f"Replicates: {REPLICATES}")
 print(f"Platforms: {PLATFORMS}")
 
-# # Establish rule precedence
-# ruleorder: map_pipseq > combine_files_by_condition_platform
-# ruleorder: map_10x > combine_files_by_condition_platform
-
 # Helper function to get fastq files for a sample
 def get_fastq_files(sample_id):
     """Get R1 and R2 fastq files for a sample."""
@@ -47,87 +43,92 @@ rule all:
                condition=CONDITIONS,
                platform=PLATFORMS)
 
-# # Process PIPseq samples with kallisto bustools
-# rule map_pipseq:
-#     input:
-#         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
-#         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
-#     output:
-#         h5ad = "results/h5ad_results/{sample_id}.h5ad"
-#     params:
-#         sample_id = "{sample_id}",
-#         outdir = "results/pipseq/{sample_id}",
-#         kallisto_index = config["kallisto_index"],
-#         transcripts_to_genes = config["transcripts_to_genes"]
-#     wildcard_constraints:
-#         sample_id = "*_pipseq"  # Only match samples ending with _pipseq
-#     log:
-#         "logs/pipseq/{sample_id}.log"
-#     threads: 
-#         config["pipseeker_threads"]
-#     resources:
-#         slurm_partition = config["pipseeker_partition"],
-#         mem_mb = config["pipseeker_mem"],
-#         slurm_time = config["pipseeker_time"]
-#     shell:
-#         """
-#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-#         conda activate kallisto_bustools
+# Establish rule precedence
+ruleorder: map_pipseq > combine_files_by_condition_platform
+ruleorder: map_10x > combine_files_by_condition_platform
 
-#         kb count \
-#             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
-#             -i {params.kallisto_index} \
-#             -g {params.transcripts_to_genes} \
-#             -x 0,0,16:0,16,28:1,0,0 \
-#             -o {params.outdir} \
-#             -t {threads} \
-#             --h5ad \
-#             {input.read1} {input.read2} 
+# Process PIPseq samples with kallisto bustools
+rule map_pipseq:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+    output:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+    params:
+        sample_id = "{sample_id}",
+        outdir = "results/pipseq/{sample_id}",
+        kallisto_index = config["kallisto_index"],
+        transcripts_to_genes = config["transcripts_to_genes"]
+    wildcard_constraints:
+        sample_id = ".*_pipseq"  # Only match samples ending with _pipseq
+    log:
+        "logs/pipseq/{sample_id}.log"
+    threads: 
+        config["pipseeker_threads"]
+    resources:
+        slurm_partition = config["pipseeker_partition"],
+        mem_mb = config["pipseeker_mem"],
+        slurm_time = config["pipseeker_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
 
-#         # Move the h5ad file to the expected location
-#         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
-#         """
+        kb count \
+            --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+            -i {params.kallisto_index} \
+            -g {params.transcripts_to_genes} \
+            -x 0,0,16:0,16,28:1,0,0 \
+            -o {params.outdir} \
+            -t {threads} \
+            --h5ad \
+            {input.read1} {input.read2} 
 
-# # Process 10X samples with kallisto bustools
-# rule map_10x:
-#     input:
-#         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
-#         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
-#     output:
-#         h5ad = "results/h5ad_results/{sample_id}.h5ad"
-#     params:
-#         sample_id = "{sample_id}",
-#         outdir = "results/10x/{sample_id}",
-#         kallisto_index = config["kallisto_index"],
-#         transcripts_to_genes = config["transcripts_to_genes"]
-#     wildcard_constraints:
-#         sample_id = "*_10x"  # Only match samples ending with _10x
-#     log:
-#         "logs/10x/{sample_id}.log"
-#     threads:
-#         config["cellranger_threads"] 
-#     resources:
-#         slurm_partition = config["cellranger_partition"],
-#         mem_mb = config["cellranger_mem"],
-#         slurm_time = config["cellranger_time"]
-#     shell:
-#         """
-#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-#         conda activate kallisto_bustools
+        # Move the h5ad file to the expected location
+        mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        """
+
+# Process 10X samples with kallisto bustools
+rule map_10x:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+    output:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+    params:
+        sample_id = "{sample_id}",
+        outdir = "results/10x/{sample_id}",
+        kallisto_index = config["kallisto_index"],
+        transcripts_to_genes = config["transcripts_to_genes"]
+    wildcard_constraints:
+        sample_id = ".*_10x"  # Only match samples ending with _10x
+    log:
+        "logs/10x/{sample_id}.log"
+    threads:
+        config["cellranger_threads"] 
+    resources:
+        slurm_partition = config["cellranger_partition"],
+        mem_mb = config["cellranger_mem"],
+        slurm_time = config["cellranger_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
         
-#         kb count \
-#             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
-#             -i {params.kallisto_index} \
-#             -g {params.transcripts_to_genes} \
-#             -x 10xv3 \
-#             -o {params.outdir} \
-#             -t {threads} \
-#             --h5ad \
-#             {input.read1} {input.read2} 
+        kb count \
+            --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+            -i {params.kallisto_index} \
+            -g {params.transcripts_to_genes} \
+            -x 10xv3 \
+            -o {params.outdir} \
+            -t {threads} \
+            --h5ad \
+            {input.read1} {input.read2} 
 
-#         # Move the h5ad file to the expected location
-#         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
-#         """
+        # Move the h5ad file to the expected location
+        mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        """
+
 # Filter h5ad output and output qc:
 rule filter_h5ad:
     input: "results/h5ad_results/{sample_id}.h5ad"
