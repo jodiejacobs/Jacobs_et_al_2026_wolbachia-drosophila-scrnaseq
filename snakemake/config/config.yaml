@@ -61,9 +61,9 @@ filter_time: "4:00:00"  # HH:MM:SS
 filter_partition: "medium"  # SLURM partition for filter jobs
 
 # Compute resources for cell cycle
-cell_cycle_threads: 16           # Instead of 128
+cell_cycle_threads: 32           # Instead of 128
 cell_cycle_mem: 32000           # Instead of 32000  
-cell_cycle_time: "2:00:00"     # More time
+cell_cycle_time: "4:00:00"     # More time
 cell_cycle_partition: "medium"  # More reliable than short
 
 # Compute resources for summary statistics
