@@ -8,7 +8,7 @@ import os
 # Configuration
 configfile: "config/config.yaml"
 SCANPY_ENV = config["scanpy_env"]
-# CYCLUM_ENV = config["cyclum_env"]
+CYCLUM_ENV = config["cyclum_env"]
 
 
 # Load samples information
@@ -71,6 +71,11 @@ rule map_pipseq:
         slurm_time = config["pipseeker_time"]
     shell:
         """
+        exec > {log} 2>&1
+        echo "Starting PIPseq processing for {params.sample_id}"
+        echo "Input files: {input.read1}, {input.read2}"
+        echo "Output directory: {params.outdir}"
+        
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate kallisto_bustools
 
@@ -84,8 +89,10 @@ rule map_pipseq:
             --h5ad \
             {input.read1} {input.read2} 
 
+        echo "Moving h5ad file to final location"
         # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        echo "PIPseq processing complete for {params.sample_id}"
         """
 
 # Process 10X samples with kallisto bustools
@@ -112,6 +119,11 @@ rule map_10x:
         slurm_time = config["cellranger_time"]
     shell:
         """
+        exec > {log} 2>&1
+        echo "Starting 10x processing for {params.sample_id}"
+        echo "Input files: {input.read1}, {input.read2}"
+        echo "Output directory: {params.outdir}"
+        
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate kallisto_bustools
         
@@ -125,8 +137,10 @@ rule map_10x:
             --h5ad \
             {input.read1} {input.read2} 
 
+        echo "Moving h5ad file to final location"
         # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        echo "10x processing complete for {params.sample_id}"
         """
 
 # Filter h5ad output and output qc:
@@ -146,6 +160,10 @@ rule filter_h5ad:
         slurm_time = config["filter_time"]
     shell:
         """
+        exec > {log} 2>&1
+        echo "Starting filtering for {wildcards.sample_id}"
+        echo "Input file: {input}"
+        
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
 
@@ -153,11 +171,13 @@ rule filter_h5ad:
             --input {input} \
             --output {output.filtered_h5ad} 
         
+        echo "Compressing original h5ad file"
         gzip {input}
+        echo "Filtering complete for {wildcards.sample_id}"
         """
 
 # Cell cycle Annotation
-rule annotate_cell_cycle: # This needs the cyclum connda environement
+rule annotate_cell_cycle: # This needs the cyclum conda environment
     input:
         h5ad = "results/filtered_h5ad/{sample_id}.h5ad" # Output of filtered script 
     output:
@@ -174,14 +194,20 @@ rule annotate_cell_cycle: # This needs the cyclum connda environement
         slurm_time = config["cell_cycle_time"]
     shell:
         """
+        exec > {log} 2>&1
+        echo "Starting cell cycle annotation for {wildcards.sample_id}"
+        echo "Input file: {input.h5ad}"
+        
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate cyclum
+        conda activate {CYCLUM_ENV}
 
         python {params.script} \
             --input {input.h5ad} \
             --output {output.annotated_h5ad}
         
+        echo "Compressing filtered h5ad file"
         gzip {input.h5ad}
+        echo "Cell cycle annotation complete for {wildcards.sample_id}"
         """
 
 # Combine files by condition and platform
@@ -214,11 +240,16 @@ rule combine_files_by_condition_platform:
         slurm_time = config["combine_time"]
     shell:
         """
+        exec > {log} 2>&1
+        echo "Starting integration for {wildcards.condition}_{wildcards.platform}"
+        echo "Input files: {input.input_files}"
+        
         # Activate conda environment
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
 
         # Create temporary input directory
+        echo "Creating temporary directory: {params.temp_dir}"
         mkdir -p {params.temp_dir}
         
         # Copy all input files to the temporary directory with unique names
@@ -226,12 +257,14 @@ rule combine_files_by_condition_platform:
         for file in {input.input_files}; do
             # Extract replicate number from filename for unique naming
             basename_file=$(basename "$file" .h5ad)
+            echo "Copying $file to {params.temp_dir}/${{basename_file}}.h5ad"
             cp "$file" {params.temp_dir}/"${{basename_file}}.h5ad"
         done
         
         # Create combined output directory
         mkdir -p results/combined
         
+        echo "Running integration script"
         # Run the integration script with appropriate parameters
         python {params.combine_script} \
             --input_dir {params.temp_dir} \
@@ -247,13 +280,17 @@ rule combine_files_by_condition_platform:
             --calculate_titer 
             
         # Rename the output file to match the expected output name
+        echo "Renaming output file"
         for file in $(dirname {output.combined})/*_integrated.h5ad; do
             if [ -f "$file" ]; then
+                echo "Moving $file to {output.combined}"
                 mv "$file" {output.combined}
                 break
             fi
         done
         
         # Clean up temporary directory
+        echo "Cleaning up temporary directory"
         rm -rf {params.temp_dir}
+        echo "Integration complete for {wildcards.condition}_{wildcards.platform}"
         """

@@ -4,10 +4,11 @@
 samples_file: "config/samples.csv"
 
 # Path to output directory
-output_dir: "/private/groups/russelllab/jodie/scRNAseq/19MAY2025_analysis"  # Add the path to the output directory
+output_dir: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/results"  # Add the path to the output directory
 
 # Path to conda environment
 scanpy_env: '/private/home/jomojaco/miniforge3/envs/scanpy'
+cyclum_env: '/private/home/jomojaco/miniforge3/envs/cyclum'
 
 # Software paths
 cellranger_transcriptome: "/private/groups/russelllab/jodie/scRNAseq/reference/10X_Drosophila_melanogaster_wMel_combined_16S" # Add theh path to the cellranger transcriptome reference
