@@ -14,12 +14,11 @@ CYCLUM_ENV = config["cyclum_env"]
 # Load samples information
 samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
 samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+
 # Change index format to use hyphen between condition and replicate
 samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
 
 CONDITIONS = samples_df[0].unique().tolist()
-SAMPLES_pipseqIP = samples_df[samples_df[1] == 'pipseq'].index.tolist()
-SAMPLES_10x = samples_df[samples_df[1] == '10x'].index.tolist()
 REPLICATES = samples_df[2].unique().tolist()
 PLATFORMS = samples_df[1].unique().tolist()
 
