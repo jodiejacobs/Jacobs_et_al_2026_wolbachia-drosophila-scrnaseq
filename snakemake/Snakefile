@@ -152,6 +152,8 @@ rule filter_h5ad:
         python {params.script} \
             --input {input} \
             --output {output.filtered_h5ad} 
+        
+        gzip {input}
         """
 
 # Cell cycle Annotation
