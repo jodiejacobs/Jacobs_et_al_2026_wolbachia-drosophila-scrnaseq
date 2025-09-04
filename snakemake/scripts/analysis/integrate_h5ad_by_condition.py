@@ -10,165 +10,70 @@ import re
 import anndata as ad
 import bbknn
 
-# rRNA gene dictionaries with lengths
+# rRNA gene dictionaries with lengths calculated from transcripts_to_genes.txt
 wMel_rRNA={
     "GQX67_00940": 2772,
     "GQX67_00945": 107,
     "GQX67_05945": 1505
 }
 
+# Drosophila rRNA genes with accurate lengths from your reference
 all_rRNA={
+    # Mitochondrial rRNAs (keeping your original entries)
     "FBgn0013686": 1324, # Dmel mtrRNA
     "FBgn0013688": 786,  # Dmel mtrRNA
-    "FBgn0053353": 135,
-    "FBgn0053354": 135,
-    "FBgn0053355": 135,
-    "FBgn0053356": 143,
-    "FBgn0053357": 135,
-    "FBgn0053358": 135,
-    "FBgn0053359": 135,
-    "FBgn0053360": 135,
-    "FBgn0053361": 135,
-    "FBgn005336": 135,
-    "FBgn0053363": 144,
-    "FBgn0053364": 135,
-    "FBgn005336": 135,
-    "FBgn0053366": 135,
-    "FBgn0053367": 135,
-    "FBgn0053368": 135,
-    "FBgn0053369": 135,
-    "FBgn0053370": 135,
-    "FBgn0053371": 137,
-    "FBgn0053372": 135,
-    "FBgn0053373": 135,
-    "FBgn0053374": 135,
-    "FBgn0053375": 135,
-    "FBgn0053376": 135,
-    "FBgn0053377": 135,
-    "FBgn0053378": 135,
-    "FBgn0053379": 135,
-    "FBgn0053380": 135,
-    "FBgn0053381": 135,
-    "FBgn0053382": 135,
-    "FBgn0053383": 135,
-    "FBgn0053384": 135,
-    "FBgn0053385": 135,
-    "FBgn0053386": 135,
-    "FBgn0053387": 135,
-    "FBgn0053388": 135,
-    "FBgn0053389": 135,
-    "FBgn0053390": 135,
-    "FBgn0053391": 134,
-    "FBgn0053392": 135,
-    "FBgn0053393": 135,
-    "FBgn0053394": 135,
-    "FBgn0053395": 135,
-    "FBgn0053396": 135,
-    "FBgn0053397": 135,
-    "FBgn0053398": 135,
-    "FBgn0053399": 135,
-    "FBgn0053400": 135,
-    "FBgn0053401": 135,
-    "FBgn0053402": 135,
-    "FBgn0053403": 135,
-    "FBgn0053404": 135,
-    "FBgn0053405": 134,
-    "FBgn0053406": 135,
-    "FBgn0053407": 135,
-    "FBgn0053408": 135,
-    "FBgn0053409": 135,
-    "FBgn0053410": 135,
-    "FBgn0053411": 135,
-    "FBgn0053412": 135,
-    "FBgn0053413": 135,
-    "FBgn0053414": 135,
-    "FBgn0053415": 135,
-    "FBgn0053416": 143,
-    "FBgn0053417": 135,
-    "FBgn0053418": 135,
-    "FBgn0053419": 135,
-    "FBgn0053420": 135,
-    "FBgn0053421": 135,
-    "FBgn0053422": 135,
-    "FBgn0053423": 135,
-    "FBgn0053424": 135,
-    "FBgn0053425": 135,
-    "FBgn0053426": 135,
-    "FBgn0053427": 135,
-    "FBgn0053428": 135,
-    "FBgn0053429": 135,
-    "FBgn0053430": 135,
-    "FBgn0053431": 135,
-    "FBgn0053432": 135,
-    "FBgn0053433": 135,
-    "FBgn0053434": 135,
-    "FBgn0053435": 135,
-    "FBgn0053436": 135,
-    "FBgn0053437": 135,
-    "FBgn0053438": 135,
-    "FBgn0053439": 135,
-    "FBgn0053440": 135,
-    "FBgn0053441": 135,
-    "FBgn0053442": 135,
-    "FBgn0053443": 135,
-    "FBgn0053444": 135,
-    "FBgn0053445": 135,
-    "FBgn0053446": 135,
-    "FBgn0053447": 135,
-    "FBgn0053448": 135,
-    "FBgn0053449": 135,
-    "FBgn0053450": 135,
-    "FBgn0053451": 135,
-    "FBgn0053452": 135,
-    "FBgn0085753": 6005,
-    "FBgn0085765": 30,
-    "FBgn0085771": 1258,
-    "FBgn0085802": 1995,
-    "FBgn0085813": 1975,
-    "FBgn0085819": 895,
-    "FBgn0250731": 123,
-    "FBgn0267496": 30,
-    "FBgn0267497": 2715,
-    "FBgn0267498": 1995,
-    "FBgn0267499": 123,
-    "FBgn0267500": 30,
-    "FBgn0267501": 1995,
-    "FBgn0267502": 123,
-    "FBgn0267503": 30,
-    "FBgn0267504": 3970,
-    "FBgn0267505": 6863,
-    "FBgn0267506": 4191,
-    "FBgn0267507": 8118,
-    "FBgn0267508": 821,
-    "FBgn0267509": 123,
-    "FBgn0267510": 30,
-    "FBgn0267511": 2800,
-    "FBgn0267512": 123,
-    "FBgn0267513": 255,
-    "FBgn0267514": 123,
-    "FBgn0267515": 704,
-    "FBgn0267516": 5725,
-    "FBgn0267517": 123,
-    "FBgn0267518": 30,
-    "FBgn0267519": 2689,
-    "FBgn0267520": 357,
-    "FBgn0267521": 1934,
-    "FBgn0267522": 2004,
-    "FBgn0267523": 123,
-    "FBgn0267524": 30
+    
+    # 2S rRNA genes (all 30 bp)
+    "FBgn0267496": 30,   # 2SrRNA:CR45836
+    "FBgn0267500": 30,   # 2SrRNA:CR45840
+    "FBgn0267503": 30,   # 2SrRNA:CR45843
+    "FBgn0085765": 30,   # 2SrRNA-Psi:CR40677
+    "FBgn0267518": 30,   # 2SrRNA-Psi:CR45858
+    "FBgn0267524": 30,   # 2SrRNA:CR45864
+    
+    # 5.8S rRNA genes (all 123 bp)
+    "FBgn0267509": 123,  # 5.8SrRNA-Psi:CR45849
+    "FBgn0267499": 123,  # 5.8SrRNA:CR45839
+    "FBgn0267502": 123,  # 5.8SrRNA:CR45842
+    "FBgn0267512": 123,  # 5.8SrRNA:CR45852
+    "FBgn0267517": 123,  # 5.8SrRNA-Psi:CR45857
+    "FBgn0267523": 123,  # 5.8SrRNA-Psi:CR45863
+    "FBgn0250731": 123,  # 5.8SrRNA:CR40454
+    "FBgn0267514": 123,  # 5.8SrRNA-Psi:CR45854
+    
+    # 18S rRNA genes 
+    "FBgn0085802": 1995, # 18SrRNA:CR41548
+    "FBgn0267498": 1995, # 18SrRNA:CR45838
+    "FBgn0267501": 1995, # 18SrRNA:CR45841
+    "FBgn0267521": 1934, # 18SrRNA-Psi:CR45861
+    "FBgn0085813": 1975, # 18SrRNA-Psi:CR41602
+    
+    # 28S rRNA genes (variable lengths)
+    "FBgn0267504": 3970, # 28SrRNA:CR45844
+    "FBgn0267508": 821,  # 28SrRNA-Psi:CR45848
+    "FBgn0267511": 2800, # 28SrRNA-Psi:CR45851
+    "FBgn0085753": 6005, # 28SrRNA-Psi:CR40596
+    "FBgn0267497": 2715, # 28SrRNA:CR45837
+    "FBgn0267522": 2004, # 28SrRNA-Psi:CR45862
+    "FBgn0085771": 1258, # 28SrRNA-Psi:CR40741
+    "FBgn0267519": 2689, # 28SrRNA-Psi:CR45859
+    "FBgn0085819": 895,  # 28SrRNA-Psi:CR41609
+    "FBgn0267513": 255,  # 28SrRNA-Psi:CR45853
+    "FBgn0267520": 357,  # 28SrRNA-Psi:CR45860
+    "FBgn0267515": 704   # 28SrRNA-Psi:CR45855
 }
 
 # Set plotting settings
 sc.settings.set_figure_params(dpi=100, frameon=False)
 sc.settings.verbosity = 1
 
-# Import bacteria gene list
-def import_bacteria_genes(filepath):
-    with open(filepath, 'r') as f:
-        bacteria_genes = {line.strip() for line in f if line.strip()} # Makes a set of bacteria genes
-    return bacteria_genes
+# # Import bacteria gene list
+# def import_bacteria_genes(filepath):
+#     with open(filepath, 'r') as f:
+#         bacteria_genes = {line.strip() for line in f if line.strip()} # Makes a set of bacteria genes
+#     return bacteria_genes
 
-bacteria_genes = import_bacteria_genes('/private/groups/russelllab/jodie/scRNAseq/reference/gene_list_bacteria.txt')
+# bacteria_genes = import_bacteria_genes('/private/groups/russelllab/jodie/scRNAseq/reference/gene_list_bacteria.txt')
 
 def calculate_wolbachia_titer(adata):
     '''

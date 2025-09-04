@@ -209,18 +209,13 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
         echo "Cell cycle annotation complete for {wildcards.sample_id}"
         """
 
-# Combine files by condition and platform
+# Combine files by condition and platform# Combine files by condition and platform
 rule combine_files_by_condition_platform:
     input:
-        input_files = lambda wildcards: (
-            expand("results/annotated_h5ad/{condition}-{replicate}_pipseq.h5ad", 
-                  condition=wildcards.condition, 
-                  replicate=REPLICATES
-                  ) if wildcards.platform == "pipseq" else
-            expand("results/annotated_h5ad/{condition}-{replicate}_10x.h5ad", 
-                  condition=wildcards.condition, 
-                  replicate=REPLICATES) if wildcards.platform == "10x" else []
-        )
+        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{platform}.h5ad", 
+                                              condition=wildcards.condition, 
+                                              replicate=REPLICATES,
+                                              platform=wildcards.platform)
     output:
         combined = "results/combined/{condition}_{platform}.h5ad"
     params:
@@ -247,19 +242,6 @@ rule combine_files_by_condition_platform:
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
 
-        # Create temporary input directory
-        echo "Creating temporary directory: {params.temp_dir}"
-        mkdir -p {params.temp_dir}
-        
-        # Copy all input files to the temporary directory with unique names
-        counter=1
-        for file in {input.input_files}; do
-            # Extract replicate number from filename for unique naming
-            basename_file=$(basename "$file" .h5ad)
-            echo "Copying $file to {params.temp_dir}/${{basename_file}}.h5ad"
-            cp "$file" {params.temp_dir}/"${{basename_file}}.h5ad"
-        done
-        
         # Create combined output directory
         mkdir -p results/combined
         
@@ -277,19 +259,5 @@ rule combine_files_by_condition_platform:
             --n_neighbors 20 \
             --method "both" \
             --calculate_titer 
-            
-        # Rename the output file to match the expected output name
-        echo "Renaming output file"
-        for file in $(dirname {output.combined})/*_integrated.h5ad; do
-            if [ -f "$file" ]; then
-                echo "Moving $file to {output.combined}"
-                mv "$file" {output.combined}
-                break
-            fi
-        done
-        
-        # Clean up temporary directory
-        echo "Cleaning up temporary directory"
-        rm -rf {params.temp_dir}
-        echo "Integration complete for {wildcards.condition}_{wildcards.platform}"
+         
         """
