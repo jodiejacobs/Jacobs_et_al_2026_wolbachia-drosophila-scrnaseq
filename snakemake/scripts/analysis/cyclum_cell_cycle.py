@@ -406,11 +406,42 @@ print(f"suitable_for_cyclum: {adata.var['suitable_for_cyclum'].sum()} genes (exc
 # Create plots
 output_prefix = output.replace('.h5ad', '')
 
-# Create the circular plot
-color_map = {'g0/g1': "red", 's': "green", 'g2/m': "blue"}
-fig = cyclum.illustration.plot_round_distr_color(pseudotime_flat, stages, color_map)
-plt.savefig(f"{output_prefix}_cyclum_cell_cycle.pdf", dpi=300, bbox_inches='tight')
-plt.close()
+# Create the circular plot with error handling
+try:
+    color_map = {'g0/g1': "red", 's': "green", 'g2/m': "blue"}
+    fig = cyclum.illustration.plot_round_distr_color(pseudotime_flat, stages, color_map)
+    plt.savefig(f"{output_prefix}_cyclum_cell_cycle.pdf", dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Circular plot saved successfully!")
+except Exception as e:
+    print(f"Error with Cyclum's built-in plotting function: {e}")
+    print("Creating custom circular plot...")
+    
+    # Create custom circular plot
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(projection='polar'))
+    
+    # Convert stages to numeric for plotting
+    stage_to_num = {'g0/g1': 0, 's': 1, 'g2/m': 2}
+    stage_colors = {'g0/g1': 'red', 's': 'green', 'g2/m': 'blue'}
+    
+    # Plot each stage
+    for stage in ['g0/g1', 's', 'g2/m']:
+        stage_mask = np.array(stages) == stage
+        if stage_mask.sum() > 0:
+            stage_pseudotime = pseudotime_flat[stage_mask]
+            # Convert pseudotime to angles (0 to 2π)
+            angles = (stage_pseudotime - pseudotime_flat.min()) / (pseudotime_flat.max() - pseudotime_flat.min()) * 2 * np.pi
+            radii = np.ones(len(angles))  # All at same radius
+            
+            ax.scatter(angles, radii, c=stage_colors[stage], label=stage, alpha=0.6, s=20)
+    
+    ax.set_ylim(0, 1.2)
+    ax.set_title('Cell Cycle Distribution (Cyclum)', pad=20)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0))
+    
+    plt.savefig(f"{output_prefix}_cyclum_cell_cycle.pdf", dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Custom circular plot saved successfully!")
 
 # Generate quality control plots
 plot_quality_metrics(model, pseudotime_flat, output_prefix)

@@ -65,15 +65,6 @@ all_rRNA={
 
 # Set plotting settings
 sc.settings.set_figure_params(dpi=100, frameon=False)
-sc.settings.verbosity = 1
-
-# # Import bacteria gene list
-# def import_bacteria_genes(filepath):
-#     with open(filepath, 'r') as f:
-#         bacteria_genes = {line.strip() for line in f if line.strip()} # Makes a set of bacteria genes
-#     return bacteria_genes
-
-# bacteria_genes = import_bacteria_genes('/private/groups/russelllab/jodie/scRNAseq/reference/gene_list_bacteria.txt')
 
 def calculate_wolbachia_titer(adata):
     '''
@@ -111,16 +102,6 @@ def calculate_wolbachia_titer(adata):
         # Create masks based on var_names
         wMel_mask = [gene in wMel_genes_present for gene in adata.var_names]
         all_mask = [gene in all_genes_present for gene in adata.var_names]
-    
-    if not wMel_genes_present:
-        print("Warning: No wMel rRNA genes found in the dataset!")
-        adata.obs['wolbachia_titer'] = np.nan
-        return adata
-        
-    if not all_genes_present:
-        print("Warning: No Dmel rRNA genes found in the dataset!")
-        adata.obs['wolbachia_titer'] = np.nan
-        return adata
     
     print(f"Found {len(wMel_genes_present)} wMel rRNA genes and {len(all_genes_present)} Dmel rRNA genes")
     
