@@ -11,9 +11,7 @@ import scanpy as sc
 import argparse
 import os
 import sklearn
-from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import NearestNeighbors
-from scipy import stats
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -42,13 +40,13 @@ pseudotime_flat = pseudotime.flatten()
 print(f"Pseudotime shape: {pseudotime.shape}")
 print(f"Pseudotime range: {pseudotime.min():.3f} to {pseudotime.max():.3f}")
 
-def assign_cell_cycle_stage_robust(pseudotime_flat):
+def assign_cell_cycle_stage_simple(pseudotime_flat):
     """
-    Robust cell cycle assignment using multiple methods with gap-filling
+    Simple, gap-free cell cycle assignment
     """
-    print("Step 1: Quantile-based initial assignment...")
+    print("Step 1: Converting to circular coordinates...")
     
-    # Normalize pseudotime to [0, 2π] for circular analysis
+    # Normalize pseudotime to [0, 2π] 
     if pseudotime_flat.max() <= 1:
         angles = pseudotime_flat * 2 * np.pi
     else:
@@ -56,127 +54,93 @@ def assign_cell_cycle_stage_robust(pseudotime_flat):
         angles = ((pseudotime_flat - pseudotime_flat.min()) / 
                  (pseudotime_flat.max() - pseudotime_flat.min())) * 2 * np.pi
     
-    # Method 1: Quantile-based assignment (ensures all cells get assigned)
-    sorted_indices = np.argsort(angles)
+    print("Step 2: Direct angle-based assignment...")
+    
+    # Simple direct assignment based on angle ranges
+    # This guarantees complete coverage with no gaps
+    phases = []
+    for angle in angles:
+        # Normalize angle to [0, 2π] range
+        normalized_angle = angle % (2 * np.pi)
+        
+        if normalized_angle < (2 * np.pi / 3):  # 0 to 2π/3
+            phases.append('g0/g1')
+        elif normalized_angle < (4 * np.pi / 3):  # 2π/3 to 4π/3
+            phases.append('s')
+        else:  # 4π/3 to 2π
+            phases.append('g2/m')
+    
+    print("Step 3: Light smoothing at boundaries...")
+    
+    # Apply light smoothing only near the boundaries to avoid hard transitions
+    boundary1 = 2 * np.pi / 3
+    boundary2 = 4 * np.pi / 3
+    boundary_width = np.pi / 12  # Small smoothing window
+    
+    # Build simple nearest neighbors for boundary smoothing
     n_cells = len(angles)
-    
-    # Divide into three roughly equal groups
-    g1_end = n_cells // 3
-    s_end = 2 * n_cells // 3
-    
-    quantile_phases = [''] * n_cells
-    for i, idx in enumerate(sorted_indices):
-        if i < g1_end:
-            quantile_phases[idx] = 'g0/g1'
-        elif i < s_end:
-            quantile_phases[idx] = 's'
-        else:
-            quantile_phases[idx] = 'g2/m'
-    
-    print("Step 2: Density-based boundary refinement...")
-    
-    # Method 2: Use kernel density estimation to find natural boundaries
-    try:
-        # Convert to circular coordinates for density estimation
-        x_coords = np.cos(angles)
-        y_coords = np.sin(angles)
+    if n_cells > 10:  # Only smooth if we have enough cells
+        nn = NearestNeighbors(n_neighbors=min(10, n_cells//10))
+        circular_coords = np.column_stack([np.cos(angles), np.sin(angles)])
+        nn.fit(circular_coords)
         
-        # Find density peaks using KDE
-        kde = stats.gaussian_kde(angles.T)
-        angle_range = np.linspace(0, 2*np.pi, 1000)
-        density = kde(angle_range)
+        smoothed_phases = phases.copy()
+        changes_made = 0
         
-        # Find local minima (boundaries between phases)
-        from scipy.signal import find_peaks
-        # Find peaks in density
-        peaks, _ = find_peaks(density, height=np.percentile(density, 50))
-        # Find valleys (minima) between peaks
-        valleys, _ = find_peaks(-density)
-        
-        if len(valleys) >= 2:
-            # Sort valleys by position
-            valley_angles = angle_range[valleys]
-            valley_angles = np.sort(valley_angles)
+        for i, angle in enumerate(angles):
+            normalized_angle = angle % (2 * np.pi)
             
-            # Use the two most prominent valleys as boundaries
-            if len(valley_angles) >= 2:
-                boundary1 = valley_angles[0]
-                boundary2 = valley_angles[1] if valley_angles[1] > valley_angles[0] else valley_angles[-1]
-                
-                # Ensure boundaries are properly spaced
-                if boundary2 - boundary1 < np.pi:
-                    boundary2 = valley_angles[-1] if len(valley_angles) > 2 else boundary1 + 2*np.pi/3
-                
-                # Assign phases based on density boundaries
-                density_phases = []
-                for angle in angles:
-                    if angle < boundary1:
-                        density_phases.append('g0/g1')
-                    elif angle < boundary2:
-                        density_phases.append('s')
-                    else:
-                        density_phases.append('g2/m')
-                        
-                print(f"Found density boundaries at {boundary1:.2f} and {boundary2:.2f}")
-            else:
-                density_phases = quantile_phases
-                print("Using quantile-based assignment (insufficient density peaks)")
-        else:
-            density_phases = quantile_phases
-            print("Using quantile-based assignment (no clear density boundaries)")
+            # Check if near boundaries
+            near_boundary = (abs(normalized_angle - boundary1) < boundary_width or 
+                           abs(normalized_angle - boundary2) < boundary_width or
+                           abs(normalized_angle - 0) < boundary_width or
+                           abs(normalized_angle - 2*np.pi) < boundary_width)
             
-    except Exception as e:
-        print(f"Density estimation failed: {e}")
-        density_phases = quantile_phases
-    
-    print("Step 3: Consistency check and smoothing...")
-    
-    # Method 3: Local consistency smoothing
-    final_phases = density_phases.copy()
-    
-    # Build nearest neighbors for smoothing
-    nn = NearestNeighbors(n_neighbors=min(20, n_cells//10), metric='euclidean')
-    circular_coords = np.column_stack([np.cos(angles), np.sin(angles)])
-    nn.fit(circular_coords)
-    
-    # Smooth assignments based on local neighborhoods
-    changes_made = 0
-    for i in range(n_cells):
-        # Find neighbors
-        distances, indices = nn.kneighbors([circular_coords[i]])
-        neighbor_indices = indices[0][1:]  # Exclude self
+            if near_boundary:
+                # Get neighbors and their phases
+                distances, indices = nn.kneighbors([circular_coords[i]])
+                neighbor_indices = indices[0][1:]  # Exclude self
+                neighbor_phases = [phases[j] for j in neighbor_indices]
+                
+                # If most neighbors agree on a different phase, consider changing
+                current_phase = phases[i]
+                phase_counts = {}
+                for phase in neighbor_phases:
+                    phase_counts[phase] = phase_counts.get(phase, 0) + 1
+                
+                if phase_counts:
+                    most_common = max(phase_counts, key=phase_counts.get)
+                    # Only change if >70% of neighbors agree and it's different
+                    if (phase_counts[most_common] > len(neighbor_phases) * 0.7 and 
+                        most_common != current_phase):
+                        smoothed_phases[i] = most_common
+                        changes_made += 1
         
-        # Get neighbor phases
-        neighbor_phases = [final_phases[j] for j in neighbor_indices]
-        
-        # If current assignment disagrees with >60% of neighbors, change it
-        current_phase = final_phases[i]
-        phase_counts = {phase: neighbor_phases.count(phase) for phase in ['g0/g1', 's', 'g2/m']}
-        most_common_phase = max(phase_counts, key=phase_counts.get)
-        
-        if (phase_counts[most_common_phase] > len(neighbor_phases) * 0.6 and 
-            current_phase != most_common_phase):
-            final_phases[i] = most_common_phase
-            changes_made += 1
+        phases = smoothed_phases
+        print(f"Boundary smoothing changed {changes_made} assignments")
     
-    print(f"Smoothing changed {changes_made} assignments")
+    print("Step 4: Calculate confidence scores...")
     
-    print("Step 4: Final validation and confidence scoring...")
+    # Simple confidence based on distance from phase boundaries
+    confidence_scores = np.ones(len(angles))  # Start with high confidence
     
-    # Calculate confidence scores based on local consistency
-    confidence_scores = np.zeros(n_cells)
-    for i in range(n_cells):
-        distances, indices = nn.kneighbors([circular_coords[i]])
-        neighbor_indices = indices[0][1:]
-        neighbor_phases = [final_phases[j] for j in neighbor_indices]
+    for i, angle in enumerate(angles):
+        normalized_angle = angle % (2 * np.pi)
         
-        # Confidence = fraction of neighbors with same phase
-        same_phase_count = neighbor_phases.count(final_phases[i])
-        confidence_scores[i] = same_phase_count / len(neighbor_phases)
+        # Distance from nearest boundary
+        dist_to_b1 = min(abs(normalized_angle - boundary1), 2*np.pi - abs(normalized_angle - boundary1))
+        dist_to_b2 = min(abs(normalized_angle - boundary2), 2*np.pi - abs(normalized_angle - boundary2))
+        dist_to_start = min(normalized_angle, 2*np.pi - normalized_angle)
+        
+        min_dist_to_boundary = min(dist_to_b1, dist_to_b2, dist_to_start)
+        
+        # Confidence decreases near boundaries
+        max_dist = np.pi / 3  # Maximum distance from boundary in a phase
+        confidence_scores[i] = min(1.0, min_dist_to_boundary / (boundary_width * 2))
     
     # Final validation
-    phase_counts = pd.Series(final_phases).value_counts()
-    total_cells = len(final_phases)
+    phase_counts = pd.Series(phases).value_counts()
+    total_cells = len(phases)
     
     print("Final phase distribution:")
     for phase in ['g0/g1', 's', 'g2/m']:
@@ -184,17 +148,14 @@ def assign_cell_cycle_stage_robust(pseudotime_flat):
         percentage = (count / total_cells) * 100
         print(f"  {phase}: {count} cells ({percentage:.1f}%)")
     
-    # Check for gaps (should be none with this method)
-    unassigned = sum(1 for phase in final_phases if phase not in ['g0/g1', 's', 'g2/m'])
-    if unassigned > 0:
-        print(f"Warning: {unassigned} cells left unassigned")
-    else:
-        print("All cells successfully assigned!")
+    # Verify no gaps
+    unassigned = sum(1 for phase in phases if phase not in ['g0/g1', 's', 'g2/m'])
+    print(f"Unassigned cells: {unassigned} (should be 0)")
     
-    return final_phases, confidence_scores
+    return phases, confidence_scores
 
-# Assign cell cycle stages using robust method
-stages, confidence_scores = assign_cell_cycle_stage_robust(pseudotime_flat)
+# Assign cell cycle stages using simple method
+stages, confidence_scores = assign_cell_cycle_stage_simple(pseudotime_flat)
 
 # Create a label dictionary like in the tutorial
 label = {'stage': np.array(stages)}
@@ -234,34 +195,32 @@ bar_fig = model.show_bar()
 plt.savefig(output.replace('.h5ad', '_cyclum_bar.pdf'), dpi=300, bbox_inches='tight')
 plt.close()
 
-# Additional plot: confidence scores and phase boundaries
-plt.figure(figsize=(15, 5))
+# Additional plot: confidence scores
+plt.figure(figsize=(12, 4))
 
-# Plot 1: Confidence distribution
 plt.subplot(1, 3, 1)
-plt.hist(confidence_scores, bins=50, alpha=0.7, edgecolor='black')
+plt.hist(confidence_scores, bins=30, alpha=0.7, edgecolor='black')
 plt.xlabel('Confidence Score')
 plt.ylabel('Number of Cells')
-plt.title('Assignment Confidence Distribution')
+plt.title('Assignment Confidence')
 
-# Plot 2: Confidence by phase
 plt.subplot(1, 3, 2)
-stage_conf = pd.DataFrame({'stage': stages, 'confidence': confidence_scores})
-for stage in ['g0/g1', 's', 'g2/m']:
-    stage_data = stage_conf[stage_conf['stage'] == stage]['confidence']
-    plt.hist(stage_data, alpha=0.7, label=stage, bins=30)
-plt.xlabel('Confidence Score')
-plt.ylabel('Number of Cells')
-plt.title('Confidence by Cell Cycle Stage')
-plt.legend()
-
-# Plot 3: Pseudotime vs confidence
-plt.subplot(1, 3, 3)
 colors = [color_map['stage'][stage] for stage in stages]
 plt.scatter(pseudotime_flat, confidence_scores, c=colors, alpha=0.6, s=10)
 plt.xlabel('Pseudotime')
 plt.ylabel('Confidence Score')
 plt.title('Confidence vs Pseudotime')
+
+plt.subplot(1, 3, 3)
+# Show phase distribution around the circle
+angles = pseudotime_flat * 2 * np.pi if pseudotime_flat.max() <= 1 else ((pseudotime_flat - pseudotime_flat.min()) / (pseudotime_flat.max() - pseudotime_flat.min())) * 2 * np.pi
+plt.hist(angles, bins=60, alpha=0.7, edgecolor='black')
+plt.xlabel('Angle (radians)')
+plt.ylabel('Number of Cells')
+plt.title('Cell Distribution Around Circle')
+plt.axvline(2*np.pi/3, color='red', linestyle='--', alpha=0.7, label='G1/S boundary')
+plt.axvline(4*np.pi/3, color='green', linestyle='--', alpha=0.7, label='S/G2M boundary')
+plt.legend()
 
 plt.tight_layout()
 plt.savefig(output.replace('.h5ad', '_cyclum_confidence.pdf'), dpi=300, bbox_inches='tight')
