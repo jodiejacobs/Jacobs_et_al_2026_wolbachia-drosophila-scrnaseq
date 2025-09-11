@@ -19,6 +19,11 @@ wMel_rRNA={
 
 # Drosophila rRNA genes with accurate lengths from your reference
 all_rRNA={
+    # Wolbachia rRNA genes
+    "GQX67_00940": 2772, #16S
+    "GQX67_00945": 107, #5S 
+    "GQX67_05945": 1505, #23S
+
     # Mitochondrial rRNAs (keeping your original entries)
     "FBgn0013686": 1324, # Dmel mtrRNA
     "FBgn0013688": 786,  # Dmel mtrRNA
@@ -112,7 +117,7 @@ def calculate_wolbachia_titer(adata):
     # Convert sparse matrix to dense if necessary
     is_sparse = scipy.sparse.issparse(adata.X)
     
-    # Initialize arrays properly - FIXED BUG HERE
+    # Initialize arrays 
     wMel_counts_per_length = np.zeros((adata.n_obs, len(wMel_indices)))
     all_counts_per_length = np.zeros((adata.n_obs, len(all_indices)))
     
