@@ -160,9 +160,7 @@ def calculate_wolbachia_titer(adata):
     
     return adata
 
-def integrate(file1, file2, sample_name='NA', output_dir=args.output_dir, batch_key='batch',
-                       min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15,
-                       method='bbknn', calculate_titer=True, prefix=None):
+def integrate(file1, file2, sample_name='NA', output_dir='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
     """ 
     Integrate two h5ad files with batch correction and save the result.
     """
@@ -220,7 +218,7 @@ def integrate(file1, file2, sample_name='NA', output_dir=args.output_dir, batch_
     combined_unintegrated = combined.copy()
     sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
     sc.tl.umap(combined_unintegrated)
-    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{prefix}_before_batch_correction.pdf')
+    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{sample_name}_before_batch_correction.pdf')
 
     bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
             
@@ -230,29 +228,29 @@ def integrate(file1, file2, sample_name='NA', output_dir=args.output_dir, batch_
     sc.tl.leiden(combined, resolution=0.8)
     
     # Save the integrated object
-    print(f"Saving integrated object for {prefix} to {output_dir}")
+    print(f"Saving integrated object for {sample_name} to {output_dir}")
     combined.write(output_dir)
     
     # Generate diagnostic plots
     print("Generating diagnostic plots...")
-    sc.pl.umap(combined, color=batch_key, save=f'_{prefix}_bbknn.pdf')
-    sc.pl.umap(combined, color='leiden', save=f'_{prefix}_bbknn_leiden.pdf')
+    sc.pl.umap(combined, color=batch_key, save=f'_{sample_name}_bbknn.pdf')
+    sc.pl.umap(combined, color='leiden', save=f'_{sample_name}_bbknn_leiden.pdf')
     
     # If wolbachia_titer exists, plot it too
     if 'wolbachia_titer' in combined.obs.columns:
-        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{prefix}_bbknn_titer.pdf')
-        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{prefix}_log1p_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample_name}_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample_name}_log1p_bbknn_titer.pdf')
         
         # Create a violin plot of titer by batch
-        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{prefix}_wolbachia_titer_by_rep.pdf')
+        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{sample_name}_wolbachia_titer_by_rep.pdf')
         
         # Create a violin plot of titer by cluster
-        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{prefix}_wolbachia_titer_by_cluster.pdf')
+        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample_name}_wolbachia_titer_by_cluster.pdf')
     
-    print(f"Integration complete for sample type {prefix}!")
+    print(f"Integration complete for sample type {sample_name}!")
     
     # Print summary for this sample type
-    print(f"Summary of integrated data for {prefix}:")
+    print(f"Summary of integrated data for {sample_name}:")
     print(f"Number of cells: {combined.n_obs}")
     print(f"Number of genes: {combined.n_vars}")
     print(f"Number of batches: {combined.obs[batch_key].nunique()}")
@@ -279,32 +277,21 @@ def integrate(file1, file2, sample_name='NA', output_dir=args.output_dir, batch_
 
 def main():
     parser = argparse.ArgumentParser(description='Integrate h5ad files by sample type with batch correction')
-    
-    # Required arguments
-    parser.add_argument('--input_dir', type=str, required=True, 
-                        help='Directory containing h5ad files to integrate')
-    parser.add_argument('--output_dir', type=str, required=True, 
-                        help='Directory to save the integrated h5ad files')
-    
-    # Optional arguments
-    parser.add_argument('--sample_type_pattern', type=str, default=None,
-                        help='Regex pattern to extract sample type from filename (e.g., "^([^_]+)_")')
+
+    parser.add_argument('--file1', required=True, type=str, default=None,
+                        help='Rep1')
+    parser.add_argument('--file2', required=True, type=str, default=None,
+                        help='Second file to integrate')
+    parser.add_argument('--sample', type=str, default='NA',
+                        help='Sample type (e.g., Infected, Uninfected)')
     parser.add_argument('--batch_key', type=str, default='batch',
-                        help='Name of column to use for batch correction')
+                        help='Key in .obs to use for batch information')
     parser.add_argument('--min_cells', type=int, default=3,
-                        help='Minimum number of cells expressing a gene')
+                        help='Minimum cells per gene for filtering')
     parser.add_argument('--min_genes', type=int, default=200,
-                        help='Minimum number of genes expressed in a cell')
-    parser.add_argument('--n_pcs', type=int, default=30,
-                        help='Number of principal components to use')
-    parser.add_argument('--n_neighbors', type=int, default=15,
-                        help='Number of neighbors for neighborhood graph')
-    parser.add_argument('--method', type=str, default='bbknn', choices=['bbknn', 'harmony', 'both'],
-                        help='Batch correction method to use')
-    parser.add_argument('--calculate_titer', action='store_true', 
-                        help='Calculate Wolbachia titer for each cell before integration')
-    parser.add_argument('--prefix', type=str, default=None,
-                        help='Prefix to use for output filename')
+                        help='Minimum genes per cell for filtering')  
+    parser.add_argument('--output_dir', type=str, default='.',
+                        help='Directory to save plots and integrated h5ad files')    
 
     args = parser.parse_args()
     
@@ -313,15 +300,11 @@ def main():
         file1=args.file1,
         file2=args.file2,
         output_dir=args.output_dir,
-        sample=args.sample,
+        sample=args.sample, 
         batch_key=args.batch_key,
         min_cells=args.min_cells,
         min_genes=args.min_genes,
-        n_pcs=args.n_pcs,
-        n_neighbors=args.n_neighbors,
-        calculate_titer=args.calculate_titer,
-        prefix=args.prefix
-    )
+        )
 
 if __name__ == "__main__":
     main()
