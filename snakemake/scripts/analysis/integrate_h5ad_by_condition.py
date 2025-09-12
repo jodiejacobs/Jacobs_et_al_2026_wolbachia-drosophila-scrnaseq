@@ -160,7 +160,7 @@ def calculate_wolbachia_titer(adata):
     
     return adata
 
-def integrate(file1, file2, sample_name='NA', output_dir='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
+def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
     """ 
     Integrate two h5ad files with batch correction and save the result.
     """
@@ -183,7 +183,7 @@ def integrate(file1, file2, sample_name='NA', output_dir='.', batch_key='batch',
     adatas = [adata1, adata2]
     combined = ad.concat(adatas, join='outer', merge='same', label=batch_key, index_unique='-')
 
-    print(f"Combined data shape for {sample_name}: {combined.shape}")
+    print(f"Combined data shape for {sample}: {combined.shape}")
     
     # Filter out bacterial genes
     bacteria_genes = [gene for gene in combined.var_names if gene.startswith('GQX67_')]
@@ -218,7 +218,7 @@ def integrate(file1, file2, sample_name='NA', output_dir='.', batch_key='batch',
     combined_unintegrated = combined.copy()
     sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
     sc.tl.umap(combined_unintegrated)
-    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{sample_name}_before_batch_correction.pdf')
+    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{sample}_before_batch_correction.pdf')
 
     bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
             
@@ -228,29 +228,29 @@ def integrate(file1, file2, sample_name='NA', output_dir='.', batch_key='batch',
     sc.tl.leiden(combined, resolution=0.8)
     
     # Save the integrated object
-    print(f"Saving integrated object for {sample_name} to {output_dir}")
+    print(f"Saving integrated object for {sample} to {output_dir}")
     combined.write(output_dir)
     
     # Generate diagnostic plots
     print("Generating diagnostic plots...")
-    sc.pl.umap(combined, color=batch_key, save=f'_{sample_name}_bbknn.pdf')
-    sc.pl.umap(combined, color='leiden', save=f'_{sample_name}_bbknn_leiden.pdf')
+    sc.pl.umap(combined, color=batch_key, save=f'_{sample}_bbknn.pdf')
+    sc.pl.umap(combined, color='leiden', save=f'_{sample}_bbknn_leiden.pdf')
     
     # If wolbachia_titer exists, plot it too
     if 'wolbachia_titer' in combined.obs.columns:
-        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample_name}_bbknn_titer.pdf')
-        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample_name}_log1p_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample}_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample}_log1p_bbknn_titer.pdf')
         
         # Create a violin plot of titer by batch
-        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{sample_name}_wolbachia_titer_by_rep.pdf')
+        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{sample}_wolbachia_titer_by_rep.pdf')
         
         # Create a violin plot of titer by cluster
-        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample_name}_wolbachia_titer_by_cluster.pdf')
+        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample}_wolbachia_titer_by_cluster.pdf')
     
-    print(f"Integration complete for sample type {sample_name}!")
+    print(f"Integration complete for sample type {sample}!")
     
     # Print summary for this sample type
-    print(f"Summary of integrated data for {sample_name}:")
+    print(f"Summary of integrated data for {sample}:")
     print(f"Number of cells: {combined.n_obs}")
     print(f"Number of genes: {combined.n_vars}")
     print(f"Number of batches: {combined.obs[batch_key].nunique()}")
