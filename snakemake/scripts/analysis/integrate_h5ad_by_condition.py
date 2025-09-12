@@ -310,9 +310,10 @@ def main():
     
     # Run the integration by sample type
     integrate(
-        directory_path=args.input_dir,
+        file1=args.file1,
+        file2=args.file2,
         output_dir=args.output_dir,
-        sample_type_pattern=args.sample_type_pattern,
+        sample=args.sample,
         batch_key=args.batch_key,
         min_cells=args.min_cells,
         min_genes=args.min_genes,
