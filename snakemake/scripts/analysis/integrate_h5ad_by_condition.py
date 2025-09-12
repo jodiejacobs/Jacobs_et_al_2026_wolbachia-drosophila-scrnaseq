@@ -204,12 +204,16 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
     print("Normalizing data...")
     sc.pp.normalize_total(combined, target_sum=1e4)
     sc.pp.log1p(combined)
-    
+        
     # Find highly variable genes
-    print("Finding highly variable genes...")
-    sc.pp.highly_variable_genes(combined, batch_key=batch_key)
-    combined = combined[:, combined.var.highly_variable]
+    sc.pp.filter_genes(combined, min_cells=3)  # Remove genes expressed in 0 cells
+    sc.pp.filter_cells(combined, min_genes=200)  # Remove cells expressed in 0 genes
     
+    print("Finding highly variable genes...")
+    
+    sc.pp.highly_variable_genes(combined)
+    combined = combined[:, combined.var.highly_variable]
+        
     # Run PCA
     print("Running PCA...")
     sc.pp.pca(combined, n_comps=n_pcs)
