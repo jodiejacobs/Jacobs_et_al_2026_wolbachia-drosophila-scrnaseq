@@ -160,276 +160,122 @@ def calculate_wolbachia_titer(adata):
     
     return adata
 
-def extract_sample_type(filename, sample_type_pattern=None):
+def integrate(file1, file2, sample_name='NA', output_dir=args.output_dir, batch_key='batch',
+                       min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15,
+                       method='bbknn', calculate_titer=True, prefix=None):
+    """ 
+    Integrate two h5ad files with batch correction and save the result.
     """
-    Extract sample type from filename based on a pattern or delimiter
-    
-    Parameters:
-    -----------
-    filename : str
-        Filename to extract sample type from
-    sample_type_pattern : str or None
-        Regex pattern to extract sample type. If None, assumes filename format: "SampleType_OtherInfo.h5ad"
-        If pattern has multiple capture groups, they'll be combined with '_' delimiter.
-        
-    Returns:
-    --------
-    sample_type : str
-        Extracted sample type
-    """
-    basename = os.path.basename(filename)
-    name_without_ext = os.path.splitext(basename)[0]
-    
-    if sample_type_pattern:
-        # Use provided regex pattern to extract sample type
-        match = re.search(sample_type_pattern, name_without_ext)
-        if match:
-            # Check if we have multiple capture groups
-            if match.lastindex and match.lastindex > 1:
-                # Combine all captured groups using '_' delimiter
-                parts = [match.group(i) for i in range(1, match.lastindex + 1)]
-                return '_'.join(parts)
-            else:
-                return match.group(1)
-        else:
-            # If pattern doesn't match, use the whole name as the sample type
-            print(f"Warning: Pattern didn't match for file {basename}. Using whole name as sample type.")
-            return name_without_ext
-    else:
-        # Default behavior: assume SampleType_OtherInfo format with underscore delimiter
-        parts = name_without_ext.split('_')
-        if len(parts) > 0:
-            return parts[0]
-        else:
-            return name_without_ext
+    print(f"Integrating files:\n  {file1}\n  {file2}\nSaving to: {output_dir}")
 
-def integrate_h5ad_files_by_sample_type(directory_path, output_dir, sample_type_pattern=None, batch_key='batch', 
-                                       min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15,
-                                       method='bbknn', calculate_titer=True, prefix=None):
-    """
-    Group h5ad files by sample type and integrate each group separately
-    
-    Parameters:
-    -----------
-    directory_path : str
-        Path to directory containing h5ad files
-    output_dir : str
-        Directory to save integrated h5ad files
-    sample_type_pattern : str or None
-        Regex pattern to extract sample type from filenames. If None, uses SampleType_OtherInfo assumption
-    batch_key : str
-        Name of column to use for batch correction
-    min_cells : int
-        Minimum number of cells expressing a gene
-    min_genes : int
-        Minimum number of genes expressed in a cell
-    n_pcs : int
-        Number of principal components to use
-    n_neighbors : int
-        Number of neighbors for neighborhood graph
-    calculate_titer : bool
-        Whether to calculate Wolbachia titer before integration
-    """
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create figures directory
-    figure_dir = os.path.join(output_dir, "figures")
-    os.makedirs(figure_dir, exist_ok=True)
-    sc.settings.figdir = figure_dir
-    
-    # Get all h5ad files in the directory
-    h5ad_files = glob(os.path.join(directory_path, "*.h5ad"))
-    
-    if len(h5ad_files) == 0:
-        print(f"No h5ad files found in {directory_path}")
-        return
-    
-    print(f"Found {len(h5ad_files)} h5ad files")
-    
-    # Group files by sample type
-    sample_type_to_files = {}
-    
-    for file_path in h5ad_files:
-        sample_type = extract_sample_type(file_path, sample_type_pattern)
-        if sample_type not in sample_type_to_files:
-            sample_type_to_files[sample_type] = []
-        sample_type_to_files[sample_type].append(file_path)
-    
-    print(f"Grouped files into {len(sample_type_to_files)} sample types:")
-    for sample_type, files in sample_type_to_files.items():
-        print(f"  {sample_type}: {len(files)} files")
-    
-    # Process each sample type
-    for sample_type, files in sample_type_to_files.items():
-        if len(files) < 2:
-            print(f"Skipping sample type '{sample_type}' as it only has {len(files)} file(s)")
-            continue
-            
-        print(f"\nProcessing sample type: {sample_type} ({len(files)} files)")
-        output_path = os.path.join(output_dir, f"{prefix}_integrated.h5ad")
-        
-        # List to store individual datasets for this sample type
-        adatas = []
-        
-        # Load each dataset and add batch information
-        for i, file_path in enumerate(files):
-            file_name = os.path.basename(file_path)
-            batch_id = os.path.splitext(file_name)[0]  # Use filename without extension as batch ID
-            print(f"Processing file {i+1}/{len(files)}: {file_name}")
-            
-            # Load the dataset
-            adata = sc.read_h5ad(file_path)
-            adata.obs['Sample'] = os.path.splitext(os.path.basename(file_path))[0]
-            
-            # Check if var index contains tab characters and fix if needed
-            if any('\t' in idx for idx in adata.var_names):
-                print("Fixing var index with tab characters...")
-                # Extract gene IDs and gene names from the index
-                gene_ids = []
-                gene_names = []
-                
-                for idx in adata.var_names:
-                    if '\t' in idx:
-                        parts = idx.split('\t')
-                        gene_id = parts[0]
-                        gene_name = parts[1]
-                        gene_ids.append(gene_id)
-                        gene_names.append(gene_name)
-                    else:
-                        # If there's no tab, use the same value for both id and name
-                        gene_ids.append(idx)
-                        gene_names.append(idx)
-                
-                # Create a new var DataFrame with gene names as index
-                new_var = pd.DataFrame(index=gene_names)
-                new_var['gene_ids'] = gene_ids
-                new_var['feature_types'] = 'Gene Expression'
-                
-                # Copy over other columns from original var
-                for col in adata.var.columns:
-                    new_var[col] = adata.var[col].values
-                
-                # Create a new AnnData object with fixed var
-                # We need to get the X matrix and other components
-                new_adata = ad.AnnData(
-                    X=adata.X,
-                    obs=adata.obs,
-                    var=new_var,
-                    uns=adata.uns,
-                    obsm=adata.obsm if hasattr(adata, 'obsm') else None,
-                    varm=adata.varm if hasattr(adata, 'varm') else None,
-                    obsp=adata.obsp if hasattr(adata, 'obsp') else None,
-                    varp=adata.varp if hasattr(adata, 'varp') else None
-                )
-                adata = new_adata
-            
-            # Add batch information based on filename
-            adata.obs[batch_key] = batch_id
-            
-            # Calculate Wolbachia titer if requested
-            if calculate_titer:
-                adata = calculate_wolbachia_titer(adata)
-            
-            # Filter out bacterial genes
-            bacteria_mask = adata.var_names.isin(bacteria_genes)
-            adata = adata[:, ~bacteria_mask]
+    # Load the datasets
+    adata1 = sc.read_h5ad(file1)
+    adata2 = sc.read_h5ad(file2)
 
-            adatas.append(adata)
-            
-        # Concatenate all datasets for this sample type
-        print(f"Concatenating {len(adatas)} datasets for sample type {sample_type}...")
-        try:
-            # Try using anndata.concat as recommended by the FutureWarning
-            combined = ad.concat(adatas, join='outer', merge='same', label=batch_key, index_unique='-')
-        except:
-            # Fall back to concatenate method if concat fails
-            combined = adatas[0].concatenate(adatas[1:], join='outer', batch_key=batch_key)
-        
-        print(f"Combined data shape for {sample_type}: {combined.shape}")
-        
-        # Basic preprocessing
-        print("Performing basic preprocessing...")
-        sc.pp.filter_cells(combined, min_genes=min_genes)
-        sc.pp.filter_genes(combined, min_cells=min_cells)
-        
-        # Calculate QC metrics
-        sc.pp.calculate_qc_metrics(combined, inplace=True)
-        
-        # Normalize the data
-        print("Normalizing data...")
-        sc.pp.normalize_total(combined, target_sum=1e4)
-        sc.pp.log1p(combined)
-        
-        # Find highly variable genes
-        print("Finding highly variable genes...")
-        sc.pp.highly_variable_genes(combined, batch_key=batch_key)
-        combined = combined[:, combined.var.highly_variable]
-        
-        # Run PCA
-        print("Running PCA...")
-        sc.pp.pca(combined, n_comps=n_pcs)
-        
-        # Save a copy of the unintegrated data for comparison
-        combined_unintegrated = combined.copy()
-        sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
-        sc.tl.umap(combined_unintegrated)
-        sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{prefix}_before_batch_correction.pdf')
+    # Add batch information based on filename
+    adata1.obs[batch_key] = os.path.splitext(os.path.basename(file1))[0]
+    adata2.obs[batch_key] = os.path.splitext(os.path.basename(file2))[0]
 
-        bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
-                
-        # Run UMAP and clustering
-        print("Running UMAP and Leiden clustering...")
-        sc.tl.umap(combined)
-        sc.tl.leiden(combined, resolution=0.8)
-        
-        # Save the integrated object
-        print(f"Saving integrated object for {prefix} to {output_path}")
-        combined.write(output_path)
-        
-        # Generate diagnostic plots
-        print("Generating diagnostic plots...")
-        sc.pl.umap(combined, color=batch_key, save=f'_{prefix}_bbknn.pdf')
-        sc.pl.umap(combined, color='leiden', save=f'_{prefix}_bbknn_leiden.pdf')
-        
-        # If wolbachia_titer exists, plot it too
-        if 'wolbachia_titer' in combined.obs.columns:
-            sc.pl.umap(combined, color='wolbachia_titer', save=f'_{prefix}_bbknn_titer.pdf')
-            sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{prefix}_log1p_bbknn_titer.pdf')
-            
-            # Create a violin plot of titer by batch
-            sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{prefix}_wolbachia_titer_by_rep.pdf')
-            
-            # Create a violin plot of titer by cluster
-            sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{prefix}_wolbachia_titer_by_cluster.pdf')
-        
-        print(f"Integration complete for sample type {prefix}!")
-        
-        # Print summary for this sample type
-        print(f"Summary of integrated data for {prefix}:")
-        print(f"Number of cells: {combined.n_obs}")
-        print(f"Number of genes: {combined.n_vars}")
-        print(f"Number of batches: {combined.obs[batch_key].nunique()}")
-        print(f"Number of clusters: {combined.obs['leiden'].nunique()}")
-        
-        if 'wolbachia_titer' in combined.obs.columns:
-            # Calculate percentage of infected cells
-            n_infected = np.sum(combined.obs['wolbachia_titer'] > 0)
-            print(f"Number of cells with Wolbachia: {n_infected} ({n_infected/combined.n_obs*100:.2f}%)")
-            
-            # Calculate average titer
-            mean_titer = np.nanmean(combined.obs['wolbachia_titer'])
-            median_titer = np.nanmedian(combined.obs['wolbachia_titer'])
-            print(f"Average Wolbachia titer: mean={mean_titer:.4f}, median={median_titer:.4f}")
-            
-            # Calculate titer by batch
-            for batch in combined.obs[batch_key].unique():
-                batch_cells = combined[combined.obs[batch_key] == batch]
-                n_batch_infected = np.sum(batch_cells.obs['wolbachia_titer'] > 0)
-                mean_batch_titer = np.nanmean(batch_cells.obs['wolbachia_titer'])
-                print(f"  {batch}: {n_batch_infected}/{batch_cells.n_obs} cells infected ({n_batch_infected/batch_cells.n_obs*100:.2f}%), mean titer={mean_batch_titer:.4f}")
+    # Calculate Wolbachia titer if requested
+    if calculate_titer:
+        adata1 = calculate_wolbachia_titer(adata1)
+        adata2 = calculate_wolbachia_titer(adata2)
+
+    # Combine the datasets
+    adatas = [adata1, adata2]
+    combined = ad.concat(adatas, join='outer', merge='same', label=batch_key, index_unique='-')
+
+    print(f"Combined data shape for {sample_name}: {combined.shape}")
     
-    print("\nAll sample types processed!")
+    # Filter out bacterial genes
+    bacteria_genes = [gene for gene in combined.var_names if gene.startswith('GQX67_')]
+    
+    bacteria_mask = combined.var_names.isin(bacteria_genes)
+
+    combined = combined[:, ~bacteria_mask]
+
+    # Basic preprocessing
+    print("Performing basic preprocessing...")
+    sc.pp.filter_cells(combined, min_genes=min_genes)
+    sc.pp.filter_genes(combined, min_cells=min_cells)
+    
+    # Calculate QC metrics
+    sc.pp.calculate_qc_metrics(combined, inplace=True)
+    
+    # Normalize the data
+    print("Normalizing data...")
+    sc.pp.normalize_total(combined, target_sum=1e4)
+    sc.pp.log1p(combined)
+    
+    # Find highly variable genes
+    print("Finding highly variable genes...")
+    sc.pp.highly_variable_genes(combined, batch_key=batch_key)
+    combined = combined[:, combined.var.highly_variable]
+    
+    # Run PCA
+    print("Running PCA...")
+    sc.pp.pca(combined, n_comps=n_pcs)
+    
+    # Save a copy of the unintegrated data for comparison
+    combined_unintegrated = combined.copy()
+    sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
+    sc.tl.umap(combined_unintegrated)
+    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{prefix}_before_batch_correction.pdf')
+
+    bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
+            
+    # Run UMAP and clustering
+    print("Running UMAP and Leiden clustering...")
+    sc.tl.umap(combined)
+    sc.tl.leiden(combined, resolution=0.8)
+    
+    # Save the integrated object
+    print(f"Saving integrated object for {prefix} to {output_dir}")
+    combined.write(output_dir)
+    
+    # Generate diagnostic plots
+    print("Generating diagnostic plots...")
+    sc.pl.umap(combined, color=batch_key, save=f'_{prefix}_bbknn.pdf')
+    sc.pl.umap(combined, color='leiden', save=f'_{prefix}_bbknn_leiden.pdf')
+    
+    # If wolbachia_titer exists, plot it too
+    if 'wolbachia_titer' in combined.obs.columns:
+        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{prefix}_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{prefix}_log1p_bbknn_titer.pdf')
+        
+        # Create a violin plot of titer by batch
+        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{prefix}_wolbachia_titer_by_rep.pdf')
+        
+        # Create a violin plot of titer by cluster
+        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{prefix}_wolbachia_titer_by_cluster.pdf')
+    
+    print(f"Integration complete for sample type {prefix}!")
+    
+    # Print summary for this sample type
+    print(f"Summary of integrated data for {prefix}:")
+    print(f"Number of cells: {combined.n_obs}")
+    print(f"Number of genes: {combined.n_vars}")
+    print(f"Number of batches: {combined.obs[batch_key].nunique()}")
+    print(f"Number of clusters: {combined.obs['leiden'].nunique()}")
+    
+    if 'wolbachia_titer' in combined.obs.columns:
+        # Calculate percentage of infected cells
+        n_infected = np.sum(combined.obs['wolbachia_titer'] > 0)
+        print(f"Number of cells with Wolbachia: {n_infected} ({n_infected/combined.n_obs*100:.2f}%)")
+        
+        # Calculate average titer
+        mean_titer = np.nanmean(combined.obs['wolbachia_titer'])
+        median_titer = np.nanmedian(combined.obs['wolbachia_titer'])
+        print(f"Average Wolbachia titer: mean={mean_titer:.4f}, median={median_titer:.4f}")
+        
+        # Calculate titer by batch
+        for batch in combined.obs[batch_key].unique():
+            batch_cells = combined[combined.obs[batch_key] == batch]
+            n_batch_infected = np.sum(batch_cells.obs['wolbachia_titer'] > 0)
+            mean_batch_titer = np.nanmean(batch_cells.obs['wolbachia_titer'])
+            print(f"  {batch}: {n_batch_infected}/{batch_cells.n_obs} cells infected ({n_batch_infected/batch_cells.n_obs*100:.2f}%), mean titer={mean_batch_titer:.4f}")
+
+
 
 def main():
     parser = argparse.ArgumentParser(description='Integrate h5ad files by sample type with batch correction')
@@ -463,7 +309,7 @@ def main():
     args = parser.parse_args()
     
     # Run the integration by sample type
-    integrate_h5ad_files_by_sample_type(
+    integrate(
         directory_path=args.input_dir,
         output_dir=args.output_dir,
         sample_type_pattern=args.sample_type_pattern,
