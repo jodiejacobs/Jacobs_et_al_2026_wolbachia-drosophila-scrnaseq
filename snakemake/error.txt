@@ -1,10 +1,40 @@
-/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py:155: RuntimeWarning: invalid value encountered in log1p
-  adata.obs['log1p_wolbachia_titer'] = np.log1p(titer)
-/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py:155: RuntimeWarning: invalid value encountered in log1p
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py:157: RuntimeWarning: invalid value encountered in log1p
   adata.obs['log1p_wolbachia_titer'] = np.log1p(titer)
 /private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_simple.py:160: ImplicitModificationWarning: Trying to modify attribute `.obs` of view, initializing view as actual.
   adata.obs["n_genes"] = number
 /private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/pandas/core/arraylike.py:399: RuntimeWarning: invalid value encountered in log1p
   result = getattr(ufunc, method)(*inputs, **kwargs)
+/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/pandas/core/arraylike.py:399: RuntimeWarning: invalid value encountered in log1p
+  result = getattr(ufunc, method)(*inputs, **kwargs)
 /private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_normalization.py:233: UserWarning: Some cells have zero counts
   warn(UserWarning("Some cells have zero counts"))
+/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_simple.py:377: RuntimeWarning: invalid value encountered in log1p
+  np.log1p(X, out=X)
+Traceback (most recent call last):
+  File "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py", line 322, in <module>
+    main()
+  File "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py", line 311, in main
+    integrate(
+  File "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py", line 222, in integrate
+    sc.pp.highly_variable_genes(combined, flavor='seurat', n_top_genes=2000)
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/legacy_api_wrap/__init__.py", line 80, in fn_compatible
+    return fn(*args_all, **kw)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_highly_variable_genes.py", line 648, in highly_variable_genes
+    df = _highly_variable_genes_single_batch(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_highly_variable_genes.py", line 281, in _highly_variable_genes_single_batch
+    df["mean_bin"] = _get_mean_bins(df["means"], flavor, n_bins)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_highly_variable_genes.py", line 307, in _get_mean_bins
+    return pd.cut(means, bins=bins)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/pandas/core/reshape/tile.py", line 257, in cut
+    fac, bins = _bins_to_cuts(
+                ^^^^^^^^^^^^^^
+  File "/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/pandas/core/reshape/tile.py", line 443, in _bins_to_cuts
+    raise ValueError(
+ValueError: Bin edges must be unique: Index([nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+       nan, nan, nan, nan, nan, nan, nan],
+      dtype='float64').
+You can drop duplicate edges by setting the 'duplicates' kwarg
