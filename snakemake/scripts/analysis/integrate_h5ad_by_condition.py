@@ -162,29 +162,25 @@ def calculate_wolbachia_titer(adata):
     
     return adata
 
-def integrate(file1, file2, sample='sample', out_path='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
-    """ 
-    Integrate two h5ad files with batch correction and save the result.
+def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes, calculate_titer=True, n_pcs=30):
     """
-    print(f"Integrating files:\n  {file1}\n  {file2}\nSaving to: {out_path}")
-
+    files: list of h5ad file paths
+    """
     # Make output directory if it doesn't exist
-    fig_dir = os.path.join(fig_dir, sample)
     os.makedirs(fig_dir, exist_ok=True)
+
+    # Load all files
+    adatas = []
+    for file_path in files:
+        adata = sc.read_h5ad(file_path)
+        # Add batch information based on filename
+        batch_name = os.path.splitext(os.path.basename(file_path))[0]
+        adata.obs[batch_key] = batch_name
+        adatas.append(adata)
 
     # Set output directory for figures
     sc.settings.figdir = fig_dir
 
-    # Load the datasets
-    adata1 = sc.read_h5ad(file1)
-    adata2 = sc.read_h5ad(file2)
-
-    # Add batch information based on filename
-    adata1.obs[batch_key] = os.path.splitext(os.path.basename(file1))[0]
-    adata2.obs[batch_key] = os.path.splitext(os.path.basename(file2))[0]
-
-    # Combine the datasets
-    adatas = [adata1, adata2]
     combined = ad.concat(adatas, join='inner', merge='same', index_unique='-')
 
     # Calculate Wolbachia titer if requested
@@ -295,14 +291,11 @@ def integrate(file1, file2, sample='sample', out_path='.', batch_key='batch', mi
             print(f"  {batch}: {n_batch_infected}/{batch_cells.n_obs} cells infected ({n_batch_infected/batch_cells.n_obs*100:.2f}%), mean titer={mean_batch_titer:.4f}")
 
 
-
 def main():
     parser = argparse.ArgumentParser(description='Integrate h5ad files by sample type with batch correction')
 
-    parser.add_argument('--file1', required=True, type=str, default=None,
-                        help='Rep1')
-    parser.add_argument('--file2', required=True, type=str, default=None,
-                        help='Second file to integrate')
+    parser.add_argument('--files', required=True, nargs='+', type=str,
+                        help='List of h5ad files to integrate')
     parser.add_argument('--sample', type=str, default='NA',
                         help='Sample type (e.g., Infected, Uninfected)')
     parser.add_argument('--batch_key', type=str, default='batch',
@@ -318,17 +311,16 @@ def main():
 
     args = parser.parse_args()
     
-    # Run the integration by sample type
+    # Run the integration with list of files
     integrate(
-        file1=args.file1,
-        file2=args.file2,
+        files=args.files,  # Pass the list of files
         out_path=args.out_path,
         fig_dir=args.fig_dir,
         sample=args.sample, 
         batch_key=args.batch_key,
         min_cells=args.min_cells,
         min_genes=args.min_genes,
-        )
+    )
 
 if __name__ == "__main__":
     main()
