@@ -162,11 +162,18 @@ def calculate_wolbachia_titer(adata):
     
     return adata
 
-def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
+def integrate(file1, file2, sample='sample', out_path='.', batch_key='batch', min_cells=3, min_genes=200, n_pcs=30, n_neighbors=15, calculate_titer=True):
     """ 
     Integrate two h5ad files with batch correction and save the result.
     """
-    print(f"Integrating files:\n  {file1}\n  {file2}\nSaving to: {output_dir}")
+    print(f"Integrating files:\n  {file1}\n  {file2}\nSaving to: {out_path}")
+
+    # Make output directory if it doesn't exist
+    fig_dir = os.path.join(fig_dir, sample)
+    os.makedirs(fig_dir, exist_ok=True)
+
+    # Set output directory for figures
+    sc.settings.figdir = fig_dir
 
     # Load the datasets
     adata1 = sc.read_h5ad(file1)
@@ -242,8 +249,8 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
     sc.tl.leiden(combined, resolution=0.8)
     
     # Save the integrated object
-    print(f"Saving integrated object for {sample} to {output_dir}")
-    combined.write(output_dir)
+    print(f"Saving integrated object for {sample} to {out_path}")
+    combined.write(out_path)
     
     # Generate diagnostic plots
     print("Generating diagnostic plots...")
@@ -304,8 +311,10 @@ def main():
                         help='Minimum cells per gene for filtering')
     parser.add_argument('--min_genes', type=int, default=200,
                         help='Minimum genes per cell for filtering')  
-    parser.add_argument('--output_dir', type=str, default='.',
-                        help='Directory to save plots and integrated h5ad files')    
+    parser.add_argument('--out_path', type=str, default='test_integrated.h5ad',
+                        help='Path to save the integrated h5ad file')      
+    parser.add_argument('--fig_dir', type=str, default='figures',
+                        help='Directory to save figures')    
 
     args = parser.parse_args()
     
@@ -313,7 +322,8 @@ def main():
     integrate(
         file1=args.file1,
         file2=args.file2,
-        output_dir=args.output_dir,
+        out_path=args.out_path,
+        fig_dir=args.fig_dir,
         sample=args.sample, 
         batch_key=args.batch_key,
         min_cells=args.min_cells,
