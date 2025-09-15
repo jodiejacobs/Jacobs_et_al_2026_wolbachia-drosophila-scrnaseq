@@ -1,0 +1,37 @@
+Integrating files:
+  /private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/results/annotated_h5ad/JW18DOX-Ctrl-1_pipseq.h5ad
+  /private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/results/annotated_h5ad/JW18DOX-Ctrl-2_pipseq.h5ad
+Saving to: .
+Calculating Wolbachia titer...
+Found 2 wMel rRNA genes and 14 Dmel rRNA genes
+Detected Wolbachia in 199 out of 2181 cells (9.12%)
+Calculating Wolbachia titer...
+Found 2 wMel rRNA genes and 15 Dmel rRNA genes
+Detected Wolbachia in 238 out of 1996 cells (11.92%)
+Combined data shape for NA: (4177, 11856)
+AnnData object with n_obs × n_vars = 4177 × 11856
+    obs: 'n_genes', 'n_counts', 'percent_mito', 'doublet_score', 'predicted_doublet', 'predicted_doublet_cat', 'leiden', 'cyclum_stage', 'cyclum_pseudotime', 'cyclum_confidence', 'batch', 'wolbachia_titer', 'log1p_wolbachia_titer'
+    obsm: 'X_pca', 'X_umap'
+Data range: nan to nan
+[[-0.03474727 -0.05790134 -0.05581    ... -0.04791872 -0.05481971
+  -0.03691199]
+ [-0.03474727 -0.05790134 -0.05581    ... -0.04791872 -0.05481971
+  -0.03691199]
+ [-0.03474727 -0.05790134 10.         ... -0.04791872 -0.05481971
+  -0.03691199]
+ ...
+ [        nan -0.0441071  -0.05791276 ... -0.10156967 -0.06811057
+          nan]
+ [        nan -0.0441071  -0.05791276 ... -0.10156967 -0.06811057
+          nan]
+ [        nan -0.0441071  -0.05791276 ... -0.10156967 -0.06811057
+          nan]]
+Performing basic preprocessing...
+Normalizing data...
+Data after normalization:
+AnnData object with n_obs × n_vars = 4177 × 11838
+    obs: 'n_genes', 'n_counts', 'percent_mito', 'doublet_score', 'predicted_doublet', 'predicted_doublet_cat', 'leiden', 'cyclum_stage', 'cyclum_pseudotime', 'cyclum_confidence', 'batch', 'wolbachia_titer', 'log1p_wolbachia_titer', 'n_genes_by_counts', 'log1p_n_genes_by_counts', 'total_counts', 'log1p_total_counts', 'pct_counts_in_top_50_genes', 'pct_counts_in_top_100_genes', 'pct_counts_in_top_200_genes', 'pct_counts_in_top_500_genes'
+    var: 'n_cells', 'n_cells_by_counts', 'mean_counts', 'log1p_mean_counts', 'pct_dropout_by_counts', 'total_counts', 'log1p_total_counts'
+    uns: 'log1p'
+    obsm: 'X_pca', 'X_umap'
+Data range: nan to nan

@@ -181,9 +181,17 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
 
     # Combine the datasets
     adatas = [adata1, adata2]
+    
+    # Ensure all datasets have the same variables (genes)
+    all_vars = set(adatas[0].var_names)
+
+    
     combined = ad.concat(adatas, join='outer', merge='same', label=batch_key, index_unique='-')
 
     print(f"Combined data shape for {sample}: {combined.shape}")
+    print(combined)
+    print(f"Data range: {combined.X.min():.3f} to {combined.X.max():.3f}")
+    print(combined.X)
     
     # Filter out bacterial genes
     bacteria_genes = [gene for gene in combined.var_names if gene.startswith('GQX67_')]
@@ -204,78 +212,83 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
     print("Normalizing data...")
     sc.pp.normalize_total(combined, target_sum=1e4)
     sc.pp.log1p(combined)
-        
-    # Find highly variable genes
-    sc.pp.filter_genes(combined, min_cells=3)  # Remove genes expressed in 0 cells
-    sc.pp.filter_cells(combined, min_genes=200)  # Remove cells expressed in 0 genes
-    
-    print("Finding highly variable genes...")
-    
-    sc.pp.highly_variable_genes(combined)
-    combined = combined[:, combined.var.highly_variable]
-        
-    # Run PCA
-    print("Running PCA...")
-    sc.pp.pca(combined, n_comps=n_pcs)
-    
-    # Save a copy of the unintegrated data for comparison
-    combined_unintegrated = combined.copy()
-    sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
-    sc.tl.umap(combined_unintegrated)
-    sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{sample}_before_batch_correction.pdf')
 
-    bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
+    print("Data after normalization:")
+    print(combined)
+    print(f"Data range: {combined.X.min():.3f} to {combined.X.max():.3f}")
+
+          
+    # # Find highly variable genes
+    # print("Finding highly variable genes...")
+    # print(f"Data shape before HVG: {combined.shape}")
+    # print(f"Data range: {combined.X.min():.3f} to {combined.X.max():.3f}")
+
+    # # Use seurat method which is more robust
+    # sc.pp.highly_variable_genes(combined, flavor='seurat', n_top_genes=2000)
+    # combined = combined[:, combined.var.highly_variable]
+        
+    # # Run PCA
+    # print("Running PCA...")
+    # sc.pp.pca(combined, n_comps=n_pcs)
+    
+    # # Save a copy of the unintegrated data for comparison
+    # combined_unintegrated = combined.copy()
+    # sc.pp.neighbors(combined_unintegrated, n_pcs=n_pcs)
+    # sc.tl.umap(combined_unintegrated)
+    # sc.pl.umap(combined_unintegrated, color=batch_key, save=f'_{sample}_before_batch_correction.pdf')
+
+    # bbknn.bbknn(combined, batch_key=batch_key, n_pcs=n_pcs, neighbors_within_batch=5)
             
-    # Run UMAP and clustering
-    print("Running UMAP and Leiden clustering...")
-    sc.tl.umap(combined)
-    sc.tl.leiden(combined, resolution=0.8)
+    # # Run UMAP and clustering
+    # print("Running UMAP and Leiden clustering...")
+    # sc.tl.umap(combined)
+    # sc.tl.leiden(combined, resolution=0.8)
     
-    # Save the integrated object
-    print(f"Saving integrated object for {sample} to {output_dir}")
-    combined.write(output_dir)
+    # # Save the integrated object
+    # print(f"Saving integrated object for {sample} to {output_dir}")
+    # combined.write(output_dir)
     
-    # Generate diagnostic plots
-    print("Generating diagnostic plots...")
-    sc.pl.umap(combined, color=batch_key, save=f'_{sample}_bbknn.pdf')
-    sc.pl.umap(combined, color='leiden', save=f'_{sample}_bbknn_leiden.pdf')
+    # # Generate diagnostic plots
+    # print("Generating diagnostic plots...")
+    # sc.pl.umap(combined, color=batch_key, save=f'_{sample}_bbknn.pdf')
+    # sc.pl.umap(combined, color='leiden', save=f'_{sample}_bbknn_leiden.pdf')
     
-    # If wolbachia_titer exists, plot it too
-    if 'wolbachia_titer' in combined.obs.columns:
-        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample}_bbknn_titer.pdf')
-        sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample}_log1p_bbknn_titer.pdf')
+    # # If wolbachia_titer exists, plot it too
+    # if 'wolbachia_titer' in combined.obs.columns:
+    #     sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample}_bbknn_titer.pdf')
+    #     sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample}_log1p_bbknn_titer.pdf')
         
-        # Create a violin plot of titer by batch
-        sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{sample}_wolbachia_titer_by_rep.pdf')
+    #     # Create a violin plot of titer by batch
+    #     sc.pl.violin(combined, 'wolbachia_titer', groupby=batch_key, save=f'_{sample}_wolbachia_titer_by_rep.pdf')
         
-        # Create a violin plot of titer by cluster
-        sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample}_wolbachia_titer_by_cluster.pdf')
+    #     # Create a violin plot of titer by cluster
+    #     sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample}_wolbachia_titer_by_cluster.pdf')
     
-    print(f"Integration complete for sample type {sample}!")
+    # print(f"Integration complete for sample type {sample}!")
     
-    # Print summary for this sample type
-    print(f"Summary of integrated data for {sample}:")
-    print(f"Number of cells: {combined.n_obs}")
-    print(f"Number of genes: {combined.n_vars}")
-    print(f"Number of batches: {combined.obs[batch_key].nunique()}")
-    print(f"Number of clusters: {combined.obs['leiden'].nunique()}")
+    # # Print summary for this sample type
+    # print(f"Summary of integrated data for {sample}:")
+    # print(f"Number of cells: {combined.n_obs}")
+    # print(f"Number of genes: {combined.n_vars}")
+    # print(f"Number of batches: {combined.obs[batch_key].nunique()}")
+    # print(f"Number of clusters: {combined.obs['leiden'].nunique()}")
     
-    if 'wolbachia_titer' in combined.obs.columns:
-        # Calculate percentage of infected cells
-        n_infected = np.sum(combined.obs['wolbachia_titer'] > 0)
-        print(f"Number of cells with Wolbachia: {n_infected} ({n_infected/combined.n_obs*100:.2f}%)")
+    # if 'wolbachia_titer' in combined.obs.columns:
+    #     # Calculate percentage of infected cells
+    #     n_infected = np.sum(combined.obs['wolbachia_titer'] > 0)
+    #     print(f"Number of cells with Wolbachia: {n_infected} ({n_infected/combined.n_obs*100:.2f}%)")
         
-        # Calculate average titer
-        mean_titer = np.nanmean(combined.obs['wolbachia_titer'])
-        median_titer = np.nanmedian(combined.obs['wolbachia_titer'])
-        print(f"Average Wolbachia titer: mean={mean_titer:.4f}, median={median_titer:.4f}")
+    #     # Calculate average titer
+    #     mean_titer = np.nanmean(combined.obs['wolbachia_titer'])
+    #     median_titer = np.nanmedian(combined.obs['wolbachia_titer'])
+    #     print(f"Average Wolbachia titer: mean={mean_titer:.4f}, median={median_titer:.4f}")
         
-        # Calculate titer by batch
-        for batch in combined.obs[batch_key].unique():
-            batch_cells = combined[combined.obs[batch_key] == batch]
-            n_batch_infected = np.sum(batch_cells.obs['wolbachia_titer'] > 0)
-            mean_batch_titer = np.nanmean(batch_cells.obs['wolbachia_titer'])
-            print(f"  {batch}: {n_batch_infected}/{batch_cells.n_obs} cells infected ({n_batch_infected/batch_cells.n_obs*100:.2f}%), mean titer={mean_batch_titer:.4f}")
+    #     # Calculate titer by batch
+    #     for batch in combined.obs[batch_key].unique():
+    #         batch_cells = combined[combined.obs[batch_key] == batch]
+    #         n_batch_infected = np.sum(batch_cells.obs['wolbachia_titer'] > 0)
+    #         mean_batch_titer = np.nanmean(batch_cells.obs['wolbachia_titer'])
+    #         print(f"  {batch}: {n_batch_infected}/{batch_cells.n_obs} cells infected ({n_batch_infected/batch_cells.n_obs*100:.2f}%), mean titer={mean_batch_titer:.4f}")
 
 
 
