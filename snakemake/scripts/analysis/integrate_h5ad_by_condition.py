@@ -190,7 +190,7 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
     print(combined.X)
     
     # Filter out bacterial genes
-    bacteria_genes = [gene for gene in combined.var_names if gene.startswith('GQX67_')]
+    bacteria_genes = ['GQX67_00940', 'GQX67_05945'] + [gene for gene in combined.var_names if gene.startswith('16S_')]
     
     bacteria_mask = combined.var_names.isin(bacteria_genes)
 
@@ -198,20 +198,22 @@ def integrate(file1, file2, sample='NA', output_dir='.', batch_key='batch', min_
 
     # Basic preprocessing
     print("Performing basic preprocessing...")
+    combined.X = np.nan_to_num(combined.X, nan=0.0)  # Replace NaN with 0
+
     sc.pp.filter_cells(combined, min_genes=min_genes)
     sc.pp.filter_genes(combined, min_cells=min_cells)
     
     # Calculate QC metrics
-    sc.pp.calculate_qc_metrics(combined, inplace=True)
+    # sc.pp.calculate_qc_metrics(combined, inplace=True)
     
-    # Normalize the data
-    print("Normalizing data...")
-    sc.pp.normalize_total(combined, target_sum=1e4)
-    sc.pp.log1p(combined)
+    # # Normalize the data
+    # print("Normalizing data...")
+    # sc.pp.normalize_total(combined, target_sum=1e4)
+    # sc.pp.log1p(combined)
 
-    print("Data after normalization:")
-    print(combined)
-    print(f"Data range: {combined.X.min():.3f} to {combined.X.max():.3f}")
+    # print("Data after normalization:")
+    # print(combined)
+    # print(f"Data range: {combined.X.min():.3f} to {combined.X.max():.3f}")
           
     # Find highly variable genes
     print("Finding highly variable genes...")
