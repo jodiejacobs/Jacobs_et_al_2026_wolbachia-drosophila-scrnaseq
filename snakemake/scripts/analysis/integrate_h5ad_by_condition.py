@@ -71,94 +71,113 @@ sc.settings.set_figure_params(dpi=100, frameon=False)
 def calculate_wolbachia_titer(adata):
     '''
     Calculate Wolbachia titer for each cell in the AnnData object.
-    The titer is calculated as the ratio of wMel rRNA counts per length to Dmel rRNA counts per length.
+    The titer is calculated as the ratio of total wMel 16S rRNA counts to total Dmel 18S rRNA counts.
     '''
-    print("Calculating Wolbachia titer...")
+    print("Calculating Wolbachia titer using 16S/18S rRNA...")
+    
+    # Filter for 18S rRNA genes from all_rRNA dictionary
+    dmel_18S_genes = {gene_id: length for gene_id, length in all_rRNA.items() 
+                      if '18S' in gene_id or any('18S' in str(v) for v in [gene_id])}
+    
+    # Filter for 16S rRNA genes from wMel_rRNA dictionary  
+    wMel_16S_genes = {gene_id: length for gene_id, length in wMel_rRNA.items() 
+                      if '16S' in gene_id or any('16S' in str(v) for v in [gene_id])}
+    
+    print(f"Using {len(dmel_18S_genes)} Dmel 18S rRNA genes: {list(dmel_18S_genes.keys())}")
+    print(f"Using {len(wMel_16S_genes)} wMel 16S rRNA genes: {list(wMel_16S_genes.keys())}")
     
     # Check if we need to look in var_names or gene_ids column
     if 'gene_ids' in adata.var.columns:
         # Create a mapping from gene names/indices to gene_ids
         gene_id_map = dict(zip(adata.var.index, adata.var['gene_ids']))
         
-        # Find which genes are present in our dictionaries
-        wMel_genes_present = []
-        for gene_id in wMel_rRNA.keys():
-            # Check if this gene ID is in the gene_ids column
+        # Find which genes are present in our datasets
+        wMel_16S_genes_present = []
+        for gene_id in wMel_16S_genes.keys():
             if gene_id in adata.var['gene_ids'].values:
-                wMel_genes_present.append(gene_id)
+                wMel_16S_genes_present.append(gene_id)
                 
-        all_genes_present = []
-        for gene_id in all_rRNA.keys():
-            # Check if this gene ID is in the gene_ids column
+        dmel_18S_genes_present = []
+        for gene_id in dmel_18S_genes.keys():
             if gene_id in adata.var['gene_ids'].values:
-                all_genes_present.append(gene_id)
+                dmel_18S_genes_present.append(gene_id)
         
         # Create masks for the genes
-        wMel_mask = [gene_id_map.get(idx) in wMel_genes_present for idx in adata.var.index]
-        all_mask = [gene_id_map.get(idx) in all_genes_present for idx in adata.var.index]
+        wMel_mask = [gene_id_map.get(idx) in wMel_16S_genes_present for idx in adata.var.index]
+        dmel_mask = [gene_id_map.get(idx) in dmel_18S_genes_present for idx in adata.var.index]
     else:
         # Use original approach with var_names
-        wMel_genes_present = [gene for gene in wMel_rRNA.keys() if gene in adata.var_names]
-        all_genes_present = [gene for gene in all_rRNA.keys() if gene in adata.var_names]
+        wMel_16S_genes_present = [gene for gene in wMel_16S_genes.keys() if gene in adata.var_names]
+        dmel_18S_genes_present = [gene for gene in dmel_18S_genes.keys() if gene in adata.var_names]
         
         # Create masks based on var_names
-        wMel_mask = [gene in wMel_genes_present for gene in adata.var_names]
-        all_mask = [gene in all_genes_present for gene in adata.var_names]
+        wMel_mask = [gene in wMel_16S_genes_present for gene in adata.var_names]
+        dmel_mask = [gene in dmel_18S_genes_present for gene in adata.var_names]
     
-    print(f"Found {len(wMel_genes_present)} wMel rRNA genes and {len(all_genes_present)} Dmel rRNA genes")
+    print(f"Found {len(wMel_16S_genes_present)} wMel 16S rRNA genes and {len(dmel_18S_genes_present)} Dmel 18S rRNA genes in dataset")
     
     # Get gene indices from the masks
     wMel_indices = np.where(wMel_mask)[0]
-    all_indices = np.where(all_mask)[0]
+    dmel_indices = np.where(dmel_mask)[0]
     
     # Convert sparse matrix to dense if necessary
     is_sparse = scipy.sparse.issparse(adata.X)
     
-    # Initialize arrays properly - FIXED BUG HERE
-    wMel_counts_per_length = np.zeros((adata.n_obs, len(wMel_indices)))
-    all_counts_per_length = np.zeros((adata.n_obs, len(all_indices)))
-    
-    # Calculate counts per length for wMel genes
-    for i, idx in enumerate(wMel_indices):
-        gene_idx = adata.var.index[idx]
-        gene_id = gene_id_map.get(gene_idx, gene_idx) if 'gene_ids' in adata.var.columns else gene_idx
-
+    # Calculate total counts for each cell
+    if len(wMel_indices) > 0:
         if is_sparse:
-            counts = adata.X[:, idx].toarray().flatten()
+            wMel_total_counts = np.array(adata.X[:, wMel_indices].sum(axis=1)).flatten()
         else:
-            counts = adata.X[:, idx]
-            
-        wMel_counts_per_length[:, i] = counts
+            wMel_total_counts = np.sum(adata.X[:, wMel_indices], axis=1)
+    else:
+        wMel_total_counts = np.zeros(adata.n_obs)
+        print("Warning: No wMel 16S rRNA genes found in dataset")
     
-    # Calculate counts per length for Dmel genes
-    for i, idx in enumerate(all_indices):
-        gene_idx = adata.var.index[idx]
-        gene_id = gene_id_map.get(gene_idx, gene_idx) if 'gene_ids' in adata.var.columns else gene_idx
-
+    if len(dmel_indices) > 0:
         if is_sparse:
-            counts = adata.X[:, idx].toarray().flatten()
+            dmel_total_counts = np.array(adata.X[:, dmel_indices].sum(axis=1)).flatten()
         else:
-            counts = adata.X[:, idx]
-            
-        all_counts_per_length[:, i] = counts 
+            dmel_total_counts = np.sum(adata.X[:, dmel_indices], axis=1)
+    else:
+        dmel_total_counts = np.zeros(adata.n_obs)
+        print("Warning: No Dmel 18S rRNA genes found in dataset")
     
-    # Calculate the mean counts per length for each organism and cell
-    wMel_mean_per_cell = np.mean(wMel_counts_per_length, axis=1)
-    all_mean_per_cell = np.mean(all_counts_per_length, axis=1)
+    # Calculate the titer (ratio of wMel 16S to total rRNA: Dmel 18S + wMel 16S)
+    # Only use NA if NO rRNA genes are detected (both wMel and Dmel counts are 0)
+    titer = np.full(adata.n_obs, np.nan)
     
-    # Calculate the titer (ratio of wMel to Dmel rRNA counts per length)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        titer = np.where(all_mean_per_cell > 0, 
-                         wMel_mean_per_cell / all_mean_per_cell, 
-                         np.nan)
+    # Calculate total rRNA counts (denominator: Dmel 18S + wMel 16S)
+    total_rRNA_counts = dmel_total_counts + wMel_total_counts
+    
+    # Calculate titer for cells where we have some rRNA detection
+    has_rRNA = (wMel_total_counts > 0) | (dmel_total_counts > 0)
+    
+    if np.any(has_rRNA):
+        # For cells with rRNA detection, calculate titer
+        # Titer = wMel_16S / (dmel_18S + wMel_16S)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            titer[has_rRNA] = np.where(
+                total_rRNA_counts[has_rRNA] > 0,
+                wMel_total_counts[has_rRNA] / total_rRNA_counts[has_rRNA],
+                np.nan  # This shouldn't happen given has_rRNA filter
+            )
     
     # Add the titer to the AnnData object
     adata.obs['wolbachia_titer'] = titer
-    adata.obs['log1p_wolbachia_titer'] = np.log1p(titer)
+    adata.obs['log1p_wolbachia_titer'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
     
-    # Count cells with Wolbachia
-    n_infected = np.sum(titer > 0)
-    print(f"Detected Wolbachia in {n_infected} out of {adata.n_obs} cells ({n_infected/adata.n_obs*100:.2f}%)")
+    # Add raw counts for reference
+    adata.obs['wMel_16S_total_counts'] = wMel_total_counts
+    adata.obs['dmel_18S_total_counts'] = dmel_total_counts
+    
+    # Count cells with different infection states
+    n_cells_with_rRNA = np.sum(has_rRNA)
+    n_infected = np.sum(wMel_total_counts > 0)
+    n_no_rRNA = np.sum(~has_rRNA)
+    
+    print(f"Cells with any rRNA detection: {n_cells_with_rRNA} out of {adata.n_obs} ({n_cells_with_rRNA/adata.n_obs*100:.2f}%)")
+    print(f"Cells with Wolbachia 16S rRNA: {n_infected} out of {adata.n_obs} ({n_infected/adata.n_obs*100:.2f}%)")
+    print(f"Cells with no rRNA detection: {n_no_rRNA} out of {adata.n_obs} ({n_no_rRNA/adata.n_obs*100:.2f}%)")
     
     return adata
 
