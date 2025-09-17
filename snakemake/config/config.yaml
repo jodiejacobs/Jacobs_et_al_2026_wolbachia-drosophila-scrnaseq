@@ -32,7 +32,7 @@ pipseeker_partition: "medium"  # SLURM partition for pipseeker jobs
 # Compute resources for combining files
 combine_threads: 128
 combine_cpus: 4
-combine_mem: 16000  # MB
+combine_mem: 32000  # MB
 combine_time: "2:00:00"  # HH:MM:SS
 combine_partition: "medium"  # SLURM partition for combine jobs
 

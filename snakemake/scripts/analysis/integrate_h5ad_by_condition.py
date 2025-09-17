@@ -14,8 +14,8 @@ import warnings
 
 # rRNA gene dictionaries with lengths calculated from transcripts_to_genes.txt
 wMel_rRNA={
-    "GQX67_00940": 2772,
-    "GQX67_00945": 107,
+    # "GQX67_00940": 2772,
+    # "GQX67_00945": 107,
     "GQX67_05945": 1505
 }
 
@@ -75,16 +75,16 @@ def calculate_wolbachia_titer(adata):
     '''
     print("Calculating Wolbachia titer using 16S/18S rRNA...")
     
-    # Filter for 18S rRNA genes from all_rRNA dictionary
-    dmel_18S_genes = {gene_id: length for gene_id, length in all_rRNA.items() 
-                      if '18S' in gene_id or any('18S' in str(v) for v in [gene_id])}
+    # # Filter for 18S rRNA genes from all_rRNA dictionary
+    # all_rRNA = {gene_id: length for gene_id, length in all_rRNA.items() 
+    #                   if '18S' in gene_id or any('18S' in str(v) for v in [gene_id])}
     
-    # Filter for 16S rRNA genes from wMel_rRNA dictionary  
-    wMel_16S_genes = {gene_id: length for gene_id, length in wMel_rRNA.items() 
-                      if '16S' in gene_id or any('16S' in str(v) for v in [gene_id])}
+    # # Filter for 16S rRNA genes from wMel_rRNA dictionary  
+    # wMel_rRNA = {gene_id: length for gene_id, length in wMel_rRNA.items() 
+    #                   if '16S' in gene_id or any('16S' in str(v) for v in [gene_id])}
     
-    print(f"Using {len(dmel_18S_genes)} Dmel 18S rRNA genes: {list(dmel_18S_genes.keys())}")
-    print(f"Using {len(wMel_16S_genes)} wMel 16S rRNA genes: {list(wMel_16S_genes.keys())}")
+    # print(f"Using {len(all_rRNA)} Dmel 18S rRNA genes: {list(all_rRNA.keys())}")
+    # print(f"Using {len(wMel_rRNA)} wMel 16S rRNA genes: {list(wMel_rRNA.keys())}")
     
     # Check if we need to look in var_names or gene_ids column
     if 'gene_ids' in adata.var.columns:
@@ -92,29 +92,29 @@ def calculate_wolbachia_titer(adata):
         gene_id_map = dict(zip(adata.var.index, adata.var['gene_ids']))
         
         # Find which genes are present in our datasets
-        wMel_16S_genes_present = []
-        for gene_id in wMel_16S_genes.keys():
+        wMel_rRNA_present = []
+        for gene_id in wMel_rRNA.keys():
             if gene_id in adata.var['gene_ids'].values:
-                wMel_16S_genes_present.append(gene_id)
+                wMel_rRNA_present.append(gene_id)
                 
-        dmel_18S_genes_present = []
-        for gene_id in dmel_18S_genes.keys():
+        all_rRNA_present = []
+        for gene_id in all_rRNA.keys():
             if gene_id in adata.var['gene_ids'].values:
-                dmel_18S_genes_present.append(gene_id)
+                all_rRNA_present.append(gene_id)
         
         # Create masks for the genes
-        wMel_mask = [gene_id_map.get(idx) in wMel_16S_genes_present for idx in adata.var.index]
-        dmel_mask = [gene_id_map.get(idx) in dmel_18S_genes_present for idx in adata.var.index]
+        wMel_mask = [gene_id_map.get(idx) in wMel_rRNA_present for idx in adata.var.index]
+        dmel_mask = [gene_id_map.get(idx) in all_rRNA_present for idx in adata.var.index]
     else:
         # Use original approach with var_names
-        wMel_16S_genes_present = [gene for gene in wMel_16S_genes.keys() if gene in adata.var_names]
-        dmel_18S_genes_present = [gene for gene in dmel_18S_genes.keys() if gene in adata.var_names]
+        wMel_rRNA_present = [gene for gene in wMel_rRNA.keys() if gene in adata.var_names]
+        all_rRNA_present = [gene for gene in all_rRNA.keys() if gene in adata.var_names]
         
         # Create masks based on var_names
-        wMel_mask = [gene in wMel_16S_genes_present for gene in adata.var_names]
-        dmel_mask = [gene in dmel_18S_genes_present for gene in adata.var_names]
+        wMel_mask = [gene in wMel_rRNA_present for gene in adata.var_names]
+        dmel_mask = [gene in all_rRNA_present for gene in adata.var_names]
     
-    print(f"Found {len(wMel_16S_genes_present)} wMel 16S rRNA genes and {len(dmel_18S_genes_present)} Dmel 18S rRNA genes in dataset")
+    print(f"Found {len(wMel_rRNA_present)} wMel 16S rRNA genes and {len(all_rRNA_present)} Dmel 18S rRNA genes in dataset")
     
     # Get gene indices from the masks
     wMel_indices = np.where(wMel_mask)[0]
