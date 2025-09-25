@@ -158,7 +158,7 @@ def calculate_wolbachia_titer(adata):
     
     # Add the titer to the AnnData object
     adata.obs['wolbachia_titer'] = titer
-    adata.obs['wolbachia_titer_log1p'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
+    adata.obs['log1p_wolbachia_titer'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
     
     # Add raw expression values for reference
     adata.obs['wMel_mean_expr'] = wMel_mean_expr

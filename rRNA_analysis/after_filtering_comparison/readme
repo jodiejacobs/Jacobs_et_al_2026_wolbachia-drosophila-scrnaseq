@@ -2,3 +2,18 @@
 Input: kalisto pseudoalignments
 Output: plots and tables comparing rRNA contamination before and after filtering
 
+# Method:
+# Using kb-python (recommended)
+kb count -i your_index.idx \
+  -g transcripts_to_genes.txt \
+  -x 10xv3 \
+  --keep-tmp \ # Need to modify script to keep bus file
+  --verbose \
+  -t 8 \
+  -o output_with_bus \
+  R1.fastq.gz R2.fastq.gz
+
+# Then you can run your desired command:
+cd output_with_bus
+bustools project -g target_gene.txt -t transcripts_to_genes.txt main.bus | \
+  bustools text | cut -f2 | sort -u > target_umis.txt
