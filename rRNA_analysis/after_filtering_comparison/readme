@@ -1,0 +1,4 @@
+# These are scripts/plots/results comparing the 16S rRNA contamination of my libraries after soaking up reads using general 16S sequences. 
+Input: kalisto pseudoalignments
+Output: plots and tables comparing rRNA contamination before and after filtering
+

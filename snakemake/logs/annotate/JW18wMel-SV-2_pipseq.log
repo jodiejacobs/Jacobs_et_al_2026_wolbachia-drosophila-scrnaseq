@@ -1,74 +1,74 @@
 Starting cell cycle annotation for JW18wMel-SV-2_pipseq
 Input file: results/filtered_h5ad/JW18wMel-SV-2_pipseq.h5ad
-2025-09-11 15:47:48.983959: I tensorflow/core/platform/cpu_feature_guard.cc:151] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  SSE4.1 SSE4.2 AVX AVX2 AVX512F FMA
+2025-09-22 15:20:20.748028: I tensorflow/core/platform/cpu_feature_guard.cc:151] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  SSE4.1 SSE4.2 AVX AVX2 FMA
 To enable them in other operations, rebuild TensorFlow with the appropriate compiler flags.
 Auto tuning number of linear components...
 Performing PCA...
 Training Autoencoder with...
     0 linear dimensions...
-epoch: 100/500, loss:  0.7939, time elapsed:  12.26s, time left:  49.05s
-epoch: 200/500, loss:  0.7937, time elapsed:  24.83s, time left:  37.24s
-epoch: 300/500, loss:  0.7932, time elapsed:  37.06s, time left:  24.71s
-epoch: 400/500, loss:  0.7926, time elapsed:  49.30s, time left:  12.32s
-epoch: 500/500, loss:  0.7927, time elapsed:  61.49s, time left:  0.00s
-[0.7926685214042664]
-[0.790356541805553, 0.7845910178634562, 0.7791659273516698, 0.7759648818593328, 0.7732836822196152]
+epoch: 100/500, loss:  0.7941, time elapsed:  14.38s, time left:  57.53s
+epoch: 200/500, loss:  0.7935, time elapsed:  28.58s, time left:  42.87s
+epoch: 300/500, loss:  0.7936, time elapsed:  42.83s, time left:  28.56s
+epoch: 400/500, loss:  0.7931, time elapsed:  57.07s, time left:  14.27s
+epoch: 500/500, loss:  0.7928, time elapsed:  71.35s, time left:  0.00s
+[0.7927758693695068]
+[0.7901922218623567, 0.7844297644691443, 0.7790034820832875, 0.7757969005767097, 0.7731144019163894]
     1 linear dimensions...
-epoch: 100/500, loss:  0.7854, time elapsed:  12.36s, time left:  49.44s
-epoch: 200/500, loss:  0.7852, time elapsed:  24.18s, time left:  36.28s
-epoch: 300/500, loss:  0.7850, time elapsed:  36.18s, time left:  24.12s
-epoch: 400/500, loss:  0.7852, time elapsed:  48.32s, time left:  12.08s
-epoch: 500/500, loss:  0.7853, time elapsed:  61.22s, time left:  0.00s
-[0.7926685214042664, 0.7853185534477234]
-[0.790356541805553, 0.7845910178634562, 0.7791659273516698, 0.7759648818593328, 0.7732836822196152]
+epoch: 100/500, loss:  0.7850, time elapsed:  14.93s, time left:  59.70s
+epoch: 200/500, loss:  0.7852, time elapsed:  29.55s, time left:  44.32s
+epoch: 300/500, loss:  0.7849, time elapsed:  44.14s, time left:  29.42s
+epoch: 400/500, loss:  0.7850, time elapsed:  58.66s, time left:  14.67s
+epoch: 500/500, loss:  0.7851, time elapsed:  73.20s, time left:  0.00s
+[0.7927758693695068, 0.785050630569458]
+[0.7901922218623567, 0.7844297644691443, 0.7790034820832875, 0.7757969005767097, 0.7731144019163894]
     2 linear dimensions...
-epoch: 100/500, loss:  0.7811, time elapsed:  13.25s, time left:  53.01s
-epoch: 200/500, loss:  0.7815, time elapsed:  26.12s, time left:  39.17s
-epoch: 300/500, loss:  0.7808, time elapsed:  39.10s, time left:  26.07s
-epoch: 400/500, loss:  0.7810, time elapsed:  52.08s, time left:  13.02s
-epoch: 500/500, loss:  0.7814, time elapsed:  64.91s, time left:  0.00s
-[0.7926685214042664, 0.7853185534477234, 0.7813549637794495]
-[0.790356541805553, 0.7845910178634562, 0.7791659273516698, 0.7759648818593328, 0.7732836822196152]
+epoch: 100/500, loss:  0.7820, time elapsed:  15.06s, time left:  60.25s
+epoch: 200/500, loss:  0.7817, time elapsed:  29.79s, time left:  44.68s
+epoch: 300/500, loss:  0.7820, time elapsed:  45.48s, time left:  30.32s
+epoch: 400/500, loss:  0.7813, time elapsed:  61.51s, time left:  15.38s
+epoch: 500/500, loss:  0.7815, time elapsed:  77.48s, time left:  0.00s
+[0.7927758693695068, 0.785050630569458, 0.781454861164093]
+[0.7901922218623567, 0.7844297644691443, 0.7790034820832875, 0.7757969005767097, 0.7731144019163894]
 Found! Use 1 linear components...
 Early stop disabled, continue to check all cases...
     3 linear dimensions...
-epoch: 100/500, loss:  0.7790, time elapsed:  13.05s, time left:  52.20s
-epoch: 200/500, loss:  0.7798, time elapsed:  25.90s, time left:  38.86s
-epoch: 300/500, loss:  0.7783, time elapsed:  38.51s, time left:  25.67s
-epoch: 400/500, loss:  0.7783, time elapsed:  50.96s, time left:  12.74s
-epoch: 500/500, loss:  0.7785, time elapsed:  63.35s, time left:  0.00s
-[0.7926685214042664, 0.7853185534477234, 0.7813549637794495, 0.7785399556159973]
-[0.790356541805553, 0.7845910178634562, 0.7791659273516698, 0.7759648818593328, 0.7732836822196152]
-epoch: 100/800, loss:  0.7841, time elapsed:  13.13s, time left:  91.88s
-epoch: 200/800, loss:  0.7837, time elapsed:  26.02s, time left:  78.07s
-epoch: 300/800, loss:  0.7837, time elapsed:  38.93s, time left:  64.88s
-epoch: 400/800, loss:  0.7837, time elapsed:  51.73s, time left:  51.73s
-epoch: 500/800, loss:  0.7837, time elapsed:  64.72s, time left:  38.83s
-epoch: 600/800, loss:  0.7836, time elapsed:  77.51s, time left:  25.84s
-epoch: 700/800, loss:  0.7837, time elapsed:  90.26s, time left:  12.89s
-epoch: 800/800, loss:  0.7835, time elapsed:  103.17s, time left:  0.00s
-Pseudotime shape: (1319, 1)
-Pseudotime range: -3.671 to 4.288
+epoch: 100/500, loss:  0.7784, time elapsed:  16.48s, time left:  65.93s
+epoch: 200/500, loss:  0.7784, time elapsed:  32.63s, time left:  48.95s
+epoch: 300/500, loss:  0.7778, time elapsed:  48.83s, time left:  32.56s
+epoch: 400/500, loss:  0.7784, time elapsed:  65.05s, time left:  16.26s
+epoch: 500/500, loss:  0.7781, time elapsed:  81.27s, time left:  0.00s
+[0.7927758693695068, 0.785050630569458, 0.781454861164093, 0.778062105178833]
+[0.7901922218623567, 0.7844297644691443, 0.7790034820832875, 0.7757969005767097, 0.7731144019163894]
+epoch: 100/800, loss:  0.7841, time elapsed:  15.95s, time left:  111.67s
+epoch: 200/800, loss:  0.7836, time elapsed:  31.72s, time left:  95.16s
+epoch: 300/800, loss:  0.7836, time elapsed:  47.35s, time left:  78.91s
+epoch: 400/800, loss:  0.7836, time elapsed:  62.99s, time left:  62.99s
+epoch: 500/800, loss:  0.7838, time elapsed:  78.72s, time left:  47.23s
+epoch: 600/800, loss:  0.7838, time elapsed:  94.48s, time left:  31.49s
+epoch: 700/800, loss:  0.7838, time elapsed:  110.27s, time left:  15.75s
+epoch: 800/800, loss:  0.7839, time elapsed:  126.03s, time left:  0.00s
+Pseudotime shape: (1315, 1)
+Pseudotime range: -3.581 to 4.345
 Step 1: Converting to circular coordinates...
 Step 2: Direct angle-based assignment...
 Step 3: Light smoothing at boundaries...
 Boundary smoothing changed 2 assignments
 Step 4: Calculate confidence scores...
 Final phase distribution:
-  g0/g1: 375 cells (28.4%)
-  s: 629 cells (47.7%)
-  g2/m: 315 cells (23.9%)
+  g0/g1: 409 cells (31.1%)
+  s: 625 cells (47.5%)
+  g2/m: 281 cells (21.4%)
 Unassigned cells: 0 (should be 0)
 
 Final cell cycle stage distribution:
-g0/g1: 375 cells (28.4%)
-g2/m: 315 cells (23.9%)
-s: 629 cells (47.7%)
+g0/g1: 409 cells (31.1%)
+g2/m: 281 cells (21.4%)
+s: 625 cells (47.5%)
 
 Added to adata.obs:
-cyclum_stage: 1319 cells
-cyclum_pseudotime: 1319 cells
-cyclum_confidence: 1319 cells
+cyclum_stage: 1315 cells
+cyclum_pseudotime: 1315 cells
+cyclum_confidence: 1315 cells
 
 Analysis complete! Results saved to: results/annotated_h5ad/JW18wMel-SV-2_pipseq.h5ad
 Plots saved as: results/annotated_h5ad/JW18wMel-SV-2_pipseq_cyclum_*.pdf

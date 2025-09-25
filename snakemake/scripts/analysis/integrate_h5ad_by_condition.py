@@ -157,15 +157,15 @@ def calculate_wolbachia_titer(adata):
         )
     
     # Add the titer to the AnnData object
-    adata.obs['wolbachia_titer_norm'] = titer
-    adata.obs['wolbachia_titer_norm_log1p'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
+    adata.obs['wolbachia_titer'] = titer
+    adata.obs['wolbachia_titer_log1p'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
     
     # Add raw expression values for reference
     adata.obs['wMel_mean_expr'] = wMel_mean_expr
     adata.obs['dmel_mean_expr'] = dmel_mean_expr
     
     # Alternative simpler titer: just use the difference in expression
-    adata.obs['wolbachia_expr_diff'] = wMel_mean_expr - dmel_mean_expr
+    # adata.obs['wolbachia_expr_diff'] = wMel_mean_expr - dmel_mean_expr
     
     # Count cells with different expression states
     n_cells_detectable = np.sum(has_detectable_rRNA)
