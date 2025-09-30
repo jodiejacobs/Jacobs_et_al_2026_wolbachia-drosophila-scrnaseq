@@ -40,7 +40,9 @@ rule all:
     input:
         expand("results/combined/{condition}_{platform}.h5ad",
                condition=CONDITIONS,
-               platform=PLATFORMS)
+               platform=PLATFORMS),
+        expand("results/gene_extracted/{sample_id}/GQX67_05945_R1.fastq.gz",
+               sample_id=samples_df.index.tolist())
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -142,6 +144,88 @@ rule map_10x:
         # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
         echo "10x processing complete for {params.sample_id}"
+        """
+# Extract reads for a specific gene (e.g., wMel 16S rRNA)
+rule extract_gene_reads:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        bus = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/output.unfiltered.bus",
+        ec = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/matrix.ec",
+        transcripts = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/transcripts.txt"
+    output:
+        filtered_r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
+        filtered_r2 = "results/gene_extracted/{sample_id}/{gene}_R2.fastq.gz"
+    params:
+        sample_id = "{sample_id}",
+        gene = "{gene}",
+        workdir = "results/gene_extracted/{sample_id}/{gene}_workdir",
+        transcripts_to_genes = config["transcripts_to_genes"],
+        extract_script = config.get("extract_gene_script", "scripts/filter_bus_by_gene.py")
+    log:
+        "logs/extract_gene/{sample_id}_{gene}.log"
+    threads: 2
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 32000,
+        slurm_time = "4:00:00"
+    shell:
+        """
+        # exec > {log} 2>&1
+        echo "Extracting reads for gene {params.gene} from {params.sample_id}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
+        
+        # # Create working directory
+        mkdir -p {params.workdir}
+        # cd {params.workdir}
+        
+        # Step 1: Convert BUS to text
+        echo "Step 1: Converting BUS to text..."
+        bustools text -o {params.workdir}/bus_output.txt {input.bus}
+        
+        # Step 2: Filter for target gene
+        echo "Step 2: Filtering for gene {params.gene}..."
+        python {params.extract_script} \
+            --gene {params.gene} \
+            --t2g {params.transcripts_to_genes} \
+            --transcripts {input.transcripts} \
+            --ec {input.ec} \
+            --bus_text {params.workdir}/bus_output.txt \
+            --output {params.workdir}/filtered_bus.txt
+        
+        # Step 3: Convert filtered text back to BUS
+        echo "Step 3: Converting filtered text back to BUS..."
+        bustools fromtext -o {params.workdir}/filtered.bus {params.workdir}/filtered_bus.txt
+        bustools sort -o {params.workdir}/filtered_sorted.bus {params.workdir}/filtered.bus
+
+        # Step 4: Inspect filtered BUS
+        echo "Step 4: Inspecting filtered BUS file..."
+        bustools inspect {params.workdir}/filtered_sorted.bus
+
+        # Step 5: Extract FASTQ reads
+        echo "Step 5: Extracting FASTQ reads..."
+        bustools extract \
+            -o {params.workdir}/filtered \
+            -f {input.read1},{input.read2} \
+            -N 2\
+            {params.workdir}/filtered_sorted.bus 
+
+        
+        # Step 6: Compress and move outputs
+        echo "Step 6: Compressing outputs..."
+        gzip {params.workdir}/filtered/1.fastq
+        gzip {params.workdir}/filtered/2.fastq
+
+        mv {params.workdir}/filtered/1.fastq.gz {output.filtered_r1}
+        mv {params.workdir}/filtered/2.fastq.gz {output.filtered_r2}
+
+        # Cleanup
+        rm -r {params.workdir}
+
+        echo "Extraction complete!"
+        ls -lh {output.filtered_r1} {output.filtered_r2}
         """
 
 # Filter h5ad output and output qc:
