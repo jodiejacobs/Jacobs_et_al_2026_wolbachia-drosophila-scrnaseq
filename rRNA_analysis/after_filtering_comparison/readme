@@ -17,3 +17,6 @@ kb count -i your_index.idx \
 cd output_with_bus
 bustools project -g target_gene.txt -t transcripts_to_genes.txt main.bus | \
   bustools text | cut -f2 | sort -u > target_umis.txt
+
+
+# This was done in the Snakemake pipeline, go there for methods.
