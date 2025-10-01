@@ -339,6 +339,7 @@ rule extract_gene_reads:
         echo "Extraction complete!"
         ls -lh {output.filtered_r1} {output.filtered_r2}
         """
+        
 # Rule 1: Align extracted gene reads to rRNA reference with BWA
 rule align_gene_reads:
     input:
@@ -361,7 +362,7 @@ rule align_gene_reads:
         echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate kallisto_bustools
+        conda activate sra-tools
         
         # Align with BWA MEM, convert to BAM, and sort
         bwa mem -t {threads} {input.ref} {input.r1} {input.r2} | \
@@ -394,7 +395,7 @@ rule calculate_coverage:
         echo "Calculating coverage for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate kallisto_bustools
+        conda activate sra-tools
         
         samtools depth {input.bam} > {output.cov}
         
@@ -423,7 +424,7 @@ rule extract_16s_sequences:
         echo "Extracting 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate kallisto_bustools
+        conda activate sra-tools
         
         # Extract reads mapping to 16S region
         samtools view -h {input.bam} {params.region} | \
@@ -453,7 +454,7 @@ rule blast_16s:
         echo "Running BLAST for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate kallisto_bustools
+        conda activate sra-tools
         
         blastn -db {params.db} \
             -query {input.fasta} \
@@ -520,7 +521,7 @@ rule plot_coverage_by_group:
         echo "Plotting coverage for {wildcards.condition}_{wildcards.platform}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
+        conda activate sra-tools
         
         mkdir -p {output.plot_dir}
         
@@ -560,7 +561,7 @@ rule plot_blast_by_group:
         echo "Plotting BLAST results for {wildcards.condition}_{wildcards.platform}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
+        conda activate sra-tools
         
         mkdir -p {output.plot_dir}
         
@@ -597,7 +598,7 @@ rule extract_abundant_16s:
         echo "Extracting abundant 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate kallisto_bustools
+        conda activate sra-tools
         
         # Extract IDs with at least min_reads reads
         awk -v min={params.min_reads} '$1 >= min {{print $2}}' {input.summary} > {output.ids}
