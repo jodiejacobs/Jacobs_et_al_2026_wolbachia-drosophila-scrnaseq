@@ -339,11 +339,11 @@ rule extract_gene_reads:
         echo "Extraction complete!"
         ls -lh {output.filtered_r1} {output.filtered_r2}
         """
-        
+
 # Rule 1: Align extracted gene reads to rRNA reference with BWA
 rule align_gene_reads:
     input:
-        r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
+        # r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
         r2 = "results/gene_extracted/{sample_id}/{gene}_R2.fastq.gz",
         ref = config["ref_fasta"]
     output:
@@ -358,14 +358,17 @@ rule align_gene_reads:
         slurm_time = "2:00:00"
     shell:
         """
-        exec > {log} 2>&1
+        # exec > {log} 2>&1
         echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate sra-tools
-        
+
+        # Make the directory
+        mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
+
         # Align with BWA MEM, convert to BAM, and sort
-        bwa mem -t {threads} {input.ref} {input.r1} {input.r2} | \
+        bwa mem -t {threads} {input.ref} {input.r2} | \
             samtools view -Sb | \
             samtools sort -@ {threads} -o {output.bam}
         
