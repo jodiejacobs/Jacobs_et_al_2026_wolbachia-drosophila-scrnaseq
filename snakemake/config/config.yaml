@@ -58,3 +58,4 @@ blast_db: "16S_ribosomal_RNA_plus_wolbachia"
 plot_coverage_script: "scripts/plot_coverage.py"
 plot_blast_script: "scripts/plot_blast_pie_charts.py"
 min_blast_reads: 100
+blast_db: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/blast_db/16S_ribosomal_RNA_plus_wolbachia"
