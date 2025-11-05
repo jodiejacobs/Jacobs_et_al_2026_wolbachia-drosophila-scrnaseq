@@ -9,10 +9,10 @@ cyclum_env: '/private/home/jomojaco/miniforge3/envs/cyclum'
 
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
-combine_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/integrate_h5ad_by_condition.py" 
+combine_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/in_vivo_translation/scripts/analysis/integrate_h5ad_by_condition.py" 
 kallisto_index: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
-filter_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/filtering/kallisto_bustools_qcfilter_adata.py"
-cell_cycle_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake/scripts/analysis/cyclum_cell_cycle.py"
+filter_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/in_vivo_translation/scripts/filtering/kallisto_bustools_qcfilter_adata.py"
+cell_cycle_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/in_vivo_translation/scripts/analysis/cyclum_cell_cycle.py"
 transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
 
 # Compute resources for cellranger 
