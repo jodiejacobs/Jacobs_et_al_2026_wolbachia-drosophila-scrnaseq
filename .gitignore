@@ -1,6 +1,8 @@
 
-snakemake/.snakemake/
+cell_culture_system/.snakemake/
 .snakemake/
-snakemake/results/
-snakemake/logs/
-snakemake/results_v0/
+cell_culture_system/results/
+cell_culture_system/logs/
+cell_culture_system/results_v0/
+in_vivo_translation/results/
+in_vivo_translation/logs/

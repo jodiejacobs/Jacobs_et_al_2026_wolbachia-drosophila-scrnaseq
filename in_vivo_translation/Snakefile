@@ -1,0 +1,620 @@
+# Snakefile for processing scRNA-seq data with Snakemake and kallisto bustools
+# mamba activate snakemake #Needs snakemake>=9.0
+# snakemake --executor slurm --default-resources slurm_partition=medium slurm_time="2:00:00" runtime=120 mem_mb=8000 -j 16 -n 
+
+import pandas as pd
+import os
+
+# Configuration
+configfile: "config/config.yaml"
+SCANPY_ENV = config["scanpy_env"]
+CYCLUM_ENV = config["cyclum_env"]
+
+
+# Load samples information
+samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
+samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+
+# Change index format to use hyphen between condition and replicate
+samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
+
+CONDITIONS = samples_df[0].unique().tolist()
+REPLICATES = samples_df[2].unique().tolist()
+PLATFORMS = samples_df[1].unique().tolist()
+
+# Sample lookup by sample name; samples_df.loc['sample_name'][3] gives the R1 path
+print(f"Conditions: {CONDITIONS}")
+print(f"Replicates: {REPLICATES}")
+print(f"Platforms: {PLATFORMS}")
+
+# Helper function to get fastq files for a sample
+def get_fastq_files(sample_id):
+    """Get R1 and R2 fastq files for a sample."""
+    sample_info = samples_df.loc[sample_id]
+    r1_path = sample_info[3]  # R1 path is in column 3 (0-indexed)
+    r2_path = sample_info[4]  # R2 path is in column 4 (0-indexed)
+    return r1_path, r2_path
+
+# Main rule that defines the final output
+rule all:
+    input:
+        expand("results/combined/{condition}_{platform}.h5ad",
+               condition=CONDITIONS,
+               platform=PLATFORMS),
+        expand("results/gene_extracted/{sample_id}/GQX67_05945_R1.fastq.gz",
+               sample_id=samples_df.index.tolist()),
+                expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+               sample_id=samples_df.index.tolist(),
+               gene=config.get("target_genes", ["GQX67_05945"])),
+        expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
+               sample_id=samples_df.index.tolist(),
+               gene=config.get("target_genes", ["GQX67_05945"])),
+        expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
+               sample_id=samples_df.index.tolist(),
+               gene=config.get("target_genes", ["GQX67_05945"])),
+        expand("results/rRNA_analysis/plots/coverage_{condition}_{platform}",
+               condition=CONDITIONS,
+               platform=PLATFORMS),
+        expand("results/rRNA_analysis/plots/blast_{condition}_{platform}",
+               condition=CONDITIONS,
+               platform=PLATFORMS)
+
+# Establish rule precedence
+ruleorder: map_pipseq > combine_files_by_condition_platform
+ruleorder: map_10x > combine_files_by_condition_platform
+
+# Process PIPseq samples with kallisto bustools
+rule map_pipseq:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+    output:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+    params:
+        sample_id = "{sample_id}",
+        outdir = "results/pipseq/{sample_id}",
+        kallisto_index = config["kallisto_index"],
+        transcripts_to_genes = config["transcripts_to_genes"]
+    wildcard_constraints:
+        sample_id = ".*_pipseq"  # Only match samples ending with _pipseq
+    log:
+        "logs/pipseq/{sample_id}.log"
+    threads: 
+        config["pipseeker_threads"]
+    resources:
+        slurm_partition = config["pipseeker_partition"],
+        mem_mb = config["pipseeker_mem"],
+        slurm_time = config["pipseeker_time"]
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting PIPseq processing for {params.sample_id}"
+        echo "Input files: {input.read1}, {input.read2}"
+        echo "Output directory: {params.outdir}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
+
+        kb count \
+            --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+            -i {params.kallisto_index} \
+            --keep-tmp \
+            -g {params.transcripts_to_genes} \
+            -x 0,0,16:0,16,28:1,0,0 \
+            -o {params.outdir} \
+            -t {threads} \
+            --h5ad \
+            {input.read1} {input.read2} 
+
+        echo "Moving h5ad file to final location"
+        # Move the h5ad file to the expected location
+        mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        echo "PIPseq processing complete for {params.sample_id}"
+        """
+
+# Process 10X samples with kallisto bustools
+rule map_10x:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+    output:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+    params:
+        sample_id = "{sample_id}",
+        outdir = "results/10x/{sample_id}",
+        kallisto_index = config["kallisto_index"],
+        transcripts_to_genes = config["transcripts_to_genes"]
+    wildcard_constraints:
+        sample_id = ".*_10x"  # Only match samples ending with _10x
+    log:
+        "logs/10x/{sample_id}.log"
+    threads:
+        config["cellranger_threads"] 
+    resources:
+        slurm_partition = config["cellranger_partition"],
+        mem_mb = config["cellranger_mem"],
+        slurm_time = config["cellranger_time"]
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting 10x processing for {params.sample_id}"
+        echo "Input files: {input.read1}, {input.read2}"
+        echo "Output directory: {params.outdir}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
+        
+        kb count \
+            --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
+            -i {params.kallisto_index} \
+            -g {params.transcripts_to_genes} \
+            --keep-tmp \
+            -x 10xv3 \
+            -o {params.outdir} \
+            -t {threads} \
+            --h5ad \
+            {input.read1} {input.read2} 
+
+        echo "Moving h5ad file to final location"
+        # Move the h5ad file to the expected locatio
+        mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
+        echo "10x processing complete for {params.sample_id}"
+        """
+
+# Filter h5ad output and output qc:
+rule filter_h5ad:
+    input: "results/h5ad_results/{sample_id}.h5ad"
+    output:
+        filtered_h5ad = "results/filtered_h5ad/{sample_id}.h5ad"
+    params:
+        script = config["filter_script"]
+    log:
+        "logs/filter/{sample_id}.log"
+    threads:
+        config["filter_threads"]
+    resources:
+        slurm_partition = config["filter_partition"],
+        mem_mb = config["filter_mem"],
+        slurm_time = config["filter_time"]
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting filtering for {wildcards.sample_id}"
+        echo "Input file: {input}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input {input} \
+            --output {output.filtered_h5ad} 
+        
+        echo "Compressing original h5ad file"
+        gzip {input}
+        echo "Filtering complete for {wildcards.sample_id}"
+        """
+
+# Cell cycle Annotation
+rule annotate_cell_cycle: # This needs the cyclum conda environment
+    input:
+        h5ad = "results/filtered_h5ad/{sample_id}.h5ad" # Output of filtered script 
+    output:
+        annotated_h5ad = "results/annotated_h5ad/{sample_id}.h5ad"
+    params:
+        script = config["cell_cycle_script"]
+    log:
+        "logs/annotate/{sample_id}.log"
+    threads:
+        config["cell_cycle_threads"]
+    resources:
+        slurm_partition = config["cell_cycle_partition"],
+        mem_mb = config["cell_cycle_mem"],
+        slurm_time = config["cell_cycle_time"]
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cell cycle annotation for {wildcards.sample_id}"
+        echo "Input file: {input.h5ad}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {CYCLUM_ENV}
+
+        python {params.script} \
+            --input {input.h5ad} \
+            --output {output.annotated_h5ad}
+        
+        echo "Compressing filtered h5ad file"
+        gzip {input.h5ad}
+        echo "Cell cycle annotation complete for {wildcards.sample_id}"
+        """
+
+rule combine_files_by_condition_platform:
+    input:
+        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{platform}.h5ad", 
+                                              condition=wildcards.condition, 
+                                              replicate=REPLICATES,
+                                              platform=wildcards.platform)
+    output:
+        combined = "results/combined/{condition}_{platform}.h5ad"
+    params:
+        combine_script = config["combine_script"],
+        sample = '{condition}_{platform}',  # Remove {replicate} since you're combining replicates
+        fig_dir = 'results/combined/{condition}_{platform}'  # Remove {replicate}
+    log:
+        "logs/combine/{condition}_{platform}.log"
+    threads: 
+        config["combine_threads"]
+    resources:
+        slurm_partition = config["combine_partition"],
+        mem_mb = config["combine_mem"],
+        slurm_time = config["combine_time"]
+    shell:
+        """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        python {params.combine_script} --files {input.input_files} --out_path {output.combined} --fig_dir {params.fig_dir} --sample {params.sample} --batch_key batch --min_cells 3 --min_genes 200
+        """
+
+
+##################################################################
+# rRNA analysis rules
+##################################################################
+
+# Rule 0: Extract reads for a specific gene (e.g., wMel 16S rRNA)
+rule extract_gene_reads:
+    input:
+        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        bus = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/output.unfiltered.bus",
+        ec = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/matrix.ec",
+        transcripts = lambda wildcards: f"results/{wildcards.sample_id.split('_')[-1]}/{wildcards.sample_id}/transcripts.txt"
+    output:
+        filtered_r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
+        filtered_r2 = "results/gene_extracted/{sample_id}/{gene}_R2.fastq.gz"
+    params:
+        sample_id = "{sample_id}",
+        gene = "{gene}",
+        workdir = "results/gene_extracted/{sample_id}/{gene}_workdir",
+        transcripts_to_genes = config["transcripts_to_genes"],
+        extract_script = config.get("extract_gene_script", "scripts/filter_bus_by_gene.py")
+    log:
+        "logs/extract_gene/{sample_id}_{gene}.log"
+    threads: 2
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 32000,
+        slurm_time = "4:00:00"
+    shell:
+        """
+        # exec > {log} 2>&1
+        echo "Extracting reads for gene {params.gene} from {params.sample_id}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate kallisto_bustools
+        
+        # # Create working directory
+        mkdir -p {params.workdir}
+        # cd {params.workdir}
+        
+        # Step 1: Convert BUS to text
+        echo "Step 1: Converting BUS to text..."
+        bustools text -o {params.workdir}/bus_output.txt {input.bus}
+        
+        # Step 2: Filter for target gene
+        echo "Step 2: Filtering for gene {params.gene}..."
+        python {params.extract_script} \
+            --gene {params.gene} \
+            --t2g {params.transcripts_to_genes} \
+            --transcripts {input.transcripts} \
+            --ec {input.ec} \
+            --bus_text {params.workdir}/bus_output.txt \
+            --output {params.workdir}/filtered_bus.txt
+        
+        # Step 3: Convert filtered text back to BUS
+        echo "Step 3: Converting filtered text back to BUS..."
+        bustools fromtext -o {params.workdir}/filtered.bus {params.workdir}/filtered_bus.txt
+        bustools sort -o {params.workdir}/filtered_sorted.bus {params.workdir}/filtered.bus
+
+        # Step 4: Inspect filtered BUS
+        echo "Step 4: Inspecting filtered BUS file..."
+        bustools inspect {params.workdir}/filtered_sorted.bus
+
+        # Step 5: Extract FASTQ reads
+        echo "Step 5: Extracting FASTQ reads..."
+        bustools extract \
+            -o {params.workdir}/filtered \
+            -f {input.read1},{input.read2} \
+            -N 2\
+            {params.workdir}/filtered_sorted.bus 
+
+        
+        # Step 6: Move outputs
+        echo "Step 6: Moving outputs..."
+        mv {params.workdir}/filtered/1.fastq.gz {output.filtered_r1}
+        mv {params.workdir}/filtered/2.fastq.gz {output.filtered_r2}
+
+        # Cleanup
+        rm -r {params.workdir}
+
+        echo "Extraction complete!"
+        ls -lh {output.filtered_r1} {output.filtered_r2}
+        """
+
+# Rule 1: Align extracted gene reads to rRNA reference with BWA
+rule align_gene_reads:
+    input:
+        # r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
+        r2 = "results/gene_extracted/{sample_id}/{gene}_R2.fastq.gz",
+        ref = config["ref_fasta"]
+    output:
+        bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
+    log:
+        "logs/align_gene/{sample_id}_{gene}.log"
+    threads: 8
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 16000,
+        slurm_time = "2:00:00"
+    shell:
+        """
+        # exec > {log} 2>&1
+        echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+
+        # Make the directory
+        mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
+
+        # Align with BWA MEM, convert to BAM, and sort
+        bwa mem -t {threads} {input.ref} {input.r2} | \
+            samtools view -Sb | \
+            samtools sort -@ {threads} -o {output.bam}
+        
+        # Index the BAM file
+        samtools index {output.bam}
+        
+        echo "Alignment complete for {wildcards.sample_id} - {wildcards.gene}"
+        """
+
+# Rule 2: Calculate coverage depth
+rule calculate_coverage:
+    input:
+        bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
+    output:
+        cov = "results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv"
+    log:
+        "logs/coverage/{sample_id}_{gene}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 4000,
+        slurm_time = "30:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Calculating coverage for {wildcards.sample_id} - {wildcards.gene}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        samtools depth {input.bam} > {output.cov}
+        
+        echo "Coverage calculation complete"
+        """
+
+# Rule 3: Extract 16S sequences from aligned BAM
+rule extract_16s_sequences:
+    input:
+        bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
+    output:
+        fasta = "results/rRNA_analysis/extracted_16S/{sample_id}/{gene}_16S.fasta"
+    params:
+        region = "GQX67_05945::NZ_CP046925.1:1167785-1169290"
+    log:
+        "logs/extract_16s/{sample_id}_{gene}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 4000,
+        slurm_time = "30:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Extracting 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        # Extract reads mapping to 16S region
+        samtools view -h {input.bam} {params.region} | \
+            samtools fasta > {output.fasta}
+        
+        echo "16S extraction complete"
+        """
+
+# Rule 4: BLAST 16S sequences against database
+rule blast_16s:
+    input:
+        fasta = "results/rRNA_analysis/extracted_16S/{sample_id}/{gene}_16S.fasta"
+    output:
+        blast = "results/rRNA_analysis/blast/{sample_id}/{gene}.blast"
+    params:
+        db = config["blast_db"]
+    log:
+        "logs/blast/{sample_id}_{gene}.log"
+    threads: 16
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 32000,
+        slurm_time = "4:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Running BLAST for {wildcards.sample_id} - {wildcards.gene}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        blastn -db {params.db} \
+            -query {input.fasta} \
+            -out {output.blast} \
+            -num_threads {threads} \
+            -outfmt 6 \
+            -max_target_seqs 5 \
+            -evalue 1e-5
+        
+        echo "BLAST complete"
+        """
+
+# Rule 5: Summarize BLAST results
+rule summarize_blast:
+    input:
+        blast = "results/rRNA_analysis/blast/{sample_id}/{gene}.blast"
+    output:
+        summary = "results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary"
+    log:
+        "logs/summarize_blast/{sample_id}_{gene}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 2000,
+        slurm_time = "15:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Summarizing BLAST results for {wildcards.sample_id} - {wildcards.gene}"
+        
+        # Summarize: count hits per subject, track best identity
+        awk '{{count[$2]++; if($3 > best[$2]) best[$2]=$3}} 
+             END {{for(s in count) printf "%6d %s (%.3f%% identity)\\n", count[s], s, best[s]}}' \
+            {input.blast} | \
+            sort -k1,1nr -k3,3nr > {output.summary}
+        
+        echo "BLAST summarization complete"
+        """
+
+# Rule 6: Plot coverage for samples grouped by condition and platform
+rule plot_coverage_by_group:
+    input:
+        coverage_files = lambda wildcards: expand(
+            "results/rRNA_analysis/coverage/{condition}-{replicate}_{platform}/{gene}_coverage.tsv",
+            condition=wildcards.condition,
+            replicate=REPLICATES,
+            platform=wildcards.platform,
+            gene=config.get("target_genes", ["GQX67_05945"])
+        )
+    output:
+        plot_dir = directory("results/rRNA_analysis/plots/coverage_{condition}_{platform}")
+    params:
+        script = config["plot_coverage_script"]
+    log:
+        "logs/plot_coverage/{condition}_{platform}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 8000,
+        slurm_time = "1:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Plotting coverage for {wildcards.condition}_{wildcards.platform}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        mkdir -p {output.plot_dir}
+        
+        # Create file list
+        echo {input.coverage_files} | tr ' ' '\\n' > {output.plot_dir}/coverage_files.txt
+        
+        python {params.script} {output.plot_dir}/coverage_files.txt \
+            --output-dir {output.plot_dir}
+        
+        echo "Coverage plotting complete"
+        """
+
+# Rule 7: Plot BLAST pie charts for samples grouped by condition and platform
+rule plot_blast_by_group:
+    input:
+        blast_summaries = lambda wildcards: expand(
+            "results/rRNA_analysis/blast/{condition}-{replicate}_{platform}/{gene}.blast.summary",
+            condition=wildcards.condition,
+            replicate=REPLICATES,
+            platform=wildcards.platform,
+            gene=config.get("target_genes", ["GQX67_05945"])
+        )
+    output:
+        plot_dir = directory("results/rRNA_analysis/plots/blast_{condition}_{platform}")
+    params:
+        script = config["plot_blast_script"]
+    log:
+        "logs/plot_blast/{condition}_{platform}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 8000,
+        slurm_time = "1:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Plotting BLAST results for {wildcards.condition}_{wildcards.platform}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        mkdir -p {output.plot_dir}
+        
+        # Plot each summary file
+        for summary in {input.blast_summaries}; do
+            echo "Processing $(basename $summary)..."
+            python {params.script} "$summary" --output-dir {output.plot_dir}
+        done
+        
+        echo "BLAST plotting complete"
+        """
+
+# Optional: Extract highly represented 16S sequences
+rule extract_abundant_16s:
+    input:
+        blast = "results/rRNA_analysis/blast/{sample_id}/{gene}.blast",
+        summary = "results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary"
+    output:
+        ids = "results/rRNA_analysis/abundant_16S/{sample_id}/{gene}_abundant_ids.txt",
+        fasta = "results/rRNA_analysis/abundant_16S/{sample_id}/{gene}_abundant.fasta"
+    params:
+        db = config["blast_db"],
+        min_reads = config.get("min_blast_reads", 100)
+    log:
+        "logs/extract_abundant/{sample_id}_{gene}.log"
+    threads: 1
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 4000,
+        slurm_time = "30:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Extracting abundant 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        # Extract IDs with at least min_reads reads
+        awk -v min={params.min_reads} '$1 >= min {{print $2}}' {input.summary} > {output.ids}
+        
+        # Extract sequences from BLAST database
+        if [ -s {output.ids} ]; then
+            blastdbcmd -db {params.db} \
+                -entry_batch {output.ids} \
+                -out {output.fasta}
+        else
+            echo "No abundant sequences found" > {output.fasta}
+        fi
+        
+        echo "Abundant sequence extraction complete"
+        """
+        

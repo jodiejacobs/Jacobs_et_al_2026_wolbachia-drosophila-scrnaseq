@@ -156,7 +156,7 @@ rule map_10x:
             {input.read1} {input.read2} 
 
         echo "Moving h5ad file to final location"
-        # Move the h5ad file to the expected location
+        # Move the h5ad file to the expected locatio
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
         echo "10x processing complete for {params.sample_id}"
         """
