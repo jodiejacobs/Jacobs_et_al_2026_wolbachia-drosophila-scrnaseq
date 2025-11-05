@@ -69,7 +69,10 @@ rule map_pipseq:
         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
     output:
-        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+        h5ad = "results/h5ad_results/{sample_id}.h5ad",
+        bus = "results/pipseq/{sample_id}/output.unfiltered.bus",
+        ec = "results/pipseq/{sample_id}/matrix.ec",
+        transcripts = "results/pipseq/{sample_id}/transcripts.txt"
     params:
         sample_id = "{sample_id}",
         outdir = "results/pipseq/{sample_id}",
@@ -118,7 +121,10 @@ rule map_10x:
         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
         read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
     output:
-        h5ad = "results/h5ad_results/{sample_id}.h5ad"
+        h5ad = "results/h5ad_results/{sample_id}.h5ad",
+        bus = "results/10x/{sample_id}/output.unfiltered.bus",
+        ec = "results/10x/{sample_id}/matrix.ec",
+        transcripts = "results/10x/{sample_id}/transcripts.txt"
     params:
         sample_id = "{sample_id}",
         outdir = "results/10x/{sample_id}",
