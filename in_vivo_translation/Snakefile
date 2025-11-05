@@ -19,7 +19,7 @@ samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" els
 samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
 
 CONDITIONS = samples_df[0].unique().tolist()
-REPLICATES = samples_df[2].unique().tolist()
+REPLICATES = samples_df[2].unique().tolist() 
 PLATFORMS = samples_df[1].unique().tolist()
 
 # Sample lookup by sample name; samples_df.loc['sample_name'][3] gives the R1 path
