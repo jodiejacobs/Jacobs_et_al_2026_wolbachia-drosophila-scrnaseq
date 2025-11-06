@@ -85,6 +85,13 @@ def identify_doublets(adata, fig_dir):
     '''
     
     print("Starting scrublet doublet detection:")
+    print(f"Dataset dimensions: {adata.n_obs} cells, {adata.n_vars} genes")
+    
+    # Calculate maximum possible components
+    max_components = min(adata.n_obs, adata.n_vars) - 1
+    n_components = min(30, max_components)  # Use 30 or fewer if data is small
+    
+    print(f"Using {n_components} principal components (max possible: {max_components})")
     
     # Initialize Scrublet with adata object
     scrub = scr.Scrublet(adata.X, expected_doublet_rate=0.1) # requires an estimated rate as a prior 
@@ -92,7 +99,7 @@ def identify_doublets(adata, fig_dir):
     doublet_scores, predicted_doublets = scrub.scrub_doublets(min_counts=2, 
                                                           min_cells=3, 
                                                           min_gene_variability_pctl=85, 
-                                                          n_prin_comps=30)
+                                                          n_prin_comps=n_components)
     # scrub.call_doublets(threshold=0.25)
     scrub.call_doublets()
     
@@ -406,6 +413,9 @@ def qc_plots(adata, fig_dir):
     sc.pl.violin(adata, ['n_genes', 'n_counts', 'percent_mito'], jitter=0.4, multi_panel=True, show=False)
     plt.savefig(f"{fig_dir}/violin_plot.pdf", bbox_inches='tight', pad_inches=0.1)
     plt.close()
+    
+    # Return the filtered adata object
+    return adata
 
 # Add a function here for Wolbachia titer:
 
@@ -478,10 +488,18 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         all_metrics.append(raw_metrics)
         print_qc_summary(raw_metrics)
         
+        # Identify doublets BEFORE heavy filtering (key change!)
+        print("\n=== Running doublet detection on raw data ===")
+        adata = identify_doublets(adata, fig_dir)
+        
+        # Post-doublet detection metrics
+        doublet_metrics = calculate_qc_metrics(adata, sample_name=key, stage="post_doublet_detection")
+        all_metrics.append(doublet_metrics)
+        print_qc_summary(doublet_metrics)
+        
         # Apply QC filtering
+        print("\n=== Applying QC filtering ===")
         filtered_adata = qc_plots(adata, fig_dir)
-        # Identify doublets:
-        filtered_adata = identify_doublets(adata, fig_dir)
 
         # Post-filtering metrics
         filtered_metrics = calculate_qc_metrics(filtered_adata, sample_name=key, stage="filtered")
@@ -489,6 +507,7 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         print_qc_summary(filtered_metrics)
         
         # Apply normalization and analysis
+        print("\n=== Normalizing and analyzing ===")
         normalized_adata = analyze_filtered_adata(filtered_adata, output_dir)
         
         # Save metrics to CSV
@@ -520,4 +539,3 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
 print(f"Analyzing {sample_name}, {input}")
 sample_metrics = process_data_with_metrics(sample_name, input)
 print(f"Completed {sample_name}")
-
