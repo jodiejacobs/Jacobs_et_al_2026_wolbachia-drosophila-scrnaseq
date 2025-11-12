@@ -51,6 +51,7 @@ cell_cycle_partition: "medium"  # More reliable than short
 
 # Extract 16S reads
 target_gene: "GQX67_05945"
+rRNA_regions: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/rRNA/Dmel_wMel_rRNA.gene.bed"
 extract_gene_script: "scripts/filter_bus_by_gene.py"
 ref_fasta: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/rRNA/rRNA_reference_Dmel_wMel.fasta"
 ref_bed: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/rRNA/Dmel_wMel_rRNA.gene.bed"

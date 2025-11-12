@@ -354,7 +354,8 @@ rule align_gene_reads:
     input:
         # r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
         r2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
-        ref = config["ref_fasta"]
+        ref = config["ref_fasta"],
+        regions = config["rRNA_regions"]
     output:
         bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
         bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
@@ -375,16 +376,18 @@ rule align_gene_reads:
 
         # Make the directory
         mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
-
-        # Align with BWA MEM, convert to BAM, and sort
+        
+        # Align with BWA MEM, convert to BAM, sort, and filter for regions
         bwa mem -t {threads} {input.ref} {input.r2} | \
             samtools view -Sb | \
-            samtools sort -@ {threads} -o {output.bam}
+            samtools sort -@ {threads} | \
+            samtools view -b -L {input.regions} -o {output.bam}
         
         # Index the BAM file
         samtools index {output.bam}
         
         echo "Alignment complete for {wildcards.sample_id} - {wildcards.gene}"
+        echo "Filtered to $(samtools view -c {output.bam}) reads in target regions"
         """
 
 # Rule 2: Calculate coverage depth
