@@ -14,8 +14,8 @@ import warnings
 
 # rRNA gene dictionaries with lengths calculated from transcripts_to_genes.txt
 wMel_rRNA={
-    # "GQX67_00940": 2772,
-    # "GQX67_00945": 107,
+    "GQX67_00940": 2772,
+    "GQX67_00945": 107,
     "GQX67_05945": 1505
 }
 
@@ -26,43 +26,43 @@ all_rRNA={
     "FBgn0013688": 786,  # Dmel mtrRNA
     
     # # 2S rRNA genes (all 30 bp)
-    # "FBgn0267496": 30,   # 2SrRNA:CR45836
-    # "FBgn0267500": 30,   # 2SrRNA:CR45840
-    # "FBgn0267503": 30,   # 2SrRNA:CR45843
-    # "FBgn0085765": 30,   # 2SrRNA-Psi:CR40677
-    # "FBgn0267518": 30,   # 2SrRNA-Psi:CR45858
-    # "FBgn0267524": 30,   # 2SrRNA:CR45864
+    "FBgn0267496": 30,   # 2SrRNA:CR45836
+    "FBgn0267500": 30,   # 2SrRNA:CR45840
+    "FBgn0267503": 30,   # 2SrRNA:CR45843
+    "FBgn0085765": 30,   # 2SrRNA-Psi:CR40677
+    "FBgn0267518": 30,   # 2SrRNA-Psi:CR45858
+    "FBgn0267524": 30,   # 2SrRNA:CR45864
     
     # # 5.8S rRNA genes (all 123 bp)
-    # "FBgn0267509": 123,  # 5.8SrRNA-Psi:CR45849
-    # "FBgn0267499": 123,  # 5.8SrRNA:CR45839
-    # "FBgn0267502": 123,  # 5.8SrRNA:CR45842
-    # "FBgn0267512": 123,  # 5.8SrRNA:CR45852
-    # "FBgn0267517": 123,  # 5.8SrRNA-Psi:CR45857
-    # "FBgn0267523": 123,  # 5.8SrRNA-Psi:CR45863
-    # "FBgn0250731": 123,  # 5.8SrRNA:CR40454
-    # "FBgn0267514": 123,  # 5.8SrRNA-Psi:CR45854
+    "FBgn0267509": 123,  # 5.8SrRNA-Psi:CR45849
+    "FBgn0267499": 123,  # 5.8SrRNA:CR45839
+    "FBgn0267502": 123,  # 5.8SrRNA:CR45842
+    "FBgn0267512": 123,  # 5.8SrRNA:CR45852
+    "FBgn0267517": 123,  # 5.8SrRNA-Psi:CR45857
+    "FBgn0267523": 123,  # 5.8SrRNA-Psi:CR45863
+    "FBgn0250731": 123,  # 5.8SrRNA:CR40454
+    "FBgn0267514": 123,  # 5.8SrRNA-Psi:CR45854
     
     # # 18S rRNA genes 
-    # "FBgn0085802": 1995, # 18SrRNA:CR41548
-    # "FBgn0267498": 1995, # 18SrRNA:CR45838
-    # "FBgn0267501": 1995, # 18SrRNA:CR45841
-    # "FBgn0267521": 1934, # 18SrRNA-Psi:CR45861
-    # "FBgn0085813": 1975, # 18SrRNA-Psi:CR41602 #This is the one in the dataset
+    "FBgn0085802": 1995, # 18SrRNA:CR41548
+    "FBgn0267498": 1995, # 18SrRNA:CR45838
+    "FBgn0267501": 1995, # 18SrRNA:CR45841
+    "FBgn0267521": 1934, # 18SrRNA-Psi:CR45861
+    "FBgn0085813": 1975, # 18SrRNA-Psi:CR41602 #This is the one in the dataset
     
     # # 28S rRNA genes (variable lengths)
-    # "FBgn0267504": 3970, # 28SrRNA:CR45844
-    # "FBgn0267508": 821,  # 28SrRNA-Psi:CR45848
-    # "FBgn0267511": 2800, # 28SrRNA-Psi:CR45851
-    # "FBgn0085753": 6005, # 28SrRNA-Psi:CR40596
-    # "FBgn0267497": 2715, # 28SrRNA:CR45837
-    # "FBgn0267522": 2004, # 28SrRNA-Psi:CR45862
-    # "FBgn0085771": 1258, # 28SrRNA-Psi:CR40741
-    # "FBgn0267519": 2689, # 28SrRNA-Psi:CR45859
-    # "FBgn0085819": 895,  # 28SrRNA-Psi:CR41609
-    # "FBgn0267513": 255,  # 28SrRNA-Psi:CR45853
-    # "FBgn0267520": 357,  # 28SrRNA-Psi:CR45860
-    # "FBgn0267515": 704   # 28SrRNA-Psi:CR45855
+    "FBgn0267504": 3970, # 28SrRNA:CR45844
+    "FBgn0267508": 821,  # 28SrRNA-Psi:CR45848
+    "FBgn0267511": 2800, # 28SrRNA-Psi:CR45851
+    "FBgn0085753": 6005, # 28SrRNA-Psi:CR40596
+    "FBgn0267497": 2715, # 28SrRNA:CR45837
+    "FBgn0267522": 2004, # 28SrRNA-Psi:CR45862
+    "FBgn0085771": 1258, # 28SrRNA-Psi:CR40741
+    "FBgn0267519": 2689, # 28SrRNA-Psi:CR45859
+    "FBgn0085819": 895,  # 28SrRNA-Psi:CR41609
+    "FBgn0267513": 255,  # 28SrRNA-Psi:CR45853
+    "FBgn0267520": 357,  # 28SrRNA-Psi:CR45860
+    "FBgn0267515": 704   # 28SrRNA-Psi:CR45855
 }
 
 # Set plotting settings
