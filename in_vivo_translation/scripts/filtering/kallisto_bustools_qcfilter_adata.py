@@ -48,6 +48,55 @@ os.makedirs(fig_dir, exist_ok=True)
 sc.settings.autosave = True
 sc.settings.figdir = fig_dir
 
+rRNA_genes=[
+    # wMel rRNA genes
+    "GQX67_00940",
+    "GQX67_00945",
+    "GQX67_05945",
+
+    # Mitochondrial rRNAs (keeping your original entries)
+    "FBgn0013686", # Dmel mtrRNA
+    "FBgn0013688",  # Dmel mtrRNA
+
+    # # 2S rRNA genes (all 30 bp)
+    "FBgn0267496",   # 2SrRNA:CR45836
+    "FBgn0267500",   # 2SrRNA:CR45840
+    "FBgn0267503",   # 2SrRNA:CR45843
+    "FBgn0085765",   # 2SrRNA-Psi:CR40677
+    "FBgn0267518",   # 2SrRNA-Psi:CR45858
+    "FBgn0267524",   # 2SrRNA:CR45864
+
+    # # 5.8S rRNA genes (all 123 bp)
+    "FBgn0267509",  # 5.8SrRNA-Psi:CR45849
+    "FBgn0267499",  # 5.8SrRNA:CR45839
+    "FBgn0267502",  # 5.8SrRNA:CR45842
+    "FBgn0267512",  # 5.8SrRNA:CR45852
+    "FBgn0267517",  # 5.8SrRNA-Psi:CR45857
+    "FBgn0267523",  # 5.8SrRNA-Psi:CR45863
+    "FBgn0250731",  # 5.8SrRNA:CR40454
+    "FBgn0267514",  # 5.8SrRNA-Psi:CR45854
+    # # 18S rRNA genes 
+    "FBgn0085802",  # 18SrRNA:CR41548
+    "FBgn0267498",  # 18SrRNA:CR45838
+    "FBgn0267501",  # 18SrRNA:CR45841
+    "FBgn0267521",  # 18SrRNA-Psi:CR45861
+    "FBgn0085813",  # 18SrRNA-Psi:CR41602 #This is the one in the dataset
+
+    # # 28S rRNA genes (variable lengths)
+    "FBgn0267504",  # 28SrRNA:CR45844
+    "FBgn0267508",  # 28SrRNA-Psi:CR45848
+    "FBgn0267511",  # 28SrRNA-Psi:CR45851
+    "FBgn0085753",  # 28SrRNA-Psi:CR40596
+    "FBgn0267497",  # 28SrRNA:CR45837
+    "FBgn0267522",  # 28SrRNA-Psi:CR45862
+    "FBgn0085771",  # 28SrRNA-Psi:CR40741
+    "FBgn0267519",  # 28SrRNA-Psi:CR45859
+    "FBgn0085819",  # 28SrRNA-Psi:CR41609
+    "FBgn0267513",  # 28SrRNA-Psi:CR45853
+    "FBgn0267520",  # 28SrRNA-Psi:CR45860
+    "FBgn0267515"   # 28SrRNA-Psi:CR45855
+]
+
 # Set global matplotlib parameters
 matplotlib.rcParams.update({
     'font.size': 6,
@@ -77,8 +126,23 @@ mito_genes = dataset.query(
 )
 mito_genes = mito_genes['Gene stable ID'].values.flatten()
 
-# density display for PCA plot
+def save_raw_rRNA_counts(adata, rRNA_genes):
+    '''
+    Annotate rRNA genes in the adata.var DataFrame.
+    '''
+    for gene_name in rRNA_genes:
+        if gene_name in adata.var_names:
+            raw_counts = adata[:, gene_name].X.toarray().flatten()
+            
+            # Store in .obs so it persists through normalization
+            adata.obs[f'{gene_name}'] = raw_counts
 
+            print(f"Saved raw counts for {gene_name} to adata.obs['{gene_name}']")
+        else:
+            print(f"Gene {gene_name} not found in adata.var_names")
+    return adata
+
+# density display for PCA plot
 def identify_doublets(adata, fig_dir):
     '''
     Doublet identification with scrublet 
@@ -480,6 +544,10 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         # Set the output directory for all scanpy objects
         # sc.settings.figdir = output_dir
         
+        # Annotate rRNA genes
+        print("\n=== Saving raw rRNA gene counts ===")
+        adata = save_raw_rRNA_counts(adata, rRNA_genes)
+
         # Store metrics at each stage
         all_metrics = []
         
