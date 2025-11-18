@@ -142,6 +142,32 @@ def save_raw_rRNA_counts(adata, rRNA_genes):
             print(f"Gene {gene_name} not found in adata.var_names")
     return adata
 
+def titer_wolbachia(adata, rRNA_genes):
+    '''
+    Calculate Wolbachia titer for each cell in the AnnData object using normalized data.
+    The titer is calculated using relative expression levels of wMel vs Dmel rRNA genes.
+    '''   
+    print("Calculating Wolbachia titer using raw rRNA counts:")
+
+    wMel_rRNA_genes = ["GQX67_00940", "GQX67_00945", "GQX67_05945"]
+    wMel_genes_present = [g for g in wMel_rRNA_genes if g in adata.var_names]
+    if wMel_genes_present:
+        wMel_total = adata[:, wMel_genes_present].X.toarray().sum(axis=1)
+    
+    rRNA_genes_present = [g for g in rRNA_genes if g in adata.var_names]
+    if rRNA_genes_present:
+        dmel_total = adata[:, rRNA_genes_present].X.toarray().sum(axis=1)
+    
+    if rRNA_genes_present and wMel_genes_present:
+        # Avoid division by zero
+        dmel_total_safe = np.where(dmel_total == 0, 1, dmel_total)
+        titer = wMel_total / (wMel_total + dmel_total_safe)
+        
+        adata.obs['wolbachia_titer'] = titer
+        print("Wolbachia titer calculated and stored in adata.obs['wolbachia_titer']")
+    
+    return adata
+
 # density display for PCA plot
 def identify_doublets(adata, fig_dir):
     '''

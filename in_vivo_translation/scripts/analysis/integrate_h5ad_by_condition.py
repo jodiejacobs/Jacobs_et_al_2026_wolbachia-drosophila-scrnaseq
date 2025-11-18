@@ -14,8 +14,8 @@ import warnings
 
 # rRNA gene dictionaries with lengths calculated from transcripts_to_genes.txt
 wMel_rRNA={
-    # "GQX67_00940": 2772,
-    # "GQX67_00945": 107,
+    "GQX67_00940": 2772,
+    "GQX67_00945": 107,
     "GQX67_05945": 1505
 }
 
@@ -26,160 +26,161 @@ all_rRNA={
     "FBgn0013688": 786,  # Dmel mtrRNA
     
     # # 2S rRNA genes (all 30 bp)
-    # "FBgn0267496": 30,   # 2SrRNA:CR45836
-    # "FBgn0267500": 30,   # 2SrRNA:CR45840
-    # "FBgn0267503": 30,   # 2SrRNA:CR45843
-    # "FBgn0085765": 30,   # 2SrRNA-Psi:CR40677
-    # "FBgn0267518": 30,   # 2SrRNA-Psi:CR45858
-    # "FBgn0267524": 30,   # 2SrRNA:CR45864
+    "FBgn0267496": 30,   # 2SrRNA:CR45836
+    "FBgn0267500": 30,   # 2SrRNA:CR45840
+    "FBgn0267503": 30,   # 2SrRNA:CR45843
+    "FBgn0085765": 30,   # 2SrRNA-Psi:CR40677
+    "FBgn0267518": 30,   # 2SrRNA-Psi:CR45858
+    "FBgn0267524": 30,   # 2SrRNA:CR45864
     
     # # 5.8S rRNA genes (all 123 bp)
-    # "FBgn0267509": 123,  # 5.8SrRNA-Psi:CR45849
-    # "FBgn0267499": 123,  # 5.8SrRNA:CR45839
-    # "FBgn0267502": 123,  # 5.8SrRNA:CR45842
-    # "FBgn0267512": 123,  # 5.8SrRNA:CR45852
-    # "FBgn0267517": 123,  # 5.8SrRNA-Psi:CR45857
-    # "FBgn0267523": 123,  # 5.8SrRNA-Psi:CR45863
-    # "FBgn0250731": 123,  # 5.8SrRNA:CR40454
-    # "FBgn0267514": 123,  # 5.8SrRNA-Psi:CR45854
+    "FBgn0267509": 123,  # 5.8SrRNA-Psi:CR45849
+    "FBgn0267499": 123,  # 5.8SrRNA:CR45839
+    "FBgn0267502": 123,  # 5.8SrRNA:CR45842
+    "FBgn0267512": 123,  # 5.8SrRNA:CR45852
+    "FBgn0267517": 123,  # 5.8SrRNA-Psi:CR45857
+    "FBgn0267523": 123,  # 5.8SrRNA-Psi:CR45863
+    "FBgn0250731": 123,  # 5.8SrRNA:CR40454
+    "FBgn0267514": 123,  # 5.8SrRNA-Psi:CR45854
     
     # # 18S rRNA genes 
-    # "FBgn0085802": 1995, # 18SrRNA:CR41548
-    # "FBgn0267498": 1995, # 18SrRNA:CR45838
-    # "FBgn0267501": 1995, # 18SrRNA:CR45841
-    # "FBgn0267521": 1934, # 18SrRNA-Psi:CR45861
-    # "FBgn0085813": 1975, # 18SrRNA-Psi:CR41602 #This is the one in the dataset
+    "FBgn0085802": 1995, # 18SrRNA:CR41548
+    "FBgn0267498": 1995, # 18SrRNA:CR45838
+    "FBgn0267501": 1995, # 18SrRNA:CR45841
+    "FBgn0267521": 1934, # 18SrRNA-Psi:CR45861
+    "FBgn0085813": 1975, # 18SrRNA-Psi:CR41602 #This is the one in the dataset
     
     # # 28S rRNA genes (variable lengths)
-    # "FBgn0267504": 3970, # 28SrRNA:CR45844
-    # "FBgn0267508": 821,  # 28SrRNA-Psi:CR45848
-    # "FBgn0267511": 2800, # 28SrRNA-Psi:CR45851
-    # "FBgn0085753": 6005, # 28SrRNA-Psi:CR40596
-    # "FBgn0267497": 2715, # 28SrRNA:CR45837
-    # "FBgn0267522": 2004, # 28SrRNA-Psi:CR45862
-    # "FBgn0085771": 1258, # 28SrRNA-Psi:CR40741
-    # "FBgn0267519": 2689, # 28SrRNA-Psi:CR45859
-    # "FBgn0085819": 895,  # 28SrRNA-Psi:CR41609
-    # "FBgn0267513": 255,  # 28SrRNA-Psi:CR45853
-    # "FBgn0267520": 357,  # 28SrRNA-Psi:CR45860
-    # "FBgn0267515": 704   # 28SrRNA-Psi:CR45855
+    "FBgn0267504": 3970, # 28SrRNA:CR45844
+    "FBgn0267508": 821,  # 28SrRNA-Psi:CR45848
+    "FBgn0267511": 2800, # 28SrRNA-Psi:CR45851
+    "FBgn0085753": 6005, # 28SrRNA-Psi:CR40596
+    "FBgn0267497": 2715, # 28SrRNA:CR45837
+    "FBgn0267522": 2004, # 28SrRNA-Psi:CR45862
+    "FBgn0085771": 1258, # 28SrRNA-Psi:CR40741
+    "FBgn0267519": 2689, # 28SrRNA-Psi:CR45859
+    "FBgn0085819": 895,  # 28SrRNA-Psi:CR41609
+    "FBgn0267513": 255,  # 28SrRNA-Psi:CR45853
+    "FBgn0267520": 357,  # 28SrRNA-Psi:CR45860
+    "FBgn0267515": 704   # 28SrRNA-Psi:CR45855
 }
 
 # Set plotting settings
 sc.settings.set_figure_params(dpi=100, frameon=False)
 
-def calculate_wolbachia_titer(adata):
-    '''
-    Calculate Wolbachia titer for each cell in the AnnData object using normalized data.
-    The titer is calculated using relative expression levels of wMel vs Dmel rRNA genes.
-    '''
-    print("Calculating Wolbachia titer using normalized expression data...")
+# def calculate_wolbachia_titer(adata):
+#     '''
+#     Calculate Wolbachia titer for each cell in the AnnData object using normalized data.
+#     The titer is calculated using relative expression levels of wMel vs Dmel rRNA genes.
+#     '''
+#     print("Calculating Wolbachia titer using normalized expression data...")
     
-    print(f"Using {len(all_rRNA)} Dmel rRNA genes: {list(all_rRNA.keys())}")
-    print(f"Using {len(wMel_rRNA)} wMel rRNA genes: {list(wMel_rRNA.keys())}")
+#     print(f"Using {len(all_rRNA)} Dmel rRNA genes: {list(all_rRNA.keys())}")
+#     print(f"Using {len(wMel_rRNA)} wMel rRNA genes: {list(wMel_rRNA.keys())}")
     
-    # Check if we need to look in var_names or gene_ids column
-    if 'gene_ids' in adata.var.columns:
-        # Create a mapping from gene names/indices to gene_ids
-        gene_id_map = dict(zip(adata.var.index, adata.var['gene_ids']))
+#     # Check if we need to look in var_names or gene_ids column
+#     if 'gene_ids' in adata.var.columns:
+#         # Create a mapping from gene names/indices to gene_ids
+#         gene_id_map = dict(zip(adata.var.index, adata.var['gene_ids']))
         
-        # Find which genes are present in our datasets
-        wMel_genes_present = []
-        for gene_id in wMel_rRNA.keys():
-            if gene_id in adata.var['gene_ids'].values:
-                wMel_genes_present.append(gene_id)
+#         # Find which genes are present in our datasets
+#         wMel_genes_present = []
+#         for gene_id in wMel_rRNA.keys():
+#             if gene_id in adata.var['gene_ids'].values:
+#                 wMel_genes_present.append(gene_id)
                 
-        dmel_genes_present = []
-        for gene_id in all_rRNA.keys():
-            if gene_id in adata.var['gene_ids'].values:
-                dmel_genes_present.append(gene_id)
+#         dmel_genes_present = []
+#         for gene_id in all_rRNA.keys():
+#             if gene_id in adata.var['gene_ids'].values:
+#                 dmel_genes_present.append(gene_id)
         
-        # Create masks for the genes
-        wMel_mask = [gene_id_map.get(idx) in wMel_genes_present for idx in adata.var.index]
-        dmel_mask = [gene_id_map.get(idx) in dmel_genes_present for idx in adata.var.index]
-    else:
-        # Use original approach with var_names
-        wMel_genes_present = [gene for gene in wMel_rRNA.keys() if gene in adata.var_names]
-        dmel_genes_present = [gene for gene in all_rRNA.keys() if gene in adata.var_names]
+#         # Create masks for the genes
+#         wMel_mask = [gene_id_map.get(idx) in wMel_genes_present for idx in adata.var.index]
+#         dmel_mask = [gene_id_map.get(idx) in dmel_genes_present for idx in adata.var.index]
+
+#     else:
+#         # Use original approach with var_names
+#         wMel_genes_present = [gene for gene in wMel_rRNA.keys() if gene in adata.var_names]
+#         dmel_genes_present = [gene for gene in all_rRNA.keys() if gene in adata.var_names]
         
-        # Create masks based on var_names
-        wMel_mask = [gene in wMel_genes_present for gene in adata.var_names]
-        dmel_mask = [gene in dmel_genes_present for gene in adata.var_names]
+#         # Create masks based on var_names
+#         wMel_mask = [gene in wMel_genes_present for gene in adata.var_names]
+#         dmel_mask = [gene in dmel_genes_present for gene in adata.var_names]
     
-    print(f"Found {len(wMel_genes_present)} wMel rRNA genes and {len(dmel_genes_present)} Dmel rRNA genes in dataset")
+#     print(f"Found {len(wMel_genes_present)} wMel rRNA genes and {len(dmel_genes_present)} Dmel rRNA genes in dataset")
     
-    # Get gene indices from the masks
-    wMel_indices = np.where(wMel_mask)[0]
-    dmel_indices = np.where(dmel_mask)[0]
+#     # Get gene indices from the masks
+#     wMel_indices = np.where(wMel_mask)[0]
+#     dmel_indices = np.where(dmel_mask)[0]
     
-    # Convert sparse matrix to dense if necessary
-    is_sparse = scipy.sparse.issparse(adata.X)
+#     # Convert sparse matrix to dense if necessary
+#     is_sparse = scipy.sparse.issparse(adata.X)
     
-    # For normalized data, we'll use mean expression across rRNA genes
-    if len(wMel_indices) > 0:
-        if is_sparse:
-            wMel_mean_expr = np.array(adata.X[:, wMel_indices].mean(axis=1)).flatten()
-        else:
-            wMel_mean_expr = np.mean(adata.X[:, wMel_indices], axis=1)
-    else:
-        wMel_mean_expr = np.full(adata.n_obs, -np.inf)  # Very low expression if no genes
-        print("Warning: No wMel rRNA genes found in dataset")
+#     # For normalized data, we'll use mean expression across rRNA genes
+#     if len(wMel_indices) > 0:
+#         if is_sparse:
+#             wMel_mean_expr = np.array(adata.X[:, wMel_indices].mean(axis=1)).flatten()
+#         else:
+#             wMel_mean_expr = np.mean(adata.X[:, wMel_indices], axis=1)
+#     else:
+#         wMel_mean_expr = np.full(adata.n_obs, -np.inf)  # Very low expression if no genes
+#         print("Warning: No wMel rRNA genes found in dataset")
     
-    if len(dmel_indices) > 0:
-        if is_sparse:
-            dmel_mean_expr = np.array(adata.X[:, dmel_indices].mean(axis=1)).flatten()
-        else:
-            dmel_mean_expr = np.mean(adata.X[:, dmel_indices], axis=1)
-    else:
-        dmel_mean_expr = np.full(adata.n_obs, -np.inf)  # Very low expression if no genes
-        print("Warning: No Dmel rRNA genes found in dataset")
+#     if len(dmel_indices) > 0:
+#         if is_sparse:
+#             dmel_mean_expr = np.array(adata.X[:, dmel_indices].mean(axis=1)).flatten()
+#         else:
+#             dmel_mean_expr = np.mean(adata.X[:, dmel_indices], axis=1)
+#     else:
+#         dmel_mean_expr = np.full(adata.n_obs, -np.inf)  # Very low expression if no genes
+#         print("Warning: No Dmel rRNA genes found in dataset")
     
-    # Convert normalized expression to relative expression (softmax-like approach)
-    # Add small constant to avoid issues with negative values
-    min_expr = min(wMel_mean_expr.min(), dmel_mean_expr.min()) - 1
-    wMel_shifted = wMel_mean_expr - min_expr
-    dmel_shifted = dmel_mean_expr - min_expr
+#     # Convert normalized expression to relative expression (softmax-like approach)
+#     # Add small constant to avoid issues with negative values
+#     min_expr = min(wMel_mean_expr.min(), dmel_mean_expr.min()) - 1
+#     wMel_shifted = wMel_mean_expr - min_expr
+#     dmel_shifted = dmel_mean_expr - min_expr
     
-    # Calculate titer using shifted values
-    # Only use NA if both expressions are very low (below -2 in normalized space)
-    very_low_threshold = -2.0
-    has_detectable_rRNA = (wMel_mean_expr > very_low_threshold) | (dmel_mean_expr > very_low_threshold)
+#     # Calculate titer using shifted values
+#     # Only use NA if both expressions are very low (below -2 in normalized space)
+#     very_low_threshold = -2.0
+#     has_detectable_rRNA = (wMel_mean_expr > very_low_threshold) | (dmel_mean_expr > very_low_threshold)
     
-    titer = np.full(adata.n_obs, np.nan)
+#     titer = np.full(adata.n_obs, np.nan)
     
-    if np.any(has_detectable_rRNA):
-        # For cells with detectable rRNA, calculate relative expression titer
-        total_shifted = wMel_shifted + dmel_shifted
-        titer[has_detectable_rRNA] = np.where(
-            total_shifted[has_detectable_rRNA] > 0,
-            wMel_shifted[has_detectable_rRNA] / total_shifted[has_detectable_rRNA],
-            np.nan
-        )
+#     if np.any(has_detectable_rRNA):
+#         # For cells with detectable rRNA, calculate relative expression titer
+#         total_shifted = wMel_shifted + dmel_shifted
+#         titer[has_detectable_rRNA] = np.where(
+#             total_shifted[has_detectable_rRNA] > 0,
+#             wMel_shifted[has_detectable_rRNA] / total_shifted[has_detectable_rRNA],
+#             np.nan
+#         )
     
-    # Add the titer to the AnnData object
-    adata.obs['wolbachia_titer'] = titer
-    adata.obs['log1p_wolbachia_titer'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
+#     # Add the titer to the AnnData object
+#     adata.obs['wolbachia_titer'] = titer
+#     adata.obs['log1p_wolbachia_titer'] = np.log1p(np.where(np.isfinite(titer), titer, 0))
     
-    # Add raw expression values for reference
-    adata.obs['wMel_mean_expr'] = wMel_mean_expr
-    adata.obs['dmel_mean_expr'] = dmel_mean_expr
+#     # Add raw expression values for reference
+#     adata.obs['wMel_mean_expr'] = wMel_mean_expr
+#     adata.obs['dmel_mean_expr'] = dmel_mean_expr
     
-    # Alternative simpler titer: just use the difference in expression
-    # adata.obs['wolbachia_expr_diff'] = wMel_mean_expr - dmel_mean_expr
+#     # Alternative simpler titer: just use the difference in expression
+#     # adata.obs['wolbachia_expr_diff'] = wMel_mean_expr - dmel_mean_expr
     
-    # Count cells with different expression states
-    n_cells_detectable = np.sum(has_detectable_rRNA)
-    n_high_wolbachia = np.sum(wMel_mean_expr > 0)  # Above average Wolbachia
-    n_no_detection = np.sum(~has_detectable_rRNA)
+#     # Count cells with different expression states
+#     n_cells_detectable = np.sum(has_detectable_rRNA)
+#     n_high_wolbachia = np.sum(wMel_mean_expr > 0)  # Above average Wolbachia
+#     n_no_detection = np.sum(~has_detectable_rRNA)
     
-    print(f"Cells with detectable rRNA: {n_cells_detectable} out of {adata.n_obs} ({n_cells_detectable/adata.n_obs*100:.2f}%)")
-    print(f"Cells with above-average Wolbachia: {n_high_wolbachia} out of {adata.n_obs} ({n_high_wolbachia/adata.n_obs*100:.2f}%)")
-    print(f"Cells with low rRNA detection: {n_no_detection} out of {adata.n_obs} ({n_no_detection/adata.n_obs*100:.2f}%)")
+#     print(f"Cells with detectable rRNA: {n_cells_detectable} out of {adata.n_obs} ({n_cells_detectable/adata.n_obs*100:.2f}%)")
+#     print(f"Cells with above-average Wolbachia: {n_high_wolbachia} out of {adata.n_obs} ({n_high_wolbachia/adata.n_obs*100:.2f}%)")
+#     print(f"Cells with low rRNA detection: {n_no_detection} out of {adata.n_obs} ({n_no_detection/adata.n_obs*100:.2f}%)")
     
-    print(f"Wolbachia expression range: {wMel_mean_expr.min():.3f} to {wMel_mean_expr.max():.3f}")
-    print(f"Drosophila rRNA expression range: {dmel_mean_expr.min():.3f} to {dmel_mean_expr.max():.3f}")
+#     print(f"Wolbachia expression range: {wMel_mean_expr.min():.3f} to {wMel_mean_expr.max():.3f}")
+#     print(f"Drosophila rRNA expression range: {dmel_mean_expr.min():.3f} to {dmel_mean_expr.max():.3f}")
     
-    return adata
+#     return adata
 
 def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes, calculate_titer=True, n_pcs=30):
     """
@@ -202,9 +203,9 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
 
     combined = ad.concat(adatas, join='inner', merge='same', index_unique='-')
 
-    # Calculate Wolbachia titer if requested
-    if calculate_titer:
-        combined = calculate_wolbachia_titer(combined)
+    # # Calculate Wolbachia titer if requested
+    # if calculate_titer:
+    #     combined = calculate_wolbachia_titer(combined)
 
     print(f"Combined data shape for {sample}: {combined.shape}")
     print(combined)
