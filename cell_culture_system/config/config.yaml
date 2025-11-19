@@ -38,10 +38,10 @@ combine_partition: "medium"  # SLURM partition for combine jobs
 
 # Compute resources for filter
 filter_threads: 128
-filter_cpus: 4
-filter_mem: 32000  # MB
-filter_time: "4:00:00"  # HH:MM:SS
-filter_partition: "medium"  # SLURM partition for filter jobs
+filter_cpus: 16
+filter_mem: 64000  # MB
+filter_time: "1:00:00"  # HH:MM:SS
+filter_partition: "short"  # SLURM partition for filter jobs
 
 # Compute resources for cell cycle
 cell_cycle_threads: 64           # Instead of 128
@@ -55,7 +55,6 @@ rRNA_regions: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
 extract_gene_script: "../snakemake_scripts/filter_bus_by_gene.py"
 ref_fasta: "../reference/rRNA/rRNA_reference_Dmel_wMel.fasta"
 ref_bed: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
-blast_db: "16S_ribosomal_RNA_plus_wolbachia"
 plot_coverage_script: "../snakemake_scripts/plot_coverage.py"
 plot_blast_script: "../snakemake_scripts/plot_blast_pie_charts.py"
 min_blast_reads: 100
