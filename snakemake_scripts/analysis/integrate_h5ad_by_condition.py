@@ -48,10 +48,6 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
 
     combined = combined[:, ~bacteria_mask]
 
-    # Add log1P_wolbachia_titer if wolbachia_titer exists
-    if 'wolbachia_titer' in combined.obs.columns:
-        combined.obs['log1p_wolbachia_titer'] = np.log1p(combined.obs['wolbachia_titer'].astype(float))
-
     # Basic preprocessing
     print("Performing basic preprocessing...")
     combined.X = np.nan_to_num(combined.X, nan=0.0)  # Replace NaN with 0
@@ -96,7 +92,7 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     
     # If wolbachia_titer exists, plot it too
     if 'wolbachia_titer' in combined.obs.columns:
-        sc.pl.umap(combined, color='wolbachia_titer', vmin=0.0, vmax=0.20, save=f'_{sample}_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample}_bbknn_titer.pdf')
         sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample}_log1p_bbknn_titer.pdf')
         
         # Create a violin plot of titer by batch

@@ -9,11 +9,11 @@ cyclum_env: '/private/home/jomojaco/miniforge3/envs/cyclum'
 
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
-combine_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/analysis/integrate_h5ad_by_condition.py" 
-kallisto_index: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
-filter_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/filtering/kallisto_bustools_qcfilter_adata.py"
-cell_cycle_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/analysis/cyclum_cell_cycle.py"
-transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
+combine_script: "../snakemake_scripts/analysis/integrate_h5ad_by_condition.py" 
+kallisto_index: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
+filter_script: "../snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata.py"
+cell_cycle_script: "../snakemake_scripts/analysis/cyclum_cell_cycle.py"
+transcripts_to_genes: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
 
 # Compute resources for cellranger 
 cellranger_threads: 16
@@ -51,11 +51,12 @@ cell_cycle_partition: "medium"  # More reliable than short
 
 # Extract 16S reads
 target_gene: "GQX67_05945"
-extract_gene_script: "scripts/filter_bus_by_gene.py"
-ref_fasta: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/rRNA/rRNA_reference_Dmel_wMel.fasta"
-ref_bed: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/rRNA/Dmel_wMel_rRNA.gene.bed"
+rRNA_regions: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
+extract_gene_script: "../snakemake_scripts/filter_bus_by_gene.py"
+ref_fasta: "../reference/rRNA/rRNA_reference_Dmel_wMel.fasta"
+ref_bed: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
 blast_db: "16S_ribosomal_RNA_plus_wolbachia"
-plot_coverage_script: "scripts/plot_coverage.py"
-plot_blast_script: "scripts/plot_blast_pie_charts.py"
+plot_coverage_script: "../snakemake_scripts/plot_coverage.py"
+plot_blast_script: "../snakemake_scripts/plot_blast_pie_charts.py"
 min_blast_reads: 100
-blast_db: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/blast_db/16S_ribosomal_RNA_plus_wolbachia"
+blast_db: "../blast_db/16S_ribosomal_RNA_plus_wolbachia"

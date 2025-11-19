@@ -149,7 +149,7 @@ def titer_wolbachia(adata, rRNA_genes):
     '''   
     print("Calculating Wolbachia titer using raw rRNA counts:")
 
-    wMel_rRNA_genes = ["GQX67_05945"] # Removed "GQX67_00940", "GQX67_00945",
+    wMel_rRNA_genes = ["GQX67_00940", "GQX67_00945", "GQX67_05945"]
     wMel_genes_present = [g for g in wMel_rRNA_genes if g in adata.var_names]
     if wMel_genes_present:
         wMel_total = adata[:, wMel_genes_present].X.toarray().sum(axis=1)
