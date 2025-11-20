@@ -51,11 +51,11 @@ cell_cycle_partition: "medium"  # More reliable than short
 
 # Extract 16S reads
 target_gene: "GQX67_05945"
-rRNA_regions: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
+rRNA_regions: "../reference/rRNA/rRNA_regions.bed"
 extract_gene_script: "../snakemake_scripts/filter_bus_by_gene.py"
 ref_fasta: "../reference/rRNA/rRNA_reference_Dmel_wMel.fasta"
 ref_bed: "../reference/rRNA/Dmel_wMel_rRNA.gene.bed"
-plot_coverage_script: "../snakemake_scripts/plot_coverage.py"
-plot_blast_script: "../snakemake_scripts/plot_blast_pie_charts.py"
+plot_coverage_script: "../snakemake_scripts/rRNA_analysis/plot_coverage.py"
+plot_blast_script: "../snakemake_scripts/rRNA_analysis/plot_blast_pie_charts.py"
 min_blast_reads: 100
 blast_db: "../blast_db/16S_ribosomal_RNA_plus_wolbachia"
