@@ -6,3 +6,10 @@ cell_culture_system/logs/
 cell_culture_system/results_v0/
 in_vivo_translation/results/
 in_vivo_translation/logs/
+*.bam
+*.bam.bai
+*.sam
+*.cram
+*.crai
+*.fastq.gz
+*.fq.gz
