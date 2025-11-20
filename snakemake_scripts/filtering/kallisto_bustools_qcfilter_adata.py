@@ -9,6 +9,7 @@ import anndata as ad
 import pandas as pd
 import numpy as np
 import scrublet as scr
+import scipy.sparse
 from scipy.io import mmread
 from scipy.interpolate import interpn
 from sklearn.decomposition import TruncatedSVD
@@ -132,7 +133,14 @@ def save_raw_rRNA_counts(adata, rRNA_genes):
     '''
     for gene_name in rRNA_genes:
         if gene_name in adata.var_names:
-            raw_counts = adata[:, gene_name].X.toarray().flatten()
+            # Get the gene index
+            gene_idx = adata.var_names.get_loc(gene_name)
+            
+            # Extract directly as 1D array without creating intermediate dense matrix
+            if scipy.sparse.issparse(adata.X):
+                raw_counts = adata.X[:, gene_idx].toarray().flatten()
+            else:
+                raw_counts = adata.X[:, gene_idx].flatten()
             
             # Store in .obs so it persists through normalization
             adata.obs[f'{gene_name}'] = raw_counts
@@ -149,14 +157,31 @@ def titer_wolbachia(adata, rRNA_genes):
     '''   
     print("Calculating Wolbachia titer using raw rRNA counts:")
 
-    wMel_rRNA_genes = ["GQX67_00940", "GQX67_00945", "GQX67_05945"]
+    wMel_rRNA_genes = ["GQX67_05945"] # Removed "GQX67_00940", "GQX67_00945",
     wMel_genes_present = [g for g in wMel_rRNA_genes if g in adata.var_names]
-    if wMel_genes_present:
-        wMel_total = adata[:, wMel_genes_present].X.toarray().sum(axis=1)
     
+    # Initialize arrays
+    wMel_total = np.zeros(adata.n_obs)
+    dmel_total = np.zeros(adata.n_obs)
+    
+    # Sum wMel genes one at a time to avoid large intermediate matrix
+    if wMel_genes_present:
+        for gene in wMel_genes_present:
+            gene_idx = adata.var_names.get_loc(gene)
+            if scipy.sparse.issparse(adata.X):
+                wMel_total += adata.X[:, gene_idx].toarray().flatten()
+            else:
+                wMel_total += adata.X[:, gene_idx].flatten()
+    
+    # Sum Dmel rRNA genes one at a time
     rRNA_genes_present = [g for g in rRNA_genes if g in adata.var_names]
     if rRNA_genes_present:
-        dmel_total = adata[:, rRNA_genes_present].X.toarray().sum(axis=1)
+        for gene in rRNA_genes_present:
+            gene_idx = adata.var_names.get_loc(gene)
+            if scipy.sparse.issparse(adata.X):
+                dmel_total += adata.X[:, gene_idx].toarray().flatten()
+            else:
+                dmel_total += adata.X[:, gene_idx].flatten()
     
     if rRNA_genes_present and wMel_genes_present:
         # Avoid division by zero

@@ -11,6 +11,7 @@ import anndata as ad
 import bbknn
 import harmonypy
 import warnings
+import seaborn as sns
 
 # Set plotting settings
 sc.settings.set_figure_params(dpi=100, frameon=False)
@@ -47,6 +48,10 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     bacteria_mask = combined.var_names.isin(bacteria_genes)
 
     combined = combined[:, ~bacteria_mask]
+
+    # Add log1P_wolbachia_titer if wolbachia_titer exists
+    if 'wolbachia_titer' in combined.obs.columns:
+        combined.obs['log1p_wolbachia_titer'] = np.log1p(combined.obs['wolbachia_titer'].astype(float))
 
     # Basic preprocessing
     print("Performing basic preprocessing...")
@@ -92,7 +97,7 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     
     # If wolbachia_titer exists, plot it too
     if 'wolbachia_titer' in combined.obs.columns:
-        sc.pl.umap(combined, color='wolbachia_titer', save=f'_{sample}_bbknn_titer.pdf')
+        sc.pl.umap(combined, color='wolbachia_titer', vmin=0.0, vmax=0.50, save=f'_{sample}_bbknn_titer.pdf')
         sc.pl.umap(combined, color='log1p_wolbachia_titer', save=f'_{sample}_log1p_bbknn_titer.pdf')
         
         # Create a violin plot of titer by batch
@@ -100,6 +105,35 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
         
         # Create a violin plot of titer by cluster
         sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample}_wolbachia_titer_by_cluster.pdf')
+
+        # Create a box plot of titer by cluster with individual points
+        fig, ax = plt.subplots(figsize=(12, 6))
+    
+        # Prepare data
+        plot_data = combined.obs[['leiden', 'wolbachia_titer']].copy()
+        plot_data = plot_data.sort_values('leiden')
+        
+        # Plot individual points first (so they appear under the boxes)
+        sns.stripplot(data=plot_data, x='leiden', y='wolbachia_titer', 
+                    color='black', alpha=0.3, size=2, ax=ax)
+        
+        # Plot translucent box plot on top
+        box_parts = ax.boxplot([plot_data[plot_data['leiden'] == cluster]['wolbachia_titer'].values 
+                                for cluster in sorted(plot_data['leiden'].unique())],
+                                positions=range(len(plot_data['leiden'].unique())),
+                                widths=0.6,
+                                patch_artist=True,
+                                boxprops=dict(facecolor='lightblue', alpha=0.5),
+                                whiskerprops=dict(alpha=0.7),
+                                capprops=dict(alpha=0.7),
+                                medianprops=dict(color='red', linewidth=2))
+        
+        ax.set_xlabel('Leiden Cluster')
+        ax.set_ylabel('Wolbachia Titer')
+        ax.set_xticklabels(sorted(plot_data['leiden'].unique()))
+        plt.tight_layout()
+        plt.savefig(f'results/combined/{sample}/boxplot_{sample}_wolbachia_titer_by_cluster.pdf', bbox_inches='tight')
+        plt.close()
     
     print(f"Integration complete for sample type {sample}!")
     

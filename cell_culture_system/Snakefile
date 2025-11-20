@@ -348,19 +348,17 @@ rule combine_files_by_condition_platform:
 #         echo "R2: $(zcat {output.filtered_r2} | wc -l | awk '{{print $1/4}}') reads"
 #         """
 
-
-# Rule 1: Align extracted gene reads to rRNA reference with BWA
-rule align_gene_reads:
+# Rule 1a: Align ALL reads to reference once
+rule align_all_reads:
     input:
-        # r1 = "results/gene_extracted/{sample_id}/{gene}_R1.fastq.gz",
         r2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
         ref = config["ref_fasta"],
         regions = config["rRNA_regions"]
     output:
-        bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
-        bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
+        bam = "results/rRNA_analysis/alignment/{sample_id}/all_rRNA_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/all_rRNA_aligned.bam.bai"
     log:
-        "logs/align_gene/{sample_id}_{gene}.log"
+        "logs/align_all/{sample_id}.log"
     threads: 8
     resources:
         slurm_partition = "medium",
@@ -368,26 +366,66 @@ rule align_gene_reads:
         slurm_time = "2:00:00"
     shell:
         """
-        # exec > {log} 2>&1
-        echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
+        exec > {log} 2>&1
+        echo "Starting BWA alignment for {wildcards.sample_id}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate sra-tools
 
-        # Make the directory
         mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
         
-        # Align with BWA MEM, convert to BAM, sort, and filter for regions
+        # Align with BWA MEM, convert to BAM, sort, and filter for all rRNA regions
         bwa mem -t {threads} {input.ref} {input.r2} | \
             samtools view -Sb | \
             samtools sort -@ {threads} | \
             samtools view -b -L {input.regions} -o {output.bam}
         
-        # Index the BAM file
         samtools index {output.bam}
         
-        echo "Alignment complete for {wildcards.sample_id} - {wildcards.gene}"
-        echo "Filtered to $(samtools view -c {output.bam}) reads in target regions"
+        echo "Alignment complete for {wildcards.sample_id}"
+        echo "Filtered to $(samtools view -c {output.bam}) reads in rRNA regions"
+        """
+
+# Rule 1b: Extract gene-specific BAM from the full rRNA BAM
+rule extract_gene_bam:
+    input:
+        bam = "results/rRNA_analysis/alignment/{sample_id}/all_rRNA_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/all_rRNA_aligned.bam.bai",
+        regions = config["rRNA_regions"]
+    output:
+        bam = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        bai = "results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam.bai"
+    log:
+        "logs/extract_gene/{sample_id}_{gene}.log"
+    threads: 2
+    resources:
+        slurm_partition = "medium",
+        mem_mb = 4000,
+        slurm_time = "30:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Extracting {wildcards.gene} from {wildcards.sample_id}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+        
+        # Create gene-specific BED file
+        grep -w {wildcards.gene} {input.regions} > /tmp/{wildcards.sample_id}_{wildcards.gene}_region.bed
+        
+        # Check if gene was found
+        if [ ! -s /tmp/{wildcards.sample_id}_{wildcards.gene}_region.bed ]; then
+            echo "ERROR: Gene {wildcards.gene} not found in regions file"
+            exit 1
+        fi
+        
+        # Extract reads for this gene
+        samtools view -b -L /tmp/{wildcards.sample_id}_{wildcards.gene}_region.bed {input.bam} -o {output.bam}
+        samtools index {output.bam}
+        
+        rm /tmp/{wildcards.sample_id}_{wildcards.gene}_region.bed
+        
+        echo "Extracted $(samtools view -c {output.bam}) reads for {wildcards.gene}"
         """
 
 # Rule 2: Calculate coverage depth
