@@ -106,31 +106,45 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
         # Create a violin plot of titer by cluster
         sc.pl.violin(combined, 'wolbachia_titer', groupby='leiden', save=f'_{sample}_wolbachia_titer_by_cluster.pdf')
 
+        # Get the leiden cluster colors from scanpy
+        if 'leiden_colors' in combined.uns:
+            leiden_colors = combined.uns['leiden_colors']
+        else:
+            # If colors haven't been set, generate them (scanpy will do this automatically)
+            n_clusters = len(combined.obs['leiden'].unique())
+            leiden_colors = plt.cm.tab20(range(n_clusters))
+        
         # Create a box plot of titer by cluster with individual points
         fig, ax = plt.subplots(figsize=(12, 6))
-    
+
         # Prepare data
         plot_data = combined.obs[['leiden', 'wolbachia_titer']].copy()
         plot_data = plot_data.sort_values('leiden')
+        
+        clusters = sorted(plot_data['leiden'].unique())
         
         # Plot individual points first (so they appear under the boxes)
         sns.stripplot(data=plot_data, x='leiden', y='wolbachia_titer', 
                     color='black', alpha=0.3, size=2, ax=ax)
         
-        # Plot translucent box plot on top
+        # Plot box plot with leiden colors
         box_parts = ax.boxplot([plot_data[plot_data['leiden'] == cluster]['wolbachia_titer'].values 
-                                for cluster in sorted(plot_data['leiden'].unique())],
-                                positions=range(len(plot_data['leiden'].unique())),
+                                for cluster in clusters],
+                                positions=range(len(clusters)),
                                 widths=0.6,
                                 patch_artist=True,
-                                boxprops=dict(facecolor='lightblue', alpha=0.5),
                                 whiskerprops=dict(alpha=0.7),
                                 capprops=dict(alpha=0.7),
-                                medianprops=dict(color='red', linewidth=2))
+                                medianprops=dict(color='black', linewidth=2))
+        
+        # Color each box with its corresponding leiden color
+        for patch, color in zip(box_parts['boxes'], leiden_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
         
         ax.set_xlabel('Leiden Cluster')
         ax.set_ylabel('Wolbachia Titer')
-        ax.set_xticklabels(sorted(plot_data['leiden'].unique()))
+        ax.set_xticklabels(clusters)
         plt.tight_layout()
         plt.savefig(f'results/combined/{sample}/boxplot_{sample}_wolbachia_titer_by_cluster.pdf', bbox_inches='tight')
         plt.close()
