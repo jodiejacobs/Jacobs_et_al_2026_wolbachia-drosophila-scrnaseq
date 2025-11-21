@@ -261,11 +261,9 @@ rule combine_files_by_condition_platform:
         python {params.combine_script} --files {input.input_files} --out_path {output.combined} --fig_dir {params.fig_dir} --sample {params.sample} --batch_key batch --min_cells 3 --min_genes 200
         """
 
-
 ##################################################################
 # rRNA analysis rules
 ##################################################################
-
 # Rule 1: Align extracted gene reads to rRNA reference with BWA
 rule align_gene_reads:
     input:
