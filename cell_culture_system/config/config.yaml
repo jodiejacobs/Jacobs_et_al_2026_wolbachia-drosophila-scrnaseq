@@ -40,13 +40,13 @@ combine_partition: "medium"  # SLURM partition for combine jobs
 filter_threads: 16
 filter_cpus: 4
 filter_mem: 1000000  # MB
-filter_time: "24:00:00"  # HH:MM:SS
+filter_time: "48:00:00"  # HH:MM:SS
 filter_partition: "long"  # SLURM partition for filter jobs
 
 # Compute resources for cell cycle
 cell_cycle_threads: 64           # Instead of 128
 cell_cycle_mem: 128000           # Instead of 32000  
-cell_cycle_time: "12:00:00"     # More time
+cell_cycle_time: "06:00:00"     # More time
 cell_cycle_partition: "medium"  
 
 # Extract 16S reads
