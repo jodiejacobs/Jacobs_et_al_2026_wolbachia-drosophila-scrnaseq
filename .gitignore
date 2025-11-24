@@ -13,3 +13,4 @@ in_vivo_translation/logs/
 *.crai
 *.fastq.gz
 *.fq.gz
+reference/fbgn_annotation_ID_fb_2025_04.tsv.gz
