@@ -55,9 +55,9 @@ rRNA_genes=[
     "GQX67_00945",
     "GQX67_05945",
 
-    # Mitochondrial rRNAs (keeping your original entries)
-    "FBgn0013686", # Dmel mtrRNA
-    "FBgn0013688",  # Dmel mtrRNA
+    # # Mitochondrial rRNAs (don't count these, since Wolbachia can alter the mtDNA copy number)
+    # "FBgn0013686", # Dmel mtrRNA
+    # "FBgn0013688",  # Dmel mtrRNA
 
     # # 2S rRNA genes (all 30 bp)
     "FBgn0267496",   # 2SrRNA:CR45836
@@ -81,7 +81,7 @@ rRNA_genes=[
     "FBgn0267498",  # 18SrRNA:CR45838
     "FBgn0267501",  # 18SrRNA:CR45841
     "FBgn0267521",  # 18SrRNA-Psi:CR45861
-    "FBgn0085813",  # 18SrRNA-Psi:CR41602 #This is the one in the dataset
+    "FBgn0085813",  # 18SrRNA-Psi:CR41602 
 
     # # 28S rRNA genes (variable lengths)
     "FBgn0267504",  # 28SrRNA:CR45844
@@ -190,6 +190,50 @@ def titer_wolbachia(adata, rRNA_genes):
         
         adata.obs['wolbachia_titer'] = titer
         print("Wolbachia titer calculated and stored in adata.obs['wolbachia_titer']")
+    
+    return adata
+
+def calculate_wolbachia_titer(adata, rRNA_genes):
+    '''
+    Calculate Wolbachia titer for each cell without storing intermediate rRNA counts.
+    The titer is calculated using relative expression levels of wMel vs Dmel rRNA genes.
+    '''   
+    print("Calculating Wolbachia titer using raw rRNA counts:")
+
+    wMel_rRNA_genes = ["GQX67_05945"]
+    
+    # Initialize arrays
+    wMel_total = np.zeros(adata.n_obs)
+    dmel_total = np.zeros(adata.n_obs)
+    
+    # Sum wMel genes efficiently
+    for gene in wMel_rRNA_genes:
+        if gene in adata.var_names:
+            gene_idx = adata.var_names.get_loc(gene)
+            if scipy.sparse.issparse(adata.X):
+                wMel_total += adata.X[:, gene_idx].toarray().flatten()
+            else:
+                wMel_total += adata.X[:, gene_idx].flatten()
+    
+    # Sum Dmel rRNA genes efficiently
+    for gene in rRNA_genes:
+        if gene in adata.var_names:
+            gene_idx = adata.var_names.get_loc(gene)
+            if scipy.sparse.issparse(adata.X):
+                dmel_total += adata.X[:, gene_idx].toarray().flatten()
+            else:
+                dmel_total += adata.X[:, gene_idx].flatten()
+    
+    # Calculate titer
+    dmel_total_safe = np.where(dmel_total == 0, 1, dmel_total)
+    titer = wMel_total / (wMel_total + dmel_total_safe)
+    
+    adata.obs['wolbachia_titer'] = titer
+    print(f"Wolbachia titer calculated - Mean: {titer.mean():.4f}, Median: {np.median(titer):.4f}")
+    
+    # Clean up
+    del wMel_total, dmel_total, dmel_total_safe
+    gc.collect()
     
     return adata
 
@@ -593,11 +637,13 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         # Set the output directory for all scanpy objects
         # sc.settings.figdir = output_dir
         
-        # Annotate rRNA genes
-        print("\n=== Saving raw rRNA gene counts ===")
-        adata = save_raw_rRNA_counts(adata, rRNA_genes)
-        adata = titer_wolbachia(adata, rRNA_genes)
-
+        # # Annotate rRNA genes
+        # print("\n=== Saving raw rRNA gene counts ===")
+        # adata = save_raw_rRNA_counts(adata, rRNA_genes)
+        # adata = titer_wolbachia(adata, rRNA_genes)
+        print("\n=== Calculating Wolbachia titer ===")
+        adata = calculate_wolbachia_titer(adata, rRNA_genes)
+        
         print(adata)
  
         # Store metrics at each stage

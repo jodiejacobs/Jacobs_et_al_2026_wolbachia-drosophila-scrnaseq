@@ -40,7 +40,7 @@ combine_partition: "medium"  # SLURM partition for combine jobs
 filter_threads: 64
 filter_cpus: 4
 filter_mem: 1000000  # MB
-filter_time: "24:00:00"  # HH:MM:SS
+filter_time: "96:00:00"  # HH:MM:SS
 filter_partition: "long"  # SLURM partition for filter jobs
 
 # Compute resources for cell cycle
