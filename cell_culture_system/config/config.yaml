@@ -37,8 +37,8 @@ combine_time: "2:00:00"  # HH:MM:SS
 combine_partition: "medium"  # SLURM partition for combine jobs
 
 # Compute resources for filter
-filter_threads: 64
-filter_cpus: 4
+filter_threads: 128
+filter_cpus: 16
 filter_mem: 1000000  # MB
 filter_time: "96:00:00"  # HH:MM:SS
 filter_partition: "long"  # SLURM partition for filter jobs
