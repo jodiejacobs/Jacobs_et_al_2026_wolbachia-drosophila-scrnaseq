@@ -18,14 +18,35 @@ samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" els
 # Change index format to use hyphen between condition and replicate
 samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
 
+# Get actual sample IDs that exist
+SAMPLE_IDS = samples_df.index.tolist()
+
 CONDITIONS = samples_df[0].unique().tolist()
 REPLICATES = samples_df[2].unique().tolist() 
-PLATFORMS = samples_df[1].unique().tolist()
+SEQUENCING_PLATFORMS = samples_df[1].unique().tolist()
+
+# Create a dictionary to track which condition-seq_platform combinations exist
+# and what replicates are available for each
+CONDITION_PLATFORM_REPS = {}
+for sample_id in SAMPLE_IDS:
+    condition = samples_df.loc[sample_id][0]
+    seq_platform = samples_df.loc[sample_id][1]
+    replicate = samples_df.loc[sample_id][2]
+    
+    key = (condition, seq_platform)
+    if key not in CONDITION_PLATFORM_REPS:
+        CONDITION_PLATFORM_REPS[key] = []
+    CONDITION_PLATFORM_REPS[key].append(replicate)
+
+# Get list of condition-seq_platform combinations that actually exist
+CONDITION_PLATFORM_COMBOS = list(CONDITION_PLATFORM_REPS.keys())
 
 # Sample lookup by sample name; samples_df.loc['sample_name'][3] gives the R1 path
 print(f"Conditions: {CONDITIONS}")
 print(f"Replicates: {REPLICATES}")
-print(f"Platforms: {PLATFORMS}")
+print(f"Sequencing Platforms: {SEQUENCING_PLATFORMS}")
+print(f"Sample IDs: {SAMPLE_IDS}")
+print(f"Condition-Platform combinations: {CONDITION_PLATFORM_COMBOS}")
 
 # Helper function to get fastq files for a sample
 def get_fastq_files(sample_id):
@@ -35,29 +56,38 @@ def get_fastq_files(sample_id):
     r2_path = sample_info[4]  # R2 path is in column 4 (0-indexed)
     return r1_path, r2_path
 
+# Helper function to get replicates for a condition-seq_platform combo
+def get_replicates_for_combo(condition, seq_platform):
+    """Get the list of replicates that exist for a given condition-seq_platform combo."""
+    key = (condition, seq_platform)
+    return CONDITION_PLATFORM_REPS.get(key, [])
+
 # Main rule that defines the final output
 rule all:
     input:
-        expand("results/combined/{condition}_{platform}.h5ad",
-               condition=CONDITIONS,
-               platform=PLATFORMS),
-        # expand("results/gene_extracted/{sample_id}/GQX67_05945_R1.fastq.gz",
-        #        sample_id=samples_df.index.tolist()),
-                expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
-               sample_id=samples_df.index.tolist(),
+        # Only create outputs for condition-seq_platform combos that exist
+        expand("results/combined/{condition}_{seq_platform}.h5ad",
+               zip,
+               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # Use actual sample IDs for rRNA analysis
+        expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+               sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"])),
         expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
-               sample_id=samples_df.index.tolist(),
+               sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"])),
         expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
-               sample_id=samples_df.index.tolist(),
+               sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"])),
-        expand("results/rRNA_analysis/plots/coverage_{condition}_{platform}",
-               condition=CONDITIONS,
-               platform=PLATFORMS),
-        expand("results/rRNA_analysis/plots/blast_{condition}_{platform}",
-               condition=CONDITIONS,
-               platform=PLATFORMS)
+        expand("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}",
+               zip,
+               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
+               zip,
+               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS])
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -236,18 +266,18 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
 
 rule combine_files_by_condition_platform:
     input:
-        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{platform}.h5ad", 
+        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{seq_platform}.h5ad", 
                                               condition=wildcards.condition, 
-                                              replicate=REPLICATES,
-                                              platform=wildcards.platform)
+                                              replicate=get_replicates_for_combo(wildcards.condition, wildcards.seq_platform),
+                                              seq_platform=wildcards.seq_platform)
     output:
-        combined = "results/combined/{condition}_{platform}.h5ad"
+        combined = "results/combined/{condition}_{seq_platform}.h5ad"
     params:
         combine_script = config["combine_script"],
-        sample = '{condition}_{platform}',  # Remove {replicate} since you're combining replicates
-        fig_dir = 'results/combined/{condition}_{platform}'  # Remove {replicate}
+        sample = '{condition}_{seq_platform}',  # Remove {replicate} since you're combining replicates
+        fig_dir = 'results/combined/{condition}_{seq_platform}'  # Remove {replicate}
     log:
-        "logs/combine/{condition}_{platform}.log"
+        "logs/combine/{condition}_{seq_platform}.log"
     threads: 
         config["combine_threads"]
     resources:
@@ -431,22 +461,22 @@ rule summarize_blast:
         echo "BLAST summarization complete"
         """
 
-# Rule 6: Plot coverage for samples grouped by condition and platform
+# Rule 6: Plot coverage for samples grouped by condition and seq_platform
 rule plot_coverage_by_group:
     input:
         coverage_files = lambda wildcards: expand(
-            "results/rRNA_analysis/coverage/{condition}-{replicate}_{platform}/{gene}_coverage.tsv",
+            "results/rRNA_analysis/coverage/{condition}-{replicate}_{seq_platform}/{gene}_coverage.tsv",
             condition=wildcards.condition,
-            replicate=REPLICATES,
-            platform=wildcards.platform,
+            replicate=get_replicates_for_combo(wildcards.condition, wildcards.seq_platform),
+            seq_platform=wildcards.seq_platform,
             gene=config.get("target_genes", ["GQX67_05945"])
         )
     output:
-        plot_dir = directory("results/rRNA_analysis/plots/coverage_{condition}_{platform}")
+        plot_dir = directory("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}")
     params:
         script = config["plot_coverage_script"]
     log:
-        "logs/plot_coverage/{condition}_{platform}.log"
+        "logs/plot_coverage/{condition}_{seq_platform}.log"
     threads: 1
     resources:
         slurm_partition = "medium",
@@ -455,7 +485,7 @@ rule plot_coverage_by_group:
     shell:
         """
         exec > {log} 2>&1
-        echo "Plotting coverage for {wildcards.condition}_{wildcards.platform}"
+        echo "Plotting coverage for {wildcards.condition}_{wildcards.seq_platform}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate sra-tools
@@ -471,22 +501,22 @@ rule plot_coverage_by_group:
         echo "Coverage plotting complete"
         """
 
-# Rule 7: Plot BLAST pie charts for samples grouped by condition and platform
+# Rule 7: Plot BLAST pie charts for samples grouped by condition and seq_platform
 rule plot_blast_by_group:
     input:
         blast_summaries = lambda wildcards: expand(
-            "results/rRNA_analysis/blast/{condition}-{replicate}_{platform}/{gene}.blast.summary",
+            "results/rRNA_analysis/blast/{condition}-{replicate}_{seq_platform}/{gene}.blast.summary",
             condition=wildcards.condition,
-            replicate=REPLICATES,
-            platform=wildcards.platform,
+            replicate=get_replicates_for_combo(wildcards.condition, wildcards.seq_platform),
+            seq_platform=wildcards.seq_platform,
             gene=config.get("target_genes", ["GQX67_05945"])
         )
     output:
-        plot_dir = directory("results/rRNA_analysis/plots/blast_{condition}_{platform}")
+        plot_dir = directory("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}")
     params:
         script = config["plot_blast_script"]
     log:
-        "logs/plot_blast/{condition}_{platform}.log"
+        "logs/plot_blast/{condition}_{seq_platform}.log"
     threads: 1
     resources:
         slurm_partition = "medium",
@@ -495,7 +525,7 @@ rule plot_blast_by_group:
     shell:
         """
         exec > {log} 2>&1
-        echo "Plotting BLAST results for {wildcards.condition}_{wildcards.platform}"
+        echo "Plotting BLAST results for {wildcards.condition}_{wildcards.seq_platform}"
         
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate sra-tools
