@@ -1,0 +1,120 @@
+Loading data...
+Loaded 16 filtered samples, 16 FastQC R1 records, and 16 FastQC R2 records
+Platforms found: ['10x' 'pipseq']
+
+Generating boxplot plots...
+============================================================
+SUMMARY STATISTICS FOR scRNA-seq QC METRICS BY PLATFORM
+============================================================
+
+============================================================
+PLATFORM: 10X
+============================================================
+
+1. FastQC Quality Scores (R1):
+   Mean: 39.31
+   Median: 39.32
+   Range: 39.26 - 39.36
+
+2. FastQC Quality Scores (R2):
+   Mean: 39.24
+   Median: 39.26
+   Range: 39.07 - 39.36
+
+3. Number of Cells (Filtered):
+   Mean: 26956
+   Median: 22134
+   Range: 9336.0 - 57686.0
+
+4. Genes per Cell (Median):
+   Mean: 437
+   Median: 258
+   Range: 145.0 - 1716.5
+
+5. UMIs per Cell (Median):
+   Mean: 1284
+   Median: 572
+   Range: 366.0 - 5396.5
+
+6. Total Genes (Filtered):
+   Mean: 25388
+   Median: 25388
+   Range: 25388.0 - 25388.0
+
+7. Transcriptome Coverage (Median):
+   Mean: 0.0172
+   Median: 0.0101
+   Range: 0.0057 - 0.0676
+
+8. Doublet Rate:
+   Mean: 0.2165
+   Median: 0.2685
+   Range: 0.0000 - 0.5577
+
+   N samples: 8
+
+============================================================
+PLATFORM: PIPSEQ
+============================================================
+
+1. FastQC Quality Scores (R1):
+   Mean: 32.04
+   Median: 32.10
+   Range: 31.70 - 32.30
+
+2. FastQC Quality Scores (R2):
+   Mean: 37.41
+   Median: 37.43
+   Range: 36.96 - 37.88
+
+3. Number of Cells (Filtered):
+   Mean: 1796
+   Median: 1806
+   Range: 809.0 - 2559.0
+
+4. Genes per Cell (Median):
+   Mean: 2195
+   Median: 2066
+   Range: 649.0 - 3490.0
+
+5. UMIs per Cell (Median):
+   Mean: 3533
+   Median: 3452
+   Range: 1097.0 - 5165.0
+
+6. Total Genes (Filtered):
+   Mean: 25388
+   Median: 25388
+   Range: 25388.0 - 25388.0
+
+7. Transcriptome Coverage (Median):
+   Mean: 0.0865
+   Median: 0.0814
+   Range: 0.0256 - 0.1375
+
+8. Doublet Rate:
+   Mean: 0.0087
+   Median: 0.0040
+   Range: 0.0000 - 0.0247
+
+   N samples: 8
+
+============================================================
+STATISTICAL COMPARISONS (Mann-Whitney U Test)
+============================================================
+
+Metric                          p-value      Significance
+------------------------------------------------------------
+FastQC R1                          0.0009      ***
+FastQC R2                          0.0009      ***
+Number of Cells                    0.0002      ***
+Genes per Cell                     0.0003      ***
+UMIs per Cell                      0.0148      *
+Total Genes                        1.0000      ns
+Transcriptome Coverage             0.0003      ***
+Doublet Rate                       0.3170      ns
+
+Significance levels: *** p<0.001, ** p<0.01, * p<0.05, ns = not significant
+
+Plots saved to: qc_plots/
+Analysis complete!

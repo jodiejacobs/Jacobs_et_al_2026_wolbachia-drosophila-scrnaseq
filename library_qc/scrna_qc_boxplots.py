@@ -3,8 +3,9 @@
 Script to plot scRNA-seq QC metrics as boxplots grouped by platform
 Author: Jodie Jacobs
 Date: 2026-01-29
-# Example usage:
-# python scrna_qc_boxplots.py --filtered filtered_dataset.csv --fastqc fastqc_data.csv --output qc_plots
+
+Example usage:
+python scrna_qc_boxplots.py --filtered filtered_dataset.csv --fastqc fastqc_data.csv --output qc_plots
 
 """
 
@@ -14,6 +15,7 @@ import seaborn as sns
 import numpy as np
 from pathlib import Path
 import argparse
+from scipy import stats
 
 def load_data(filtered_csv, fastqc_csv):
     """Load and preprocess the CSV files"""
@@ -60,8 +62,47 @@ def map_sample_names(sample_name):
     else:
         return clean_name
 
+def perform_statistical_test(data, metric_col):
+    """
+    Perform Mann-Whitney U test to compare two platforms
+    Returns U statistic and p-value
+    """
+    platform1_data = data[data['platform'] == '10x'][metric_col].values
+    platform2_data = data[data['platform'] == 'pipseq'][metric_col].values
+    
+    # Perform Mann-Whitney U test (non-parametric)
+    statistic, p_value = stats.mannwhitneyu(platform1_data, platform2_data, alternative='two-sided')
+    
+    return statistic, p_value
+
+def format_pvalue(p_value):
+    """Format p-value for display"""
+    if p_value < 0.001:
+        return "p < 0.001"
+    elif p_value < 0.01:
+        return f"p = {p_value:.3f}"
+    elif p_value < 0.05:
+        return f"p = {p_value:.3f}"
+    else:
+        return f"p = {p_value:.3f}"
+
+def get_significance_stars(p_value):
+    """Convert p-value to significance stars"""
+    if p_value < 0.001:
+        return "***"
+    elif p_value < 0.01:
+        return "**"
+    elif p_value < 0.05:
+        return "*"
+    else:
+        return "ns"
+
 def create_boxplot(ax, data, metric_col, ylabel, platform_colors, log_scale=False):
-    """Helper function to create a single boxplot with overlayed points"""
+    """Helper function to create a single boxplot with overlayed points and statistics"""
+    
+    # Perform statistical test
+    statistic, p_value = perform_statistical_test(data, metric_col)
+    sig_stars = get_significance_stars(p_value)
     
     # Create boxplot
     box_parts = ax.boxplot([data[data['platform'] == platform][metric_col].values 
@@ -92,18 +133,41 @@ def create_boxplot(ax, data, metric_col, ylabel, platform_colors, log_scale=Fals
                   linewidths=0.5,
                   zorder=3)
     
+    # Add significance annotation
+    y_max = data[metric_col].max()
+    y_min = data[metric_col].min()
+    y_range = y_max - y_min
+    
+    if log_scale:
+        # For log scale, work in log space
+        log_max = np.log10(y_max)
+        log_min = np.log10(y_min)
+        log_range = log_max - log_min
+        y_sig = 10 ** (log_max + 0.1 * log_range)
+    else:
+        y_sig = y_max + 0.15 * y_range
+    
+    # Draw significance bracket
+    ax.plot([0, 0, 1, 1], [y_sig, y_sig * 1.02, y_sig * 1.02, y_sig], 
+            'k-', linewidth=1)
+    ax.text(0.5, y_sig * 1.03, sig_stars, ha='center', va='bottom', fontsize=8)
+    
     # Set labels and formatting
     ax.set_xticks([0, 1])
-    ax.set_xticklabels(['10x', 'PIPseq'])
-    ax.set_ylabel(ylabel, fontsize=5)
-    ax.tick_params(axis='both', labelsize=5)
+    ax.set_xticklabels(['10x', 'PIPseq'], fontsize=8)
+    ax.set_ylabel(ylabel, fontsize=8)
+    ax.tick_params(axis='both', labelsize=8)
     
     if log_scale:
         ax.set_yscale('log')
     
-    # Remove top and right spines
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    # Show all spines (full box)
+    ax.spines['top'].set_visible(True)
+    ax.spines['right'].set_visible(True)
+    ax.spines['bottom'].set_visible(True)
+    ax.spines['left'].set_visible(True)
+    
+    return p_value
 
 def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     """Create boxplot plots for all specified metrics"""
@@ -111,11 +175,12 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     # Create output directory
     Path(output_dir).mkdir(exist_ok=True)
     
-    # Set up clean plotting style
+    # Set up clean plotting style with Arial font
     plt.style.use('default')
     plt.rcParams['figure.facecolor'] = 'white'
     plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['font.size'] = 5
+    plt.rcParams['font.family'] = 'Arial'
+    plt.rcParams['font.size'] = 8
     
     # Define colors for platforms
     platform_colors = {'10x': '#4682B4', 'pipseq': '#FF8C00'}
@@ -128,10 +193,13 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     fastqc_r1['sample_name_clean'] = fastqc_r1['SampleID'].apply(map_sample_names)
     fastqc_r2['sample_name_clean'] = fastqc_r2['SampleID'].apply(map_sample_names)
     
+    # Store p-values for summary
+    p_values = {}
+    
     # 1. Raw data quality (FastQC score R1)
     fig1, ax1 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax1, fastqc_r1, 'Mean Quality Score (PF)', 
-                   'Mean Quality Score (R1)', platform_colors)
+    p_values['FastQC R1'] = create_boxplot(ax1, fastqc_r1, 'Mean Quality Score (PF)', 
+                                           'Mean Quality Score (R1)', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/fastqc_quality_r1_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/fastqc_quality_r1_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -139,8 +207,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 2. Raw data quality (FastQC score R2)
     fig2, ax2 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax2, fastqc_r2, 'Mean Quality Score (PF)', 
-                   'Mean Quality Score (R2)', platform_colors)
+    p_values['FastQC R2'] = create_boxplot(ax2, fastqc_r2, 'Mean Quality Score (PF)', 
+                                           'Mean Quality Score (R2)', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/fastqc_quality_r2_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/fastqc_quality_r2_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -148,8 +216,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 3. Number of cells (filtered) - with log scale
     fig3, ax3 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax3, filtered_df, 'n_cells', 
-                   'Number of Cells', platform_colors, log_scale=True)
+    p_values['Number of Cells'] = create_boxplot(ax3, filtered_df, 'n_cells', 
+                                                  'Number of Cells', platform_colors, log_scale=True)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/n_cells_filtered_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/n_cells_filtered_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -157,8 +225,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 4. Genes per cell (filtered)
     fig4, ax4 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax4, filtered_df, 'genes_per_cell_median', 
-                   'Genes per Cell (Median)', platform_colors)
+    p_values['Genes per Cell'] = create_boxplot(ax4, filtered_df, 'genes_per_cell_median', 
+                                                 'Genes per Cell (Median)', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/genes_per_cell_filtered_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/genes_per_cell_filtered_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -166,8 +234,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 5. UMIs per cell (filtered)
     fig5, ax5 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax5, filtered_df, 'umis_per_cell_median', 
-                   'UMIs per Cell (Median)', platform_colors)
+    p_values['UMIs per Cell'] = create_boxplot(ax5, filtered_df, 'umis_per_cell_median', 
+                                                'UMIs per Cell (Median)', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/umis_per_cell_filtered_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/umis_per_cell_filtered_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -175,8 +243,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 6. Number of genes total (filtered)
     fig6, ax6 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax6, filtered_df, 'n_genes_total', 
-                   'Total Number of Genes', platform_colors)
+    p_values['Total Genes'] = create_boxplot(ax6, filtered_df, 'n_genes_total', 
+                                              'Total Number of Genes', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/n_genes_total_filtered_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/n_genes_total_filtered_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -184,8 +252,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 7. Transcriptome coverage (median)
     fig7, ax7 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax7, filtered_df, 'transcriptome_coverage_median', 
-                   'Transcriptome Coverage (Median)', platform_colors)
+    p_values['Transcriptome Coverage'] = create_boxplot(ax7, filtered_df, 'transcriptome_coverage_median', 
+                                                         'Transcriptome Coverage (Median)', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/transcriptome_coverage_median_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/transcriptome_coverage_median_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -193,8 +261,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # 8. Doublet rate
     fig8, ax8 = plt.subplots(figsize=fig_size)
-    create_boxplot(ax8, filtered_df, 'doublet_rate', 
-                   'Doublet Rate', platform_colors)
+    p_values['Doublet Rate'] = create_boxplot(ax8, filtered_df, 'doublet_rate', 
+                                               'Doublet Rate', platform_colors)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/doublet_rate_boxplot.svg', bbox_inches='tight')
     plt.savefig(f'{output_dir}/doublet_rate_boxplot.pdf', dpi=300, bbox_inches='tight')
@@ -202,6 +270,8 @@ def create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, output_dir="plots"):
     
     # Create combined figure with all 8 plots
     create_combined_figure(fastqc_r1, fastqc_r2, filtered_df, platform_colors, output_dir)
+    
+    return p_values
 
 def create_combined_figure(fastqc_r1, fastqc_r2, filtered_df, platform_colors, output_dir):
     """Create a combined figure with all 8 boxplots"""
@@ -234,7 +304,7 @@ def create_combined_figure(fastqc_r1, fastqc_r2, filtered_df, platform_colors, o
     plt.savefig(f'{output_dir}/combined_qc_metrics_boxplot.pdf', dpi=300, bbox_inches='tight')
     plt.close()
 
-def create_summary_stats(filtered_df, fastqc_r1, fastqc_r2):
+def create_summary_stats(filtered_df, fastqc_r1, fastqc_r2, p_values):
     """Generate summary statistics for all metrics, grouped by platform"""
     
     print("="*60)
@@ -300,6 +370,19 @@ def create_summary_stats(filtered_df, fastqc_r1, fastqc_r2):
         print(f"   Range: {filtered_plat['doublet_rate'].min():.4f} - {filtered_plat['doublet_rate'].max():.4f}")
         
         print(f"\n   N samples: {len(filtered_plat)}")
+    
+    # Print statistical test results
+    print(f"\n{'='*60}")
+    print("STATISTICAL COMPARISONS (Mann-Whitney U Test)")
+    print(f"{'='*60}")
+    print("\nMetric                          p-value      Significance")
+    print("-" * 60)
+    
+    for metric_name, p_val in p_values.items():
+        sig = get_significance_stars(p_val)
+        print(f"{metric_name:<30} {p_val:>10.4f}      {sig}")
+    
+    print("\nSignificance levels: *** p<0.001, ** p<0.01, * p<0.05, ns = not significant")
 
 def main():
     """Main function to run the analysis"""
@@ -317,15 +400,16 @@ def main():
     print("Loading data...")
     filtered_df, fastqc_r1, fastqc_r2 = load_data(args.filtered, args.fastqc)
     
-    # Generate summary statistics
-    create_summary_stats(filtered_df, fastqc_r1, fastqc_r2)
-    
-    # Create plots
+    # Create plots and get p-values
     print(f"\nGenerating boxplot plots...")
-    create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, args.output)
+    p_values = create_boxplot_plots(filtered_df, fastqc_r1, fastqc_r2, args.output)
+    
+    # Generate summary statistics with p-values
+    create_summary_stats(filtered_df, fastqc_r1, fastqc_r2, p_values)
     
     print(f"\nPlots saved to: {args.output}/")
     print("Analysis complete!")
 
 if __name__ == "__main__":
     main()
+
