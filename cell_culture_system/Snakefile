@@ -38,6 +38,17 @@ for sample_id in SAMPLE_IDS:
         CONDITION_PLATFORM_REPS[key] = []
     CONDITION_PLATFORM_REPS[key].append(replicate)
 
+# Find conditions that have BOTH 10x and pipseq data for method comparison
+CONDITIONS_WITH_BOTH_METHODS = []
+for condition in CONDITIONS:
+    has_10x = any(p == '10x' for c, p in CONDITION_PLATFORM_COMBOS if c == condition)
+    has_pipseq = any(p == 'pipseq' for c, p in CONDITION_PLATFORM_COMBOS if c == condition)
+    if has_10x and has_pipseq:
+        CONDITIONS_WITH_BOTH_METHODS.append(condition)
+
+print(f"Conditions with both methods for comparison: {CONDITIONS_WITH_BOTH_METHODS}")
+
+
 # Get list of condition-seq_platform combinations that actually exist
 CONDITION_PLATFORM_COMBOS = list(CONDITION_PLATFORM_REPS.keys())
 
@@ -87,7 +98,11 @@ rule all:
         expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
                zip,
                condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS])
+               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        expand("results/method_comparison/{condition}_comparison.h5ad",
+               condition=CONDITIONS_WITH_BOTH_METHODS),
+        expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
+               condition=CONDITIONS_WITH_BOTH_METHODS)
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -580,4 +595,50 @@ rule extract_abundant_16s:
         fi
         
         echo "Abundant sequence extraction complete"
+        """
+
+rule compare_methods:
+    input:
+        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{seq_platform}.h5ad",
+                                              condition=wildcards.condition,
+                                              replicate=[r for (c, p), reps in CONDITION_PLATFORM_REPS.items() 
+                                                        if c == wildcards.condition for r in reps],
+                                              seq_platform=['10x', 'pipseq'])
+    output:
+        integrated = "results/method_comparison/{condition}_comparison.h5ad",
+        plot = "results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf"
+    params:
+        compare_script = config["compare_script"],  # Add this to your config.yaml
+        sample = 'comparison',
+        fig_dir = 'results/method_comparison/{condition}_comparison',
+        bio_condition = '{condition}'
+    log:
+        "logs/method_comparison/{condition}.log"
+    threads:
+        config.get("compare_threads", 8)
+    resources:
+        slurm_partition = config.get("compare_partition", "medium"),
+        mem_mb = config.get("compare_mem", 32000),
+        slurm_time = config.get("compare_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting method comparison for {wildcards.condition}"
+        echo "Input files: {input.input_files}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        
+        python {params.compare_script} \
+            --files {input.input_files} \
+            --out_path {output.integrated} \
+            --fig_dir {params.fig_dir} \
+            --sample {params.sample} \
+            --bio_condition {params.bio_condition} \
+            --batch_key batch \
+            --min_cells 3 \
+            --min_genes 200 \
+            --n_pcs 30
+        
+        echo "Method comparison complete for {wildcards.condition}"
         """

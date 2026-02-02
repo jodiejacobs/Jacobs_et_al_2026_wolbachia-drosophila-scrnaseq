@@ -59,3 +59,10 @@ plot_coverage_script: "../snakemake_scripts/rRNA_analysis/plot_coverage.py"
 plot_blast_script: "../snakemake_scripts/rRNA_analysis/plot_blast_pie_charts.py"
 min_blast_reads: 100
 blast_db: "../blast_db/16S_ribosomal_RNA_plus_wolbachia"
+
+# Method comparison settings
+compare_script: "/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/validate_pipseq.py"  # Path to your modified integration script
+compare_threads: 8
+compare_partition: "medium"
+compare_mem: 32000
+compare_time: "4:00:00"
