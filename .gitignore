@@ -14,3 +14,4 @@ in_vivo_translation/logs/
 *.fastq.gz
 *.fq.gz
 reference/fbgn_annotation_ID_fb_2025_04.tsv.gz
+library_qc/qc_plots/*
