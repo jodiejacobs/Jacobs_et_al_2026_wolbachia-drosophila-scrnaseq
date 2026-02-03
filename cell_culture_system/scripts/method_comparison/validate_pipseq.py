@@ -34,18 +34,32 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
 
     # Set output directory for figures
     sc.settings.figdir = fig_dir
-
+    
+    # Concatenate all datasets
     combined = ad.concat(adatas, join='inner', merge='same', index_unique='-')
 
     # Extract metadata from sample names
     combined.obs['cell_line'] = combined.obs[batch_key].str.extract(r'(JW18DOX|JW18wMel)')[0]
     combined.obs['treatment'] = combined.obs[batch_key].str.extract(r'-(Ctrl|SV)')[0]
-    combined.obs['replicate'] = combined.obs[batch_key].str.extract(r'-(Ctrl|SV)-(\d+|D\d+)')[1]
+
+    # Extract timepoint if present (D7, D28, D56)
+    combined.obs['timepoint'] = combined.obs[batch_key].str.extract(r'-(D\d+)-')[0]
+
+    # Extract replicate - everything between treatment and method
+    # This captures: 1, 2, 3, D7-1, D7-2, D28-1, etc.
+    combined.obs['replicate'] = combined.obs[batch_key].str.extract(r'-(Ctrl|SV)-([^_]+)')[1]
+
+    # Extract method
     combined.obs['method'] = combined.obs[batch_key].str.extract(r'_(10x|pipseq)$')[0]
-    
+
     # Create biological condition column
-    combined.obs['bio_condition'] = combined.obs['cell_line'] + '-' + combined.obs['treatment']
-    
+    # Include timepoint if it exists, otherwise just cell_line-treatment
+    combined.obs['bio_condition'] = combined.obs.apply(
+        lambda row: f"{row['cell_line']}-{row['treatment']}-{row['timepoint']}" 
+                    if pd.notna(row['timepoint']) 
+                    else f"{row['cell_line']}-{row['treatment']}", 
+        axis=1
+    )    
     # Filter to specific biological condition if requested
     if bio_condition:
         print(f"Filtering to biological condition: {bio_condition}")
@@ -98,171 +112,11 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     print(f"Saving integrated object for {sample} to {out_path}")
     combined.write(out_path)
     
-    # Generate comprehensive comparison plots
-    print("Generating method comparison analysis...")
+    # Generate Ctrl-only comparison plots
+    plot_ctrl_comparison(combined, fig_dir, sample)
     
-    # 1. Side-by-side UMAPs with same coordinates
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    sc.pl.umap(combined, color='method', ax=axes[0], show=False, 
-               title='Library Prep Method', frameon=False)
-    sc.pl.umap(combined, color='leiden', ax=axes[1], show=False, 
-               title='Leiden Clusters', frameon=False, legend_loc='on data')
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f'umap_{sample}_method_overview.pdf'))
-    plt.close()
-    
-    # 2. Split UMAPs by method - same shape
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    sc.pl.umap(combined[combined.obs['method'] == '10x'], 
-               color='leiden', ax=axes[0], show=False, 
-               title='10x Genomics', frameon=False)
-    sc.pl.umap(combined[combined.obs['method'] == 'pipseq'], 
-               color='leiden', ax=axes[1], show=False, 
-               title='PIPseq', frameon=False)
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f'umap_{sample}_split_by_method.pdf'))
-    plt.close()
-    
-    # 3. Cluster composition analysis
-    cluster_comp = pd.crosstab(combined.obs['leiden'], combined.obs['method'], 
-                               normalize='index') * 100
-    
-    # Perform chi-square test for cluster distribution
-    contingency = pd.crosstab(combined.obs['leiden'], combined.obs['method'])
-    chi2, p_value, dof, expected = chi2_contingency(contingency)
-    
-    print("\n" + "="*60)
-    print("CLUSTER COMPOSITION BY METHOD")
-    print("="*60)
-    print(cluster_comp)
-    print(f"\nChi-square test: χ² = {chi2:.2f}, p = {p_value:.2e}")
-    print(f"Methods show {'SIGNIFICANT' if p_value < 0.05 else 'NO'} difference in cluster distribution")
-    
-    # Plot cluster composition as stacked bar
-    fig, ax = plt.subplots(figsize=(10, 6))
-    cluster_comp.plot(kind='bar', stacked=True, ax=ax, 
-                      color=['#1f77b4', '#ff7f0e'])
-    ax.set_xlabel('Leiden Cluster')
-    ax.set_ylabel('Percentage of cells')
-    ax.set_title(f'Cluster composition by method - {sample}')
-    ax.legend(title='Method')
-    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f'cluster_composition_{sample}.pdf'))
-    plt.close()
-    
-    # 4. Cell count comparison
-    method_counts = combined.obs.groupby(['method', 'leiden']).size().unstack(fill_value=0)
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    method_counts.T.plot(kind='bar', ax=ax, color=['#1f77b4', '#ff7f0e'])
-    ax.set_xlabel('Leiden Cluster')
-    ax.set_ylabel('Number of cells')
-    ax.set_title(f'Cell counts by method and cluster - {sample}')
-    ax.legend(title='Method')
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f'cell_counts_{sample}.pdf'))
-    plt.close()
-    
-    # 5. If multiple biological conditions, compare across them
-    if combined.obs['bio_condition'].nunique() > 1:
-        plot_condition_comparison(combined, fig_dir, sample)
-    
-    # 6. Wolbachia titer analysis
-    if 'wolbachia_titer' in combined.obs.columns:
-        print("\n" + "="*60)
-        print("WOLBACHIA TITER ANALYSIS")
-        print("="*60)
-        
-        # Titer by method
-        titer_by_method = combined.obs.groupby('method')['wolbachia_titer'].agg(['mean', 'median', 'std'])
-        print("\nTiter by method:")
-        print(titer_by_method)
-        
-        # Statistical test
-        titer_10x = combined.obs[combined.obs['method'] == '10x']['wolbachia_titer'].dropna()
-        titer_pipseq = combined.obs[combined.obs['method'] == 'pipseq']['wolbachia_titer'].dropna()
-        u_stat, p_val = mannwhitneyu(titer_10x, titer_pipseq, alternative='two-sided')
-        print(f"\nMann-Whitney U test: U = {u_stat:.2f}, p = {p_val:.2e}")
-        print(f"Titer shows {'SIGNIFICANT' if p_val < 0.05 else 'NO'} difference between methods")
-        
-        # Violin plot: titer by method
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sc.pl.violin(combined, 'wolbachia_titer', groupby='method', ax=ax, show=False)
-        ax.set_title(f'Wolbachia titer by method - {sample}')
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, f'titer_by_method_{sample}.pdf'))
-        plt.close()
-        
-        # Titer by cluster and method
-        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-        
-        # Split violin plots
-        for i, method in enumerate(['10x', 'pipseq']):
-            subset = combined[combined.obs['method'] == method]
-            sc.pl.violin(subset, 'wolbachia_titer', groupby='leiden', 
-                        ax=axes[i], show=False)
-            axes[i].set_title(f'{method} - Titer by cluster')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, f'titer_by_cluster_split_{sample}.pdf'))
-        plt.close()
-        
-        # Heatmap: mean titer by cluster and method
-        titer_heatmap = combined.obs.groupby(['leiden', 'method'])['wolbachia_titer'].mean().unstack()
-        
-        fig, ax = plt.subplots(figsize=(8, 10))
-        sns.heatmap(titer_heatmap, annot=True, fmt='.3f', cmap='viridis', ax=ax)
-        ax.set_title(f'Mean Wolbachia titer by cluster and method - {sample}')
-        ax.set_xlabel('Method')
-        ax.set_ylabel('Leiden Cluster')
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, f'titer_heatmap_{sample}.pdf'))
-        plt.close()
-        
-        # Correlation plot: titer between methods per cluster
-        titer_corr_data = []
-        for cluster in combined.obs['leiden'].unique():
-            cluster_cells = combined[combined.obs['leiden'] == cluster]
-            titer_10x = cluster_cells[cluster_cells.obs['method'] == '10x'].obs['wolbachia_titer'].mean()
-            titer_pipseq = cluster_cells[cluster_cells.obs['method'] == 'pipseq'].obs['wolbachia_titer'].mean()
-            titer_corr_data.append({'cluster': cluster, '10x': titer_10x, 'pipseq': titer_pipseq})
-        
-        titer_corr_df = pd.DataFrame(titer_corr_data)
-        
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.scatter(titer_corr_df['10x'], titer_corr_df['pipseq'], s=100, alpha=0.6)
-        for idx, row in titer_corr_df.iterrows():
-            ax.annotate(row['cluster'], (row['10x'], row['pipseq']), 
-                       xytext=(5, 5), textcoords='offset points', fontsize=8)
-        
-        # Add diagonal line
-        max_val = max(titer_corr_df['10x'].max(), titer_corr_df['pipseq'].max())
-        ax.plot([0, max_val], [0, max_val], 'r--', alpha=0.5, label='y=x')
-        
-        ax.set_xlabel('Mean titer - 10x')
-        ax.set_ylabel('Mean titer - PIPseq')
-        ax.set_title(f'Titer correlation between methods by cluster - {sample}')
-        ax.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, f'titer_correlation_{sample}.pdf'))
-        plt.close()
-        
-        # UMAP split by method with titer
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        sc.pl.umap(combined[combined.obs['method'] == '10x'], 
-                   color='wolbachia_titer', ax=axes[0], show=False, 
-                   title='10x Genomics - Wolbachia titer', frameon=False, vmax=np.percentile(combined.obs['wolbachia_titer'], 95))
-        sc.pl.umap(combined[combined.obs['method'] == 'pipseq'], 
-                   color='wolbachia_titer', ax=axes[1], show=False, 
-                   title='PIPseq - Wolbachia titer', frameon=False, vmax=np.percentile(combined.obs['wolbachia_titer'], 95))
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, f'umap_titer_split_{sample}.pdf'))
-        plt.close()
-    
-    # Standard diagnostic plots
-    sc.pl.umap(combined, color=batch_key, save=f'_{sample}_by_sample.pdf')
-    sc.pl.umap(combined, color='leiden', save=f'_{sample}_clusters.pdf')
+    # Generate full dataset analysis
+    plot_full_dataset_analysis(combined, fig_dir, sample)
     
     # Summary statistics
     print("\n" + "="*60)
@@ -281,25 +135,439 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
         print(f"\nInfected cells: {n_infected} ({n_infected/combined.n_obs*100:.2f}%)")
 
 
-def plot_condition_comparison(combined, fig_dir, sample):
-    """Additional plots when multiple biological conditions are present"""
+def plot_ctrl_comparison(combined, fig_dir, sample):
+    """Compare Ctrl samples between 10x and PIPseq methods"""
     
-    # Stacked bar: cluster composition by method and condition
+    print("\n" + "="*60)
+    print("CTRL SAMPLES - METHOD COMPARISON")
+    print("="*60)
+    
+    # Filter to only Ctrl samples
+    combined_ctrl = combined[combined.obs['treatment'] == 'Ctrl'].copy()
+    
+    if combined_ctrl.n_obs == 0:
+        print("No Ctrl samples found, skipping comparison")
+        return
+    
+    print(f"Ctrl samples: {combined_ctrl.n_obs} cells")
+    print(f"Methods in Ctrl: {combined_ctrl.obs['method'].value_counts()}")
+    
+    # Get leiden colors for consistent coloring
+    leiden_colors = []
+    clusters = sorted(combined_ctrl.obs['leiden'].unique())
+    cmap = plt.cm.get_cmap('tab20')
+    for i, cluster in enumerate(clusters):
+        leiden_colors.append(cmap(i % 20))
+    
+    # 1. UMAP colored by sample type (bio_condition)
+    sc.pl.umap(combined_ctrl, color='bio_condition', 
+               save=f'_{sample}_ctrl_by_bio_condition.pdf',
+               title='Ctrl samples by biological condition')
+    
+    # 2. UMAP by titer
+    if 'wolbachia_titer' in combined_ctrl.obs.columns:
+        sc.pl.umap(combined_ctrl, color='wolbachia_titer', 
+                   save=f'_{sample}_ctrl_by_titer.pdf',
+                   title='Ctrl samples - Wolbachia titer',
+                   vmax=np.percentile(combined_ctrl.obs['wolbachia_titer'].dropna(), 95))
+    
+    # 3. UMAP by leiden
+    sc.pl.umap(combined_ctrl, color='leiden', 
+               save=f'_{sample}_ctrl_by_leiden.pdf',
+               title='Ctrl samples - Leiden clusters',
+               legend_loc='on data')
+    
+    # 4. UMAP by pipseq vs 10x
+    sc.pl.umap(combined_ctrl, color='method', 
+               save=f'_{sample}_ctrl_by_method.pdf',
+               title='Ctrl samples - Library prep method')
+    
+    # 5. Split UMAPs by method - same shape
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    sc.pl.umap(combined_ctrl[combined_ctrl.obs['method'] == '10x'], 
+               color='leiden', ax=axes[0], show=False, 
+               title='10x Genomics - Ctrl', frameon=False)
+    sc.pl.umap(combined_ctrl[combined_ctrl.obs['method'] == 'pipseq'], 
+               color='leiden', ax=axes[1], show=False, 
+               title='PIPseq - Ctrl', frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'umap_{sample}_ctrl_split_by_method.pdf'))
+    plt.close()
+    
+    # 6. UMAP by cell cycle stage (if present)
+    if 'phase' in combined_ctrl.obs.columns:
+        sc.pl.umap(combined_ctrl, color='phase', 
+                   save=f'_{sample}_ctrl_by_cellcycle.pdf',
+                   title='Ctrl samples - Cell cycle phase')
+    elif 'cyclum_theta' in combined_ctrl.obs.columns:
+        sc.pl.umap(combined_ctrl, color='cyclum_theta', 
+                   save=f'_{sample}_ctrl_by_cyclum_theta.pdf',
+                   title='Ctrl samples - Cyclum theta',
+                   cmap='twilight')
+    
+    # 7. Wolbachia titer comparison - wMel Ctrl only (10x vs pipseq)
+    if 'wolbachia_titer' in combined_ctrl.obs.columns:
+        wmel_ctrl = combined_ctrl[combined_ctrl.obs['cell_line'] == 'JW18wMel']
+        
+        if wmel_ctrl.n_obs > 0:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            
+            # Box plot with strip plot
+            sns.boxplot(data=wmel_ctrl.obs, x='method', y='wolbachia_titer', 
+                       ax=ax, palette=['#1f77b4', '#ff7f0e'])
+            sns.stripplot(data=wmel_ctrl.obs, x='method', y='wolbachia_titer',
+                         ax=ax, color='black', alpha=0.3, size=2)
+            
+            ax.set_xlabel('Library Prep Method')
+            ax.set_ylabel('Wolbachia Titer')
+            ax.set_title('wMel Ctrl - Wolbachia titer comparison')
+            
+            # Add stats
+            titer_10x = wmel_ctrl.obs[wmel_ctrl.obs['method'] == '10x']['wolbachia_titer'].dropna()
+            titer_pipseq = wmel_ctrl.obs[wmel_ctrl.obs['method'] == 'pipseq']['wolbachia_titer'].dropna()
+            if len(titer_10x) > 0 and len(titer_pipseq) > 0:
+                u_stat, p_val = mannwhitneyu(titer_10x, titer_pipseq, alternative='two-sided')
+                ax.text(0.5, 0.95, f'Mann-Whitney U: p = {p_val:.2e}',
+                       transform=ax.transAxes, ha='center', va='top')
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(fig_dir, f'titer_comparison_{sample}_wMel_ctrl.pdf'))
+            plt.close()
+    
+    # 8. DOX titer comparison (10x vs pipseq)
+    if 'wolbachia_titer' in combined_ctrl.obs.columns:
+        dox_ctrl = combined_ctrl[combined_ctrl.obs['cell_line'] == 'JW18DOX']
+        
+        if dox_ctrl.n_obs > 0:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            
+            sns.boxplot(data=dox_ctrl.obs, x='method', y='wolbachia_titer', 
+                       ax=ax, palette=['#1f77b4', '#ff7f0e'])
+            sns.stripplot(data=dox_ctrl.obs, x='method', y='wolbachia_titer',
+                         ax=ax, color='black', alpha=0.3, size=2)
+            
+            ax.set_xlabel('Library Prep Method')
+            ax.set_ylabel('Wolbachia Titer')
+            ax.set_title('DOX Ctrl - Wolbachia titer comparison')
+            
+            # Add stats
+            titer_10x = dox_ctrl.obs[dox_ctrl.obs['method'] == '10x']['wolbachia_titer'].dropna()
+            titer_pipseq = dox_ctrl.obs[dox_ctrl.obs['method'] == 'pipseq']['wolbachia_titer'].dropna()
+            if len(titer_10x) > 0 and len(titer_pipseq) > 0:
+                u_stat, p_val = mannwhitneyu(titer_10x, titer_pipseq, alternative='two-sided')
+                ax.text(0.5, 0.95, f'Mann-Whitney U: p = {p_val:.2e}',
+                       transform=ax.transAxes, ha='center', va='top')
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(fig_dir, f'titer_comparison_{sample}_DOX_ctrl.pdf'))
+            plt.close()
+    
+    # 9. Titer boxplot by cluster with leiden colors
+    if 'wolbachia_titer' in combined_ctrl.obs.columns:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Prepare data
+        plot_data = combined_ctrl.obs[['leiden', 'wolbachia_titer']].copy()
+        plot_data = plot_data.sort_values('leiden')
+        
+        clusters = sorted(plot_data['leiden'].unique())
+        
+        # Plot individual points first (so they appear under the boxes)
+        sns.stripplot(data=plot_data, x='leiden', y='wolbachia_titer', 
+                     color='black', alpha=0.3, size=2, ax=ax)
+        
+        # Plot box plot with leiden colors
+        box_parts = ax.boxplot([plot_data[plot_data['leiden'] == cluster]['wolbachia_titer'].values 
+                                for cluster in clusters],
+                                positions=range(len(clusters)),
+                                widths=0.6,
+                                patch_artist=True,
+                                whiskerprops=dict(alpha=0.7),
+                                capprops=dict(alpha=0.7),
+                                medianprops=dict(color='black', linewidth=2))
+        
+        # Color each box with its corresponding leiden color
+        for patch, color in zip(box_parts['boxes'], leiden_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax.set_xlabel('Leiden Cluster')
+        ax.set_ylabel('Wolbachia Titer')
+        ax.set_xticklabels(clusters)
+        ax.set_title('Ctrl samples - Wolbachia titer by cluster')
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'boxplot_{sample}_ctrl_titer_by_cluster.pdf'))
+        plt.close()
+    
+    # 10. Number of genes per cluster (pipseq vs 10x)
+    genes_per_cluster = combined_ctrl.obs.groupby(['leiden', 'method'])['n_genes'].mean().unstack()
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    genes_per_cluster.plot(kind='bar', ax=ax, color=['#1f77b4', '#ff7f0e'])
+    ax.set_xlabel('Leiden Cluster')
+    ax.set_ylabel('Mean number of genes per cell')
+    ax.set_title('Ctrl samples - Genes per cluster by method')
+    ax.legend(title='Method')
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'genes_per_cluster_{sample}_ctrl.pdf'))
+    plt.close()
+    
+    # 11. Percentage of cells per cluster (pipseq vs 10x)
+    cluster_comp = pd.crosstab(combined_ctrl.obs['leiden'], combined_ctrl.obs['method'], 
+                               normalize='columns') * 100
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    cluster_comp.plot(kind='bar', ax=ax, color=['#1f77b4', '#ff7f0e'])
+    ax.set_xlabel('Leiden Cluster')
+    ax.set_ylabel('Percentage of cells')
+    ax.set_title('Ctrl samples - Cell distribution by method')
+    ax.legend(title='Method')
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'cell_percentage_per_cluster_{sample}_ctrl.pdf'))
+    plt.close()
+    
+    # Chi-square test for cluster distribution
+    contingency = pd.crosstab(combined_ctrl.obs['leiden'], combined_ctrl.obs['method'])
+    chi2, p_value, dof, expected = chi2_contingency(contingency)
+    
+    print("\nCTRL SAMPLES - CLUSTER COMPOSITION BY METHOD")
+    print(cluster_comp)
+    print(f"\nChi-square test: χ² = {chi2:.2f}, p = {p_value:.2e}")
+    print(f"Methods show {'SIGNIFICANT' if p_value < 0.05 else 'NO'} difference in cluster distribution")
+    
+    # 12. Side-by-side titer split by method
+    if 'wolbachia_titer' in combined_ctrl.obs.columns:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        vmax = np.percentile(combined_ctrl.obs['wolbachia_titer'].dropna(), 95)
+        
+        sc.pl.umap(combined_ctrl[combined_ctrl.obs['method'] == '10x'], 
+                   color='wolbachia_titer', ax=axes[0], show=False, 
+                   title='10x Genomics - Wolbachia titer', frameon=False, vmax=vmax)
+        sc.pl.umap(combined_ctrl[combined_ctrl.obs['method'] == 'pipseq'], 
+                   color='wolbachia_titer', ax=axes[1], show=False, 
+                   title='PIPseq - Wolbachia titer', frameon=False, vmax=vmax)
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'umap_{sample}_ctrl_titer_split.pdf'))
+        plt.close()
+
+
+def plot_full_dataset_analysis(combined, fig_dir, sample):
+    """Analysis of full dataset: cell cycle, clustering, and Wolbachia infection"""
+    
+    print("\n" + "="*60)
+    print("FULL DATASET ANALYSIS")
+    print("="*60)
+    
+    # Get leiden colors for consistent coloring
+    leiden_colors = []
+    clusters = sorted(combined.obs['leiden'].unique())
+    cmap = plt.cm.get_cmap('tab20')
+    for i, cluster in enumerate(clusters):
+        leiden_colors.append(cmap(i % 20))
+    
+    # 1. Leiden cluster plots
+    sc.pl.umap(combined, color='leiden', 
+               save=f'_{sample}_full_leiden_clusters.pdf',
+               title='All samples - Leiden clusters',
+               legend_loc='on data')
+    
+    # 2. UMAP by cell cycle stage
+    if 'phase' in combined.obs.columns:
+        sc.pl.umap(combined, color='phase', 
+                   save=f'_{sample}_full_by_cellcycle_phase.pdf',
+                   title='All samples - Cell cycle phase')
+        
+        # Cell cycle distribution per cluster
+        fig, ax = plt.subplots(figsize=(12, 6))
+        phase_comp = pd.crosstab(combined.obs['leiden'], combined.obs['phase'], 
+                                normalize='index') * 100
+        phase_comp.plot(kind='bar', stacked=True, ax=ax)
+        ax.set_xlabel('Leiden Cluster')
+        ax.set_ylabel('Percentage of cells')
+        ax.set_title('Cell cycle phase distribution by cluster')
+        ax.legend(title='Cell cycle phase')
+        plt.xticks(rotation=0)
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'cellcycle_by_cluster_{sample}_full.pdf'))
+        plt.close()
+    
+    if 'cyclum_theta' in combined.obs.columns:
+        sc.pl.umap(combined, color='cyclum_theta', 
+                   save=f'_{sample}_full_by_cyclum_theta.pdf',
+                   title='All samples - Cyclum theta',
+                   cmap='twilight')
+        
+        # Cyclum theta violin plot by cluster
+        fig, ax = plt.subplots(figsize=(14, 6))
+        sc.pl.violin(combined, 'cyclum_theta', groupby='leiden', 
+                    ax=ax, show=False, rotation=0)
+        ax.set_title('Cyclum theta distribution by cluster')
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'cyclum_theta_by_cluster_{sample}_full.pdf'))
+        plt.close()
+    
+    # 3. Genes per cluster
+    genes_per_cluster = combined.obs.groupby('leiden')['n_genes'].agg(['mean', 'std'])
+    
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    comp_data = pd.crosstab([combined.obs['bio_condition'], combined.obs['leiden']], 
-                            combined.obs['method'], normalize='index') * 100
+    # Bar plot with error bars
+    x_pos = range(len(genes_per_cluster))
+    ax.bar(x_pos, genes_per_cluster['mean'], 
+           yerr=genes_per_cluster['std'],
+           color=leiden_colors, alpha=0.7, capsize=5)
     
-    comp_data.plot(kind='bar', stacked=True, ax=ax, color=['#1f77b4', '#ff7f0e'])
-    ax.set_xlabel('Biological Condition - Cluster')
+    ax.set_xlabel('Leiden Cluster')
+    ax.set_ylabel('Mean number of genes per cell')
+    ax.set_title('Gene count by cluster (all samples)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(genes_per_cluster.index)
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'genes_per_cluster_{sample}_full.pdf'))
+    plt.close()
+    
+    print("\nGenes per cluster:")
+    print(genes_per_cluster)
+    
+    # Violin plot version
+    fig, ax = plt.subplots(figsize=(14, 6))
+    sc.pl.violin(combined, 'n_genes', groupby='leiden', 
+                ax=ax, show=False, rotation=0)
+    ax.set_title('Gene count distribution by cluster')
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'genes_per_cluster_violin_{sample}_full.pdf'))
+    plt.close()
+    
+    # 4. Titer by cluster - boxplot with leiden colors
+    if 'wolbachia_titer' in combined.obs.columns:
+        # UMAP colored by titer
+        sc.pl.umap(combined, color='wolbachia_titer', 
+                   save=f'_{sample}_full_wolbachia_titer.pdf',
+                   title='All samples - Wolbachia titer',
+                   vmax=np.percentile(combined.obs['wolbachia_titer'].dropna(), 95))
+        
+        # Boxplot with stripplot
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        plot_data = combined.obs[['leiden', 'wolbachia_titer']].copy()
+        plot_data = plot_data.sort_values('leiden')
+        
+        clusters = sorted(plot_data['leiden'].unique())
+        
+        # Plot individual points first
+        sns.stripplot(data=plot_data, x='leiden', y='wolbachia_titer', 
+                     color='black', alpha=0.2, size=1, ax=ax)
+        
+        # Box plot with leiden colors
+        box_parts = ax.boxplot([plot_data[plot_data['leiden'] == cluster]['wolbachia_titer'].values 
+                                for cluster in clusters],
+                                positions=range(len(clusters)),
+                                widths=0.6,
+                                patch_artist=True,
+                                whiskerprops=dict(alpha=0.7),
+                                capprops=dict(alpha=0.7),
+                                medianprops=dict(color='black', linewidth=2))
+        
+        # Color each box
+        for patch, color in zip(box_parts['boxes'], leiden_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax.set_xlabel('Leiden Cluster')
+        ax.set_ylabel('Wolbachia Titer')
+        ax.set_title('Wolbachia titer by cluster (all samples)')
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'boxplot_{sample}_full_titer_by_cluster.pdf'))
+        plt.close()
+        
+        # Summary stats
+        titer_stats = combined.obs.groupby('leiden')['wolbachia_titer'].agg(['mean', 'median', 'std'])
+        print("\nWolbachia titer by cluster:")
+        print(titer_stats)
+        
+        # Percentage of infected cells per cluster
+        infected_per_cluster = combined.obs.groupby('leiden').apply(
+            lambda x: (x['wolbachia_titer'] > 0).sum() / len(x) * 100
+        )
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.bar(range(len(infected_per_cluster)), infected_per_cluster.values,
+               color=leiden_colors, alpha=0.7)
+        ax.set_xlabel('Leiden Cluster')
+        ax.set_ylabel('% Infected cells')
+        ax.set_title('Percentage of Wolbachia-infected cells by cluster')
+        ax.set_xticks(range(len(infected_per_cluster)))
+        ax.set_xticklabels(infected_per_cluster.index)
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'infection_percentage_by_cluster_{sample}_full.pdf'))
+        plt.close()
+        
+        print("\nPercentage of infected cells per cluster:")
+        print(infected_per_cluster)
+    
+    # 5. Cluster by treatment and cell line
+    sc.pl.umap(combined, color=['cell_line', 'treatment'], 
+               save=f'_{sample}_full_by_condition.pdf',
+               ncols=2)
+    
+    # 6. Cluster composition by biological condition
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    comp_by_condition = pd.crosstab(combined.obs['leiden'], 
+                                    combined.obs['bio_condition'], 
+                                    normalize='columns') * 100
+    
+    comp_by_condition.T.plot(kind='bar', stacked=True, ax=ax, 
+                             color=leiden_colors, width=0.8)
+    ax.set_xlabel('Biological Condition')
     ax.set_ylabel('Percentage of cells')
-    ax.set_title(f'Cluster composition across conditions - {sample}')
-    ax.legend(title='Method')
-    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.5)
+    ax.set_title('Cluster composition by biological condition')
+    ax.legend(title='Leiden Cluster', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f'condition_comparison_{sample}.pdf'))
+    plt.savefig(os.path.join(fig_dir, f'cluster_composition_by_condition_{sample}_full.pdf'))
     plt.close()
+    
+    # 7. Cell cycle vs Wolbachia infection
+    if 'wolbachia_titer' in combined.obs.columns and 'phase' in combined.obs.columns:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        sns.boxplot(data=combined.obs, x='phase', y='wolbachia_titer', ax=ax)
+        sns.stripplot(data=combined.obs, x='phase', y='wolbachia_titer',
+                     ax=ax, color='black', alpha=0.2, size=1)
+        
+        ax.set_xlabel('Cell Cycle Phase')
+        ax.set_ylabel('Wolbachia Titer')
+        ax.set_title('Wolbachia titer by cell cycle phase')
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f'titer_by_cellcycle_{sample}_full.pdf'))
+        plt.close()
+        
+        # Stats by phase
+        titer_by_phase = combined.obs.groupby('phase')['wolbachia_titer'].agg(['mean', 'median', 'std', 'count'])
+        print("\nWolbachia titer by cell cycle phase:")
+        print(titer_by_phase)
+    
+    # 8. Cells per cluster
+    cells_per_cluster = combined.obs['leiden'].value_counts().sort_index()
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(range(len(cells_per_cluster)), cells_per_cluster.values,
+           color=leiden_colors, alpha=0.7)
+    ax.set_xlabel('Leiden Cluster')
+    ax.set_ylabel('Number of cells')
+    ax.set_title('Cell count by cluster (all samples)')
+    ax.set_xticks(range(len(cells_per_cluster)))
+    ax.set_xticklabels(cells_per_cluster.index)
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f'cells_per_cluster_{sample}_full.pdf'))
+    plt.close()
+    
+    print("\nCells per cluster:")
+    print(cells_per_cluster)
 
 
 def main():
