@@ -86,7 +86,7 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     # Find highly variable genes
     print("Finding highly variable genes...")
     sc.pp.highly_variable_genes(combined, flavor='seurat', n_top_genes=2000)
-    combined = combined[:, combined.var.highly_variable]
+    # combined = combined[:, combined.var.highly_variable]
         
     # Run PCA
     print("Running PCA...")
