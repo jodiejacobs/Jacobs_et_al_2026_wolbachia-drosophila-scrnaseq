@@ -38,6 +38,9 @@ for sample_id in SAMPLE_IDS:
         CONDITION_PLATFORM_REPS[key] = []
     CONDITION_PLATFORM_REPS[key].append(replicate)
 
+# Get list of condition-seq_platform combinations that actually exist
+CONDITION_PLATFORM_COMBOS = list(CONDITION_PLATFORM_REPS.keys())
+
 # Find conditions that have BOTH 10x and pipseq data for method comparison
 CONDITIONS_WITH_BOTH_METHODS = []
 for condition in CONDITIONS:
@@ -47,10 +50,6 @@ for condition in CONDITIONS:
         CONDITIONS_WITH_BOTH_METHODS.append(condition)
 
 print(f"Conditions with both methods for comparison: {CONDITIONS_WITH_BOTH_METHODS}")
-
-
-# Get list of condition-seq_platform combinations that actually exist
-CONDITION_PLATFORM_COMBOS = list(CONDITION_PLATFORM_REPS.keys())
 
 # Sample lookup by sample name; samples_df.loc['sample_name'][3] gives the R1 path
 print(f"Conditions: {CONDITIONS}")
@@ -102,7 +101,13 @@ rule all:
         expand("results/method_comparison/{condition}_comparison.h5ad",
                condition=CONDITIONS_WITH_BOTH_METHODS),
         expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
-               condition=CONDITIONS_WITH_BOTH_METHODS)
+               condition=CONDITIONS_WITH_BOTH_METHODS),
+        # New: All conditions method comparison
+        "results/method_comparison/all_conditions_all_methods.h5ad",
+        "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf",
+        # New: Cyclum cluster analysis
+        "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
+        "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf"
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -599,16 +604,16 @@ rule extract_abundant_16s:
 
 rule compare_methods:
     input:
-        input_files = lambda wildcards: expand("results/annotated_h5ad/{condition}-{replicate}_{seq_platform}.h5ad",
-                                              condition=wildcards.condition,
-                                              replicate=[r for (c, p), reps in CONDITION_PLATFORM_REPS.items() 
-                                                        if c == wildcards.condition for r in reps],
-                                              seq_platform=['10x', 'pipseq'])
+        input_files = lambda wildcards: [
+            f"results/annotated_h5ad/{sample_id}.h5ad"
+            for sample_id in SAMPLE_IDS
+            if sample_id.startswith(wildcards.condition + "-")
+        ]
     output:
         integrated = "results/method_comparison/{condition}_comparison.h5ad",
         plot = "results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf"
     params:
-        compare_script = config["compare_script"],  # Add this to your config.yaml
+        compare_script = config["compare_script"],
         sample = 'comparison',
         fig_dir = 'results/method_comparison/{condition}_comparison',
         bio_condition = '{condition}'
@@ -642,3 +647,108 @@ rule compare_methods:
         
         echo "Method comparison complete for {wildcards.condition}"
         """
+
+##################################################################
+# New rules: All conditions method comparison and cell cycle analysis
+##################################################################
+
+rule validate_pipseq_all_conditions:
+    input:
+        input_files = expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
+    output:
+        integrated = "results/method_comparison/all_conditions_all_methods.h5ad",
+        plot = "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf"
+    params:
+        validate_script = config.get("validate_pipseq_script", "scripts/method_comparison/validate_pipseq.py"),
+        sample = 'all_conditions',
+        fig_dir = 'results/method_comparison/all_conditions'
+    log:
+        "logs/method_comparison/all_conditions.log"
+    threads:
+        config.get("validate_threads", 16)
+    resources:
+        slurm_partition = config.get("validate_partition", "medium"),
+        mem_mb = config.get("validate_mem", 64000),
+        slurm_time = config.get("validate_time", "8:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting method comparison for all conditions"
+        echo "Input files: {input.input_files}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        
+        python {params.validate_script} \
+            --files {input.input_files} \
+            --out_path {output.integrated} \
+            --fig_dir {params.fig_dir} \
+            --sample {params.sample} \
+            --batch_key batch \
+            --min_cells 3 \
+            --min_genes 200 \
+            --n_pcs 30
+        
+        echo "All conditions method comparison complete"
+        """
+
+rule cyclum_cluster_analysis:
+    input:
+        integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+    output:
+        summary = "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
+        cyclum_plot = "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
+        updated_h5ad = "results/method_comparison/all_conditions_all_methods_with_cyclum.h5ad"
+    params:
+        cellcycle_script = config.get("cellcycle_analysis_script", "scripts/method_comparison/cyclum_cluster_analysis.py"),
+        sample = 'all_conditions',
+        output_dir = 'results/cellcycle_analysis'
+    log:
+        "logs/cellcycle_analysis/all_conditions.log"
+    threads:
+        config.get("cellcycle_threads", 16)
+    resources:
+        slurm_partition = config.get("cellcycle_partition", "medium"),
+        mem_mb = config.get("cellcycle_mem", 64000),
+        slurm_time = config.get("cellcycle_time", "8:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting Cyclum and cluster-cell cycle analysis"
+        echo "Input file: {input.integrated}"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {CYCLUM_ENV}
+        
+        python {params.cellcycle_script} \
+            --input {input.integrated} \
+            --output {params.output_dir} \
+            --sample {params.sample} \
+            --run-cyclum \
+            --save-output
+        
+        echo "Cyclum and cluster-cell cycle analysis complete"
+        """
+
+
+"""
+# Testing commands for new rules:
+python scripts/method_comparison/validate_pipseq.py \
+    --files results/annotated_h5ad/*.h5ad \
+    --out_path results/method_comparison/all_conditions_all_methods.h5ad \
+    --fig_dir results/method_comparison/all_conditions \
+    --sample all_conditions \
+    --batch_key batch \
+    --min_cells 3 \
+    --min_genes 200 \
+    --n_pcs 30
+
+
+python scripts/method_comparison/cell_cycle_association.py \
+    --input results/method_comparison/all_conditions_all_methods.h5ad \
+    --output results/cellcycle_analysis \
+    --sample all_conditions \
+    --run-cyclum \
+    --force-retrain \
+    --save-output
+"""
