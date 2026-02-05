@@ -586,6 +586,9 @@ Examples:
     # Load data
     print(f"Loading data from {args.input}...")
     adata = sc.read_h5ad(args.input)
+
+    # Filter for Control samples if needed 
+    adata = adata[adata.obs['treatment'] == 'Ctrl', :]
     
     print(f"\nLoaded AnnData object:")
     print(f"  Cells: {adata.n_obs}")
