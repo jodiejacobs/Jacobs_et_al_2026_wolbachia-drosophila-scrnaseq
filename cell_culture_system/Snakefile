@@ -602,51 +602,51 @@ rule extract_abundant_16s:
         echo "Abundant sequence extraction complete"
         """
 
-rule compare_methods:
-    input:
-        input_files = lambda wildcards: [
-            f"results/annotated_h5ad/{sample_id}.h5ad"
-            for sample_id in SAMPLE_IDS
-            if sample_id.startswith(wildcards.condition + "-")
-        ]
-    output:
-        integrated = "results/method_comparison/{condition}_comparison.h5ad",
-        plot = "results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf"
-    params:
-        compare_script = config["compare_script"],
-        sample = 'comparison',
-        fig_dir = 'results/method_comparison/{condition}_comparison',
-        bio_condition = '{condition}'
-    log:
-        "logs/method_comparison/{condition}.log"
-    threads:
-        config.get("compare_threads", 8)
-    resources:
-        slurm_partition = config.get("compare_partition", "medium"),
-        mem_mb = config.get("compare_mem", 32000),
-        slurm_time = config.get("compare_time", "4:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting method comparison for {wildcards.condition}"
-        echo "Input files: {input.input_files}"
+# rule compare_methods:
+#     input:
+#         input_files = lambda wildcards: [
+#             f"results/annotated_h5ad/{sample_id}.h5ad"
+#             for sample_id in SAMPLE_IDS
+#             if sample_id.startswith(wildcards.condition + "-")
+#         ]
+#     output:
+#         integrated = "results/method_comparison/{condition}_comparison.h5ad",
+#         plot = "results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf"
+#     params:
+#         compare_script = config["compare_script"],
+#         sample = 'comparison',
+#         fig_dir = 'results/method_comparison/{condition}_comparison',
+#         bio_condition = '{condition}'
+#     log:
+#         "logs/method_comparison/{condition}.log"
+#     threads:
+#         config.get("compare_threads", 8)
+#     resources:
+#         slurm_partition = config.get("compare_partition", "medium"),
+#         mem_mb = config.get("compare_mem", 32000),
+#         slurm_time = config.get("compare_time", "4:00:00")
+#     shell:
+#         """
+#         exec > {log} 2>&1
+#         echo "Starting method comparison for {wildcards.condition}"
+#         echo "Input files: {input.input_files}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
+#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+#         conda activate {SCANPY_ENV}
         
-        python {params.compare_script} \
-            --files {input.input_files} \
-            --out_path {output.integrated} \
-            --fig_dir {params.fig_dir} \
-            --sample {params.sample} \
-            --bio_condition {params.bio_condition} \
-            --batch_key batch \
-            --min_cells 3 \
-            --min_genes 200 \
-            --n_pcs 30
+#         python {params.compare_script} \
+#             --files {input.input_files} \
+#             --out_path {output.integrated} \
+#             --fig_dir {params.fig_dir} \
+#             --sample {params.sample} \
+#             --bio_condition {params.bio_condition} \
+#             --batch_key batch \
+#             --min_cells 3 \
+#             --min_genes 200 \
+#             --n_pcs 30
         
-        echo "Method comparison complete for {wildcards.condition}"
-        """
+#         echo "Method comparison complete for {wildcards.condition}"
+#         """
 
 ##################################################################
 # New rules: All conditions method comparison and cell cycle analysis
