@@ -187,7 +187,7 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
     }
 
 
-def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon'):
+def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon', hvg_only=False, n_top_genes=2000):
     """
     Find differentially expressed marker genes for each cluster
     """
@@ -195,17 +195,38 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon'):
     print("DIFFERENTIAL GENE EXPRESSION ANALYSIS")
     print("="*60)
     
+    # Optionally filter to HVGs
+    if hvg_only:
+        print("\nFiltering to highly variable genes for marker detection...")
+        
+        if 'highly_variable' not in adata.var.columns:
+            print(f"  Computing top {n_top_genes} HVGs...")
+            sc.pp.highly_variable_genes(
+                adata, 
+                n_top_genes=n_top_genes,
+                flavor='seurat_v3',
+                subset=False
+            )
+        
+        n_hvg = adata.var['highly_variable'].sum()
+        print(f"  Using {n_hvg} highly variable genes")
+        
+        # Create temporary subset for DE analysis
+        adata_hvg = adata[:, adata.var['highly_variable']].copy()
+    else:
+        adata_hvg = adata
+    
     print(f"\nFinding marker genes using {method} test...")
+    print(f"  Analyzing {adata_hvg.n_vars} genes")
     print("This may take a few minutes...")
     
-    # Run differential expression with tie correction
-    sc.tl.rank_genes_groups(adata, 'leiden', method=method, 
+    # Run differential expression on (potentially filtered) data
+    sc.tl.rank_genes_groups(adata_hvg, 'leiden', method=method, 
                             key_added='rank_genes_groups',
                             use_raw=False,
-                            tie_correct=True,  # Helps with NaN issues
-                            rankby_abs=False,  # Rank by actual fold change
-                            pts=True)  # Calculate percentage of cells expressing
-    
+                            tie_correct=True,
+                            rankby_abs=False,
+                            pts=True)
     print("Done!")
     
     # Plot top markers
