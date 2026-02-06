@@ -589,6 +589,7 @@ Examples:
 
     # Filter for Control samples if needed 
     adata = adata[adata.obs['treatment'] == 'Ctrl', :]
+    print(adata.obs)
     
     print(f"\nLoaded AnnData object:")
     print(f"  Cells: {adata.n_obs}")
