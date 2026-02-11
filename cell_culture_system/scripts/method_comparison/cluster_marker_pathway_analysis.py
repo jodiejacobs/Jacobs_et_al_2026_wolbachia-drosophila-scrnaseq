@@ -2,6 +2,7 @@
 Comprehensive cluster analysis: transcriptional activity, marker genes, and pathway enrichment
 Uses FlyEnrichr API for automated pathway analysis with FlyBase annotations
 REQUIRES GENE SYMBOLS - converts FBgn IDs automatically
+NOW WITH COMBINED GO ANALYSIS
 '''
 import scanpy as sc
 import pandas as pd
@@ -15,15 +16,19 @@ import json
 import time
 import gzip
 from scipy.stats import kruskal
+from matplotlib.patches import Patch
 
 def load_fbgn_to_symbol_mapping(mapping_file):
     """
-    Load FBgn to gene symbol mapping from reference file
+    Load FBgn to gene symbol mapping from transcripts_to_genes.txt
+    
+    Format: transcript_id    FBgn_id    gene_symbol    ...
+    We want: FBgn_id -> gene_symbol (columns 2 -> 3)
     
     Parameters:
     -----------
     mapping_file : str
-        Path to dmel_gene_id_key.uniq.tsv.gz file
+        Path to transcripts_to_genes.txt file
     
     Returns:
     --------
@@ -46,32 +51,34 @@ def load_fbgn_to_symbol_mapping(mapping_file):
             mode = 'r'
         
         with opener(mapping_file, mode) as f:
-            header = f.readline()  # Skip header
-            
             for line in f:
                 parts = line.strip().split('\t')
-                if len(parts) >= 3:
-                    transcript_id = parts[0]
-                    gene_symbol = parts[1]
-                    gene_id = parts[2]  # This is the FBgn
-                    
-                    # Map FBgn to symbol
-                    if gene_id.startswith('FBgn') or gene_id.startswith('CG'):
-                        fbgn_to_symbol[gene_id] = gene_symbol
+                
+                # Skip if not enough columns
+                if len(parts) < 3:
+                    continue
+                
+                fbgn_id = parts[1]      # Column 2: FBgn ID
+                gene_symbol = parts[2]  # Column 3: Gene symbol
+                
+                # Only map if FBgn ID looks valid
+                if fbgn_id.startswith('FBgn'):
+                    fbgn_to_symbol[fbgn_id] = gene_symbol
         
         print(f"  Loaded {len(fbgn_to_symbol)} gene mappings")
         print(f"  Sample mappings:")
-        for i, (fbgn, symbol) in enumerate(list(fbgn_to_symbol.items())[:5]):
+        for i, (fbgn, symbol) in enumerate(list(fbgn_to_symbol.items())[:10]):
             print(f"    {fbgn} -> {symbol}")
         
         return fbgn_to_symbol
         
     except FileNotFoundError:
         print(f"  ERROR: File not found: {mapping_file}")
-        print(f"  Please provide path to dmel_gene_id_key.uniq.tsv.gz")
         return None
     except Exception as e:
         print(f"  ERROR loading mapping: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -418,10 +425,161 @@ def flyenrichr_analysis(gene_list, gene_set_library='GO_Biological_Process_2018'
         return None
 
 
-def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sample_name, 
-                                    top_n=100, libraries=None):
+def create_combined_go_visualization(enrichment_df, output_dir, sample_name, clusters):
     """
-    Run enrichment analysis - converts FBgn to symbols first
+    Create a single visualization combining all GO categories
+    """
+    print("\n  Creating combined GO visualization...")
+    
+    # Filter for GO terms only
+    go_df = enrichment_df[enrichment_df['library'].str.startswith('GO_')].copy()
+    go_sig = go_df[go_df['adj_p_value'] < 0.05]
+    
+    if len(go_sig) == 0:
+        print("    No significant GO terms to plot")
+        return
+    
+    # Add GO category column
+    go_sig['go_category'] = go_sig['library'].apply(
+        lambda x: x.replace('GO_', '').replace('_2018', '')
+    )
+    
+    # For each cluster, get top 15 GO terms across all categories
+    fig, axes = plt.subplots(len(clusters), 1, figsize=(16, 5*len(clusters)))
+    
+    if len(clusters) == 1:
+        axes = [axes]
+    
+    # Color map for GO categories
+    category_colors = {
+        'Biological_Process': '#e74c3c',
+        'Molecular_Function': '#3498db',
+        'Cellular_Component': '#2ecc71'
+    }
+    
+    for idx, cluster in enumerate(clusters):
+        ax = axes[idx]
+        
+        cluster_go = go_sig[go_sig['cluster'] == cluster].sort_values(
+            'combined_score', ascending=False
+        ).head(15)
+        
+        if len(cluster_go) == 0:
+            ax.text(0.5, 0.5, f'No significant GO terms\nfor Cluster {cluster}',
+                   ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.axis('off')
+            continue
+        
+        # Prepare data
+        cluster_go = cluster_go.copy()
+        cluster_go['term_short'] = cluster_go['term'].apply(
+            lambda x: x.split('(')[0][:55] + '...' if len(x.split('(')[0]) > 55 
+            else x.split('(')[0]
+        )
+        
+        # Create horizontal bar plot
+        y_pos = range(len(cluster_go))
+        colors = [category_colors[cat] for cat in cluster_go['go_category']]
+        
+        bars = ax.barh(y_pos, cluster_go['combined_score'], color=colors, alpha=0.7)
+        
+        # Add category labels to the left
+        for i, (y, cat) in enumerate(zip(y_pos, cluster_go['go_category'])):
+            cat_short = cat.replace('_', ' ')
+            ax.text(-0.02, y, f'[{cat_short[:2]}]', 
+                   transform=ax.get_yaxis_transform(),
+                   ha='right', va='center', fontsize=8,
+                   color=category_colors[cat], fontweight='bold')
+        
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(cluster_go['term_short'], fontsize=9)
+        ax.set_xlabel('Combined Score', fontsize=11)
+        ax.set_title(f'Cluster {cluster} - Top GO Terms (All Categories)', 
+                    fontsize=12, fontweight='bold')
+        ax.invert_yaxis()
+        ax.grid(axis='x', alpha=0.3)
+        
+        # Add legend for first plot only
+        if idx == 0:
+            legend_elements = [
+                Patch(facecolor=category_colors['Biological_Process'], 
+                     label='Biological Process', alpha=0.7),
+                Patch(facecolor=category_colors['Molecular_Function'], 
+                     label='Molecular Function', alpha=0.7),
+                Patch(facecolor=category_colors['Cellular_Component'], 
+                     label='Cellular Component', alpha=0.7)
+            ]
+            ax.legend(handles=legend_elements, loc='lower right', fontsize=9)
+    
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/{sample_name}_GO_combined_all_categories.pdf",
+               dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"    Saved: {sample_name}_GO_combined_all_categories.pdf")
+
+
+def create_go_summary_heatmap(enrichment_df, output_dir, sample_name, clusters):
+    """
+    Create a heatmap showing top GO terms across all clusters and categories
+    """
+    print("  Creating GO summary heatmap...")
+    
+    go_df = enrichment_df[enrichment_df['library'].str.startswith('GO_')].copy()
+    go_sig = go_df[go_df['adj_p_value'] < 0.05]
+    
+    if len(go_sig) == 0:
+        print("    No significant GO terms")
+        return
+    
+    # Get top 30 most significant GO terms across all clusters
+    top_terms = go_sig.nsmallest(50, 'adj_p_value')['term'].unique()[:30]
+    
+    # Create matrix: rows = terms, columns = clusters, values = -log10(p)
+    heatmap_data = []
+    
+    for term in top_terms:
+        row = {'term': term.split('(')[0][:50]}
+        
+        for cluster in clusters:
+            cluster_data = go_sig[
+                (go_sig['cluster'] == cluster) & 
+                (go_sig['term'] == term)
+            ]
+            
+            if len(cluster_data) > 0:
+                # Use -log10(adj_p_value), capped at 50
+                row[str(cluster)] = min(-np.log10(cluster_data.iloc[0]['adj_p_value'] + 1e-50), 50)
+            else:
+                row[str(cluster)] = 0
+        
+        heatmap_data.append(row)
+    
+    heatmap_df = pd.DataFrame(heatmap_data).set_index('term')
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(max(12, len(clusters)*0.8), 
+                                   max(10, len(top_terms)*0.35)))
+    
+    sns.heatmap(heatmap_df, cmap='YlOrRd', ax=ax,
+               cbar_kws={'label': '-log10(adj p-value)'},
+               linewidths=0.5, linecolor='lightgray')
+    
+    ax.set_xlabel('Leiden Cluster', fontsize=12, fontweight='bold')
+    ax.set_ylabel('GO Term (All Categories)', fontsize=12, fontweight='bold')
+    ax.set_title('Top GO Terms Across All Clusters\n(Biological Process, Molecular Function, Cellular Component)',
+                fontsize=13, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/{sample_name}_GO_combined_heatmap.pdf",
+               dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"    Saved: {sample_name}_GO_combined_heatmap.pdf")
+
+
+def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sample_name, 
+                                    top_n=100, combine_go=True):
+    """
+    Run enrichment analysis - optionally combine all GO annotations
     """
     print("\n" + "="*60)
     print("PATHWAY ENRICHMENT ANALYSIS (FlyEnrichr)")
@@ -432,19 +590,27 @@ def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sampl
         print("Cannot proceed with enrichment - FlyEnrichr requires gene symbols")
         return None
     
-    if libraries is None:
-        libraries = [
-            'GO_Biological_Process_2018',
-            'GO_Molecular_Function_2018', 
-            'GO_Cellular_Component_2018',
-            'KEGG_2019',
-            'WikiPathways_2018',
-            'InterPro_Domains_2019',
-            'Pfam_Domains_2019'
-        ]
+    # Define libraries
+    go_libraries = [
+        'GO_Biological_Process_2018',
+        'GO_Molecular_Function_2018', 
+        'GO_Cellular_Component_2018',
+    ]
     
-    print(f"\nRunning enrichment for top {top_n} markers per cluster")
-    print(f"Using libraries: {', '.join(libraries)}")
+    other_libraries = [
+        'KEGG_2019',
+        'WikiPathways_2018',
+        'InterPro_Domains_2019',
+        'Pfam_Domains_2019'
+    ]
+    
+    libraries_to_run = go_libraries + other_libraries
+    
+    if combine_go:
+        print("\nWill create combined GO analysis across all categories")
+    
+    print(f"Running enrichment for top {top_n} markers per cluster")
+    print(f"Using libraries: {', '.join(libraries_to_run)}")
     
     all_results = []
     clusters = sorted(marker_df['cluster'].unique())
@@ -487,8 +653,10 @@ def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sampl
         
         print(f"  Sample symbols: {', '.join(genes_symbols[:5])}")
         
-        # Run enrichment
-        for library in libraries:
+        # Run enrichment for each library
+        cluster_go_results = []
+        
+        for library in libraries_to_run:
             print(f"  Running {library}...")
             
             result_df = flyenrichr_analysis(
@@ -500,35 +668,59 @@ def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sampl
             if result_df is not None and len(result_df) > 0:
                 result_df['cluster'] = cluster
                 result_df['library'] = library
+                
+                # Add GO category for combined analysis
+                if library.startswith('GO_'):
+                    result_df['go_category'] = library.replace('GO_', '').replace('_2018', '')
+                    cluster_go_results.append(result_df)
+                
                 all_results.append(result_df)
                 print(f"    Found {len(result_df)} enriched terms")
             else:
                 print(f"    No results")
             
             time.sleep(0.5)
+        
+        # If combining GO, show summary for this cluster
+        if combine_go and cluster_go_results:
+            combined_go = pd.concat(cluster_go_results, ignore_index=True)
+            combined_go_sorted = combined_go.sort_values('combined_score', ascending=False)
+            
+            print(f"\n  Combined GO analysis for cluster {cluster}:")
+            print(f"  Total GO terms: {len(combined_go_sorted)}")
+            print(f"  Top 5 across all GO categories:")
+            for idx, row in combined_go_sorted.head(5).iterrows():
+                print(f"    [{row['go_category']:<20}] {row['term'][:50]:<50} p={row['adj_p_value']:.2e}")
     
     if not all_results:
         print("\nNo enrichment results obtained")
         return None
     
-    # Combine
+    # Combine all results
     combined_df = pd.concat(all_results, ignore_index=True)
     
-    # Save
-    combined_df.to_csv(
-        f"{output_dir}/{sample_name}_flyenrichr_all_results.csv",
-        index=False
-    )
+    # Save results
+    combined_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_all_results.csv", index=False)
     print(f"\nSaved: {sample_name}_flyenrichr_all_results.csv")
     
+    # If combining GO, create separate combined GO files
+    if combine_go:
+        go_df = combined_df[combined_df['library'].str.startswith('GO_')].copy()
+        if len(go_df) > 0:
+            go_df_sorted = go_df.sort_values(['cluster', 'combined_score'], ascending=[True, False])
+            go_df_sorted.to_csv(f"{output_dir}/{sample_name}_GO_combined_all_categories.csv", index=False)
+            print(f"Saved: {sample_name}_GO_combined_all_categories.csv")
+            
+            # Top 20 GO terms per cluster (across all categories)
+            top_go_per_cluster = go_df_sorted.groupby('cluster').head(20)
+            top_go_per_cluster.to_csv(f"{output_dir}/{sample_name}_GO_combined_top20_per_cluster.csv", index=False)
+            print(f"Saved: {sample_name}_GO_combined_top20_per_cluster.csv")
+    
+    # Save top results per cluster per library
     top_per_cluster = combined_df.sort_values('combined_score', ascending=False).groupby(
         ['cluster', 'library']
     ).head(10)
-    
-    top_per_cluster.to_csv(
-        f"{output_dir}/{sample_name}_flyenrichr_top10_per_cluster.csv",
-        index=False
-    )
+    top_per_cluster.to_csv(f"{output_dir}/{sample_name}_flyenrichr_top10_per_cluster.csv", index=False)
     print(f"Saved: {sample_name}_flyenrichr_top10_per_cluster.csv")
     
     # Summary
@@ -538,8 +730,15 @@ def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sampl
     print(f"Total enriched terms: {len(combined_df)}")
     print(f"Significant (adj p < 0.05): {len(combined_df[combined_df['adj_p_value'] < 0.05])}")
     
-    # Print top terms
-    for library in libraries:
+    if combine_go:
+        go_sig = combined_df[
+            (combined_df['library'].str.startswith('GO_')) & 
+            (combined_df['adj_p_value'] < 0.05)
+        ]
+        print(f"Significant GO terms (all categories): {len(go_sig)}")
+    
+    # Print top terms per library
+    for library in libraries_to_run:
         lib_results = combined_df[combined_df['library'] == library]
         
         if len(lib_results) == 0:
@@ -560,28 +759,39 @@ def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sampl
                     term_short = row['term'].split('(')[0][:60]
                     print(f"  {term_short:<60} p_adj={row['adj_p_value']:.2e}")
     
-    # Visualizations
-    create_enrichment_plots(combined_df, output_dir, sample_name, clusters)
+    # Create visualizations
+    create_enrichment_plots(combined_df, output_dir, sample_name, clusters, combine_go=combine_go)
     
     return combined_df
 
 
-def create_enrichment_plots(enrichment_df, output_dir, sample_name, clusters):
+def create_enrichment_plots(enrichment_df, output_dir, sample_name, clusters, combine_go=True):
     """
-    Create visualizations
+    Create visualizations including combined GO analysis
     """
-    print("\nCreating enrichment visualizations...")
+    print("\n" + "="*60)
+    print("Creating enrichment visualizations...")
+    print("="*60)
     
+    # Create combined GO visualizations first
+    if combine_go:
+        create_combined_go_visualization(enrichment_df, output_dir, sample_name, clusters)
+        create_go_summary_heatmap(enrichment_df, output_dir, sample_name, clusters)
+    
+    # Then create individual library plots
     libraries = enrichment_df['library'].unique()
     
     for library in libraries:
+        print(f"\n  Creating plots for {library}...")
+        
         lib_data = enrichment_df[enrichment_df['library'] == library]
         sig_data = lib_data[lib_data['adj_p_value'] < 0.05]
         
         if len(sig_data) == 0:
+            print(f"    No significant terms, skipping")
             continue
         
-        # Bar plots
+        # Bar plots per cluster
         n_clusters = len(clusters)
         fig, axes = plt.subplots(n_clusters, 1, figsize=(14, 4*n_clusters))
         
@@ -626,13 +836,30 @@ def create_enrichment_plots(enrichment_df, output_dir, sample_name, clusters):
         plt.savefig(f"{output_dir}/{sample_name}_enrichment_{lib_short}_barplots.pdf",
                    dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  Saved: {lib_short}_barplots.pdf")
+        print(f"    Saved: {lib_short}_barplots.pdf")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Comprehensive cluster analysis with FlyEnrichr pathway enrichment',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description='Comprehensive cluster analysis with FlyEnrichr pathway enrichment and combined GO analysis',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Full analysis with combined GO
+  python cluster_marker_pathway_analysis.py \\
+      --input data.h5ad \\
+      --output results \\
+      --sample mysample \\
+      --mapping transcripts_to_genes.txt
+  
+  # Skip combined GO visualization
+  python cluster_marker_pathway_analysis.py \\
+      --input data.h5ad \\
+      --output results \\
+      --sample mysample \\
+      --mapping transcripts_to_genes.txt \\
+      --no-combine-go
+        '''
     )
     
     parser.add_argument('--input', '-i', required=True,
@@ -642,7 +869,7 @@ def main():
     parser.add_argument('--sample', '-s', default='sample',
                        help='Sample name for output files')
     parser.add_argument('--mapping', '-map', required=True,
-                       help='Path to dmel_gene_id_key.uniq.tsv.gz')
+                       help='Path to transcripts_to_genes.txt')
     parser.add_argument('--method', '-m', default='wilcoxon',
                        choices=['wilcoxon', 't-test', 'logreg'],
                        help='DE method (default: wilcoxon)')
@@ -650,6 +877,8 @@ def main():
                        help='Top N markers for enrichment (default: 100)')
     parser.add_argument('--skip-enrichment', action='store_true',
                        help='Skip pathway enrichment')
+    parser.add_argument('--no-combine-go', action='store_true',
+                       help='Do not create combined GO visualizations')
     
     args = parser.parse_args()
     
@@ -696,12 +925,23 @@ def main():
             fbgn_to_symbol,
             args.output, 
             args.sample,
-            top_n=args.top_n
+            top_n=args.top_n,
+            combine_go=not args.no_combine_go
         )
     
     print("\n" + "="*60)
     print("ANALYSIS COMPLETE")
     print("="*60)
+    print(f"\nAll results saved to: {args.output}/")
+    
+    if not args.skip_enrichment:
+        print("\nKey output files:")
+        print(f"  - {args.sample}_flyenrichr_all_results.csv (all enrichment results)")
+        if not args.no_combine_go:
+            print(f"  - {args.sample}_GO_combined_all_categories.csv (combined GO results)")
+            print(f"  - {args.sample}_GO_combined_top20_per_cluster.csv (top 20 GO per cluster)")
+            print(f"  - {args.sample}_GO_combined_all_categories.pdf (combined GO barplots)")
+            print(f"  - {args.sample}_GO_combined_heatmap.pdf (GO heatmap)")
 
 
 if __name__ == "__main__":
