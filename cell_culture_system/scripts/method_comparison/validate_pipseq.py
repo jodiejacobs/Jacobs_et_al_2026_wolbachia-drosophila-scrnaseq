@@ -14,11 +14,72 @@ import warnings
 import seaborn as sns
 from scipy.stats import chi2_contingency, mannwhitneyu
 
-def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes, 
-              calculate_titer=True, n_pcs=30, bio_condition=None):
+def merge_small_clusters(adata, min_cluster_size, obsm_key='X_pca', cluster_key='leiden'):
+    """
+    Merge clusters smaller than min_cluster_size into their nearest neighbor
+    cluster based on centroid distance in PCA space. Iterates until all
+    clusters meet the minimum size or only one cluster remains.
+
+    Parameters
+    ----------
+    adata : AnnData
+    min_cluster_size : int
+        Clusters with fewer cells than this are merged into the nearest
+        larger cluster.
+    obsm_key : str
+        Key in adata.obsm to use for centroid computation (default 'X_pca').
+    cluster_key : str
+        Key in adata.obs that holds cluster labels (default 'leiden').
+    """
+    labels = adata.obs[cluster_key].copy()
+    coords = adata.obsm[obsm_key]
+
+    changed = True
+    while changed:
+        changed = False
+        counts = labels.value_counts()
+        small = counts[counts < min_cluster_size].index.tolist()
+        if not small:
+            break
+
+        # Compute centroids for all current clusters
+        unique_clusters = labels.unique().tolist()
+        if len(unique_clusters) <= 1:
+            break
+
+        centroids = {}
+        for cl in unique_clusters:
+            mask = labels == cl
+            centroids[cl] = coords[mask].mean(axis=0)
+
+        for cl in small:
+            if labels.value_counts().get(cl, 0) == 0:
+                continue  # already merged in this round
+            remaining = [c for c in labels.unique() if c != cl]
+            if not remaining:
+                break
+            cl_centroid = centroids[cl]
+            # Find nearest cluster by Euclidean centroid distance
+            nearest = min(
+                remaining,
+                key=lambda c: np.linalg.norm(cl_centroid - centroids[c])
+            )
+            labels[labels == cl] = nearest
+            changed = True
+
+    # Re-number clusters sequentially (0, 1, 2, ...)
+    old_labels = sorted(labels.unique(), key=lambda x: int(x))
+    remap = {old: str(new) for new, old in enumerate(old_labels)}
+    adata.obs[cluster_key] = labels.map(remap).astype('category')
+
+
+def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
+              calculate_titer=True, n_pcs=30, bio_condition=None, min_cluster_size=None):
     """
     files: list of h5ad file paths
     bio_condition: optional filter like 'JW18DOX-Ctrl' to compare only those samples
+    min_cluster_size: if set, clusters with fewer cells are merged into their nearest
+                      neighbour cluster (by PCA centroid distance) after Leiden clustering
     """
     # Make output directory if it doesn't exist
     os.makedirs(fig_dir, exist_ok=True)
@@ -107,7 +168,16 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     print("Running UMAP and Leiden clustering...")
     sc.tl.umap(combined)
     sc.tl.leiden(combined, resolution=0.8)
-    
+
+    if min_cluster_size is not None and min_cluster_size > 1:
+        n_before = combined.obs['leiden'].nunique()
+        print(f"Merging clusters smaller than {min_cluster_size} cells "
+              f"(clusters before: {n_before})...")
+        merge_small_clusters(combined, min_cluster_size=min_cluster_size)
+        n_after = combined.obs['leiden'].nunique()
+        print(f"Clusters after merging: {n_after} "
+              f"(removed {n_before - n_after} small cluster(s))")
+
     # Save the integrated object
     print(f"Saving integrated object for {sample} to {out_path}")
     combined.write(out_path)
@@ -591,19 +661,24 @@ def main():
                         help='Directory to save figures')    
     parser.add_argument('--n_pcs', type=int, default=30,
                         help='Number of principal components to use')
+    parser.add_argument('--min_cluster_size', type=int, default=None,
+                        help='Minimum number of cells a Leiden cluster must contain. '
+                             'Smaller clusters are merged into the nearest cluster '
+                             'by PCA centroid distance. Disabled by default.')
 
     args = parser.parse_args()
-    
+
     integrate(
         files=args.files,
         out_path=args.out_path,
         fig_dir=args.fig_dir,
-        sample=args.sample, 
+        sample=args.sample,
         batch_key=args.batch_key,
         min_cells=args.min_cells,
         min_genes=args.min_genes,
         n_pcs=args.n_pcs,
         bio_condition=args.bio_condition,
+        min_cluster_size=args.min_cluster_size,
     )
 
 if __name__ == "__main__":
