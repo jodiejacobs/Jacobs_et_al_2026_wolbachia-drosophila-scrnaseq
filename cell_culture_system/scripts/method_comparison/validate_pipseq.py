@@ -15,7 +15,7 @@ import seaborn as sns
 from scipy.stats import chi2_contingency, mannwhitneyu
 
 def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes, 
-              calculate_titer=True, n_pcs=30, bio_condition=None):
+              calculate_titer=True, n_pcs=30, bio_condition=None, leiden_resolution=0.5):
     """
     files: list of h5ad file paths
     bio_condition: optional filter like 'JW18DOX-Ctrl' to compare only those samples
@@ -106,7 +106,7 @@ def integrate(files, out_path, fig_dir, sample, batch_key, min_cells, min_genes,
     # Run UMAP and clustering
     print("Running UMAP and Leiden clustering...")
     sc.tl.umap(combined)
-    sc.tl.leiden(combined, resolution=0.8)
+    sc.tl.leiden(combined, resolution=leiden_resolution) # Manually adjust leiden resolution if needed based on cluster numbers
     
     # Save the integrated object
     print(f"Saving integrated object for {sample} to {out_path}")
@@ -591,6 +591,8 @@ def main():
                         help='Directory to save figures')    
     parser.add_argument('--n_pcs', type=int, default=30,
                         help='Number of principal components to use')
+    parser.add_argument('--resolution', type=float, default=0.5,
+                        help='Leiden clustering resolution')
 
     args = parser.parse_args()
     
@@ -604,6 +606,7 @@ def main():
         min_genes=args.min_genes,
         n_pcs=args.n_pcs,
         bio_condition=args.bio_condition,
+        leiden_resolution=args.resolution,
     )
 
 if __name__ == "__main__":
