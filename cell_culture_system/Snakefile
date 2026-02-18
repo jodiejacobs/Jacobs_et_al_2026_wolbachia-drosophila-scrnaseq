@@ -110,7 +110,11 @@ rule all:
         # "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
         # New: Integration and QC plots
         "results/integrated/integrated_combined.h5ad",
-        "results/integrated/qc_plots/.done"
+        "results/integrated/qc_plots/.done",
+        expand("results/cellcycle/{dataset}/.done",
+            dataset=["reference", "query", "combined"]),
+        expand("results/cellcycle/{dataset}/cluster_cellcycle_summary_{dataset}.csv",
+            dataset=["reference", "query", "combined"]),
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -774,6 +778,46 @@ rule qc_clusters:
             --fig_dir  {params.fig_dir}
 
         echo "QC plots complete"
+        """
+
+rule cell_cycle_analysis:
+    input:
+        h5ad = "results/integrated/integrated_{dataset}.h5ad"
+    output:
+        flag    = touch("results/cellcycle/{dataset}/.done"),
+        summary = "results/cellcycle/{dataset}/cluster_cellcycle_summary_{dataset}.csv"
+    params:
+        script  = config["cellcycle_script"],
+        fig_dir = "results/cellcycle/{dataset}",
+        # Use --ctrl-only for reference and combined, NOT for query
+        ctrl_flag = lambda wildcards: "--ctrl-only" if wildcards.dataset != "query" else ""
+    wildcard_constraints:
+        dataset = "reference|query|combined"
+    log:
+        "logs/cellcycle/{dataset}.log"
+    threads:
+        config.get("cellcycle_threads", 4)
+    resources:
+        slurm_partition = config.get("cellcycle_partition", "medium"),
+        mem_mb          = config.get("cellcycle_mem", 32000),
+        slurm_time      = config.get("cellcycle_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cell cycle analysis for dataset: {wildcards.dataset}"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input   {input.h5ad} \
+            --output  {params.fig_dir} \
+            --sample  {wildcards.dataset} \
+            --run-scoring \
+            --save-output \
+            {params.ctrl_flag}
+
+        echo "Cell cycle analysis complete for {wildcards.dataset}"
         """
 
 # rule scanpy_cellcycle:

@@ -85,3 +85,9 @@ qc_threads: 4
 qc_partition: "medium"
 qc_mem: 64000
 qc_time: "2:00:00"
+
+cellcycle_script: "scripts/method_comparison/scanpy_cellcycle_analysis.py"
+cellcycle_threads: 4
+cellcycle_partition: "medium"
+cellcycle_mem: 32000
+cellcycle_time: "2:00:00"
