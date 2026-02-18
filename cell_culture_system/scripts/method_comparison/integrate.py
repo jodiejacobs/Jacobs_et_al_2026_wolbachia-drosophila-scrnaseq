@@ -17,18 +17,6 @@ SCEPTIC inputs produced
 - sceptic_labels_{sample}.csv    : numeric timepoint label per cell (0 = uninfected)
 - sceptic_label_list_{sample}.csv: unique ordered timepoints
 - sceptic_metadata_{sample}.csv  : per-cell cluster, method, timepoint
-
- python scripts/method_comparison/integrate.py \
-    --files results/filtered_h5ad/*.h5ad \
-    --sample wolbachia_infection \
-    --batch_key batch \
-    --min_cells 3 \
-    --min_genes 200 \
-    --n_pcs 30 \
-    --out_path results/integrated/integrated.h5ad \
-    --fig_dir results/integrated/figures \
-    --optimize_resolution \
-    --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
 """
 
 import os
@@ -37,6 +25,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
@@ -53,7 +42,7 @@ from sklearn.metrics import silhouette_score, adjusted_rand_score
 
 def _leiden_colors(adata, key="leiden"):
     clusters = sorted(adata.obs[key].unique())
-    cmap = plt.cm.get_cmap("tab20")
+    cmap = matplotlib.colormaps["tab20"]
     return [cmap(i % 20) for i in range(len(clusters))]
 
 
@@ -193,7 +182,7 @@ def optimize_leiden_resolution(
         lbls = adata.obs[f"leiden_res{res}"].astype(int).values
         n_cl = len(np.unique(lbls))
         ax.scatter(umap_xy[:, 0], umap_xy[:, 1], c=lbls,
-                   cmap=plt.cm.get_cmap("tab20", n_cl), s=1, alpha=0.5, rasterized=True)
+                   cmap=matplotlib.colormaps["tab20"].resampled(n_cl), s=1, alpha=0.5, rasterized=True)
         is_best = np.isclose(res, best_res)
         ax.set_title(f"res={res} (n={n_cl})" + (" *" if is_best else ""),
                      fontsize=9, fontweight="bold" if is_best else "normal",
@@ -367,6 +356,8 @@ def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
     ref_plot = ref.copy()
     ref_plot.obs["dataset"]    = "uninfected (reference)"
     ref_plot.obs["leiden_ref"] = ref_plot.obs["leiden"]
+    ref_plot.obs["timepoint"]  = ref_plot.obs["timepoint"].astype(str).fillna("uninfected")
+    query.obs["timepoint"]     = query.obs["timepoint"].astype(str)
     query.obs["dataset"]       = "new infection (" + query.obs["timepoint"].fillna("?") + ")"
 
     common_genes = ref_plot.var_names.intersection(query.var_names)
@@ -427,10 +418,18 @@ def export_sceptic(ref, query, fig_dir, sample, use_pca=True, n_pcs=30):
 
     # Feature matrix
     if use_pca:
-        # ingest projects query into the reference PCA space, so both share the same dims
-        ref_mat   = ref_wmel.obsm["X_pca"][:, :n_pcs]
-        query_mat = query_wmel.obsm["X_pca"][:, :n_pcs]
-        feature_cols = [f"PC{i+1}" for i in range(n_pcs)]
+        # ingest reprojects query into reference PCA space, but may produce fewer
+        # components than the reference if the query has fewer cells/genes.
+        # Use the minimum available dims across both to ensure shapes match.
+        ref_n_pcs   = ref_wmel.obsm["X_pca"].shape[1]
+        query_n_pcs = query_wmel.obsm["X_pca"].shape[1]
+        actual_pcs  = min(n_pcs, ref_n_pcs, query_n_pcs)
+        if actual_pcs < n_pcs:
+            print(f"  WARNING: Requested {n_pcs} PCs but ref has {ref_n_pcs} "
+                  f"and query has {query_n_pcs}. Using {actual_pcs} PCs.")
+        ref_mat      = ref_wmel.obsm["X_pca"][:, :actual_pcs]
+        query_mat    = query_wmel.obsm["X_pca"][:, :actual_pcs]
+        feature_cols = [f"PC{i+1}" for i in range(actual_pcs)]
     else:
         hvg = ref_wmel.var_names[ref_wmel.var["highly_variable"]]
         shared_hvg = hvg[hvg.isin(query_wmel.var_names)]
@@ -539,7 +538,7 @@ def _plot_cluster_by_timepoint(combined, fig_dir, sample):
         ax.scatter(umap_xy[~mask, 0], umap_xy[~mask, 1],
                    c="lightgrey", s=1, alpha=0.3, rasterized=True)
         ax.scatter(umap_xy[mask, 0], umap_xy[mask, 1],
-                   c=all_labels[mask], cmap=plt.cm.get_cmap("tab20", n_cl),
+                   c=all_labels[mask], cmap=matplotlib.colormaps["tab20"].resampled(n_cl),
                    s=2, alpha=0.8, rasterized=True)
         ax.set_title("uninfected (ref)" if tp == 0 else f"D{tp}", fontsize=10)
         ax.set_xticks([]); ax.set_yticks([]); ax.set_aspect("equal")
@@ -594,18 +593,18 @@ def _plot_method_validation(ref, query, fig_dir, sample):
 
         # Bio condition
         conditions = adata.obs["bio_condition"].astype("category")
-        cond_cmap = plt.cm.get_cmap("Set2", len(conditions.cat.categories))
+        cond_cmap = matplotlib.colormaps["Set2"].resampled(len(conditions.cat.categories))
         c = [cond_cmap(conditions.cat.codes.iloc[i]) for i in range(len(conditions))]
         axes[row, 1].scatter(umap_xy[:, 0], umap_xy[:, 1], c=c, s=1, alpha=0.5, rasterized=True)
         axes[row, 1].set_title(f"{title_prefix}: Bio condition (should still separate)")
         for i, cat in enumerate(conditions.cat.categories):
-            axes[row, 1].scatter([], [], c=cond_cmap(i), label=cat)
+            axes[row, 1].scatter([], [], color=cond_cmap(i), label=cat)
         axes[row, 1].legend(fontsize=7); axes[row, 1].set_xticks([]); axes[row, 1].set_yticks([])
 
         # Clusters
         lbls = adata.obs[cluster_col].astype(int).values
         axes[row, 2].scatter(umap_xy[:, 0], umap_xy[:, 1], c=lbls,
-                             cmap=plt.cm.get_cmap("tab20", len(np.unique(lbls))),
+                             cmap=matplotlib.colormaps["tab20"].resampled(len(np.unique(lbls))),
                              s=1, alpha=0.5, rasterized=True)
         axes[row, 2].set_title(f"{title_prefix}: Clusters")
         axes[row, 2].set_xticks([]); axes[row, 2].set_yticks([])

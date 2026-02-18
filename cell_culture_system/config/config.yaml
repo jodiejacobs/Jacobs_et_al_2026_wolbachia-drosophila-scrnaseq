@@ -4,8 +4,8 @@
 samples_file: "config/samples.csv"
 
 # Path to conda environment
-scanpy_env: '/private/home/jomojaco/miniforge3/envs/scanpy'
-cyclum_env: '/private/home/jomojaco/miniforge3/envs/cyclum'
+scanpy_env: '/private/groups/russelllab/jodie/miniforge3/envs/scanpy'
+cyclum_env: '/private/groups/russelllab/jodie/miniforge3/envs/cyclum'
 
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
