@@ -98,10 +98,10 @@ rule all:
                zip,
                condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
                seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        expand("results/method_comparison/{condition}_comparison.h5ad",
-               condition=CONDITIONS_WITH_BOTH_METHODS),
-        expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
-               condition=CONDITIONS_WITH_BOTH_METHODS),
+        # expand("results/method_comparison/{condition}_comparison.h5ad",
+        #        condition=CONDITIONS_WITH_BOTH_METHODS),
+        # expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
+        #        condition=CONDITIONS_WITH_BOTH_METHODS),
         # # New: All conditions method comparison
         # "results/method_comparison/all_conditions_all_methods.h5ad",
         # "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf",
@@ -115,6 +115,10 @@ rule all:
             dataset=["reference", "query", "combined"]),
         expand("results/cellcycle/{dataset}/cluster_cellcycle_summary_{dataset}.csv",
             dataset=["reference", "query", "combined"]),
+        expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/sceptic/{sample}/.done",
+            sample=["wolbachia_infection"])
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -702,9 +706,13 @@ rule integrate:
     input:
         files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
     output:
-        reference = "results/integrated/integrated_reference.h5ad",
-        query     = "results/integrated/integrated_query.h5ad",
-        combined  = "results/integrated/integrated_combined.h5ad"
+        reference         = "results/integrated/integrated_reference.h5ad",
+        query             = "results/integrated/integrated_query.h5ad",
+        combined          = "results/integrated/integrated_combined.h5ad",
+        sceptic_matrix    = "results/integrated/figures/sceptic_matrix_wolbachia_infection.csv",
+        sceptic_labels    = "results/integrated/figures/sceptic_labels_wolbachia_infection.csv",
+        sceptic_label_list= "results/integrated/figures/sceptic_label_list_wolbachia_infection.csv",
+        sceptic_metadata  = "results/integrated/figures/sceptic_metadata_wolbachia_infection.csv"
     params:
         script      = config["integrate_script"],
         sample      = "wolbachia_infection",
@@ -818,6 +826,55 @@ rule cell_cycle_analysis:
             {params.ctrl_flag}
 
         echo "Cell cycle analysis complete for {wildcards.dataset}"
+        """
+rule run_sceptic:
+    input:
+        matrix     = "results/integrated/figures/sceptic_matrix_{sample}.csv",
+        labels     = "results/integrated/figures/sceptic_labels_{sample}.csv",
+        label_list = "results/integrated/figures/sceptic_label_list_{sample}.csv",
+        metadata   = "results/integrated/figures/sceptic_metadata_{sample}.csv",
+        ref_h5ad   = "results/integrated/integrated_reference.h5ad",
+        query_h5ad = "results/integrated/integrated_query.h5ad",
+        combined_h5ad = "results/integrated/integrated_combined.h5ad"
+    output:
+        results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
+        stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
+        flag    = touch("results/sceptic/{sample}/.done")
+    params:
+        script  = config["sceptic_script"],
+        fig_dir = "results/sceptic/{sample}",
+        method  = config.get("sceptic_method", "xgboost"),
+        n_bins  = config.get("sceptic_n_bins", 10)
+    log:
+        "logs/sceptic/{sample}.log"
+    threads:
+        config.get("sceptic_threads", 8)
+    resources:
+        slurm_partition = config.get("sceptic_partition", "medium"),
+        mem_mb          = config.get("sceptic_mem", 64000),
+        slurm_time      = config.get("sceptic_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting SCEPTIC analysis for sample: {wildcards.sample}"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --matrix       {input.matrix} \
+            --labels       {input.labels} \
+            --label_list   {input.label_list} \
+            --metadata     {input.metadata} \
+            --ref_h5ad     {input.ref_h5ad} \
+            --query_h5ad   {input.query_h5ad} \
+            --combined_h5ad {input.combined_h5ad} \
+            --sample       {wildcards.sample} \
+            --fig_dir      {params.fig_dir} \
+            --method       {params.method} \
+            --n_bins       {params.n_bins}
+
+        echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
 
 # rule scanpy_cellcycle:
