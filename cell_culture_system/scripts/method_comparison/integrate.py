@@ -17,6 +17,18 @@ SCEPTIC inputs produced
 - sceptic_labels_{sample}.csv    : numeric timepoint label per cell (0 = uninfected)
 - sceptic_label_list_{sample}.csv: unique ordered timepoints
 - sceptic_metadata_{sample}.csv  : per-cell cluster, method, timepoint
+
+ python scripts/method_comparison/integrate.py \
+    --files results/filtered_h5ad/*.h5ad \
+    --sample wolbachia_infection \
+    --batch_key batch \
+    --min_cells 3 \
+    --min_genes 200 \
+    --n_pcs 30 \
+    --out_path results/integrated/integrated.h5ad \
+    --fig_dir results/integrated/figures \
+    --optimize_resolution \
+    --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
 """
 
 import os
@@ -241,7 +253,7 @@ def optimize_leiden_resolution(
 # Stage 1 — Reference: uninfected controls
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_reference(adatas_ref, batch_key, min_genes, min_cells, n_pcs,
+def build_reference(adata_ref, batch_key, min_genes, min_cells, n_pcs,
                     fig_dir, sample, optimize_resolution=True,
                     resolutions=None, leiden_resolution=0.5):
     """
@@ -255,8 +267,7 @@ def build_reference(adatas_ref, batch_key, min_genes, min_cells, n_pcs,
     print("STAGE 1 — Building reference from uninfected controls")
     print("=" * 60)
 
-    ref = ad.concat(adatas_ref, join="inner", merge="same", index_unique="-")
-    ref = add_metadata(ref, batch_key)
+    ref = adata_ref.copy()
     print(f"Reference cells: {ref.n_obs}")
     print(f"Methods: {ref.obs['method'].value_counts().to_dict()}")
 
@@ -306,7 +317,7 @@ def build_reference(adatas_ref, batch_key, min_genes, min_cells, n_pcs,
 # Stage 2 — Query: map new-infection cells onto reference via ingest
 # ─────────────────────────────────────────────────────────────────────────────
 
-def map_query_to_reference(adatas_query, ref, batch_key, min_genes, n_pcs,
+def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
                             fig_dir, sample):
     """
     Project new-infection timepoint cells onto the reference embedding using
@@ -326,8 +337,7 @@ def map_query_to_reference(adatas_query, ref, batch_key, min_genes, n_pcs,
     print("STAGE 2 — Mapping query (new infection timepoints) onto reference")
     print("=" * 60)
 
-    query = ad.concat(adatas_query, join="inner", merge="same", index_unique="-")
-    query = add_metadata(query, batch_key)
+    query = adata_query.copy()
     print(f"Query cells: {query.n_obs}")
     print(f"Timepoints:  {query.obs['timepoint'].value_counts().to_dict()}")
     print(f"Methods:     {query.obs['method'].value_counts().to_dict()}")
@@ -655,19 +665,14 @@ def integrate(
             "Check that infection timepoint labels (D7, D28, …) appear in filenames."
         )
 
-    ref_barcodes   = set(combined_tmp.obs_names[ref_mask])
-    query_barcodes = set(combined_tmp.obs_names[query_mask])
-
-    def _split(adata, keep):
-        mask = [bc in keep for bc in adata.obs_names]
-        return adata[mask].copy() if any(mask) else None
-
-    adatas_ref   = [a for ad_ in adatas_all for a in [_split(ad_, ref_barcodes)]   if a]
-    adatas_query = [a for ad_ in adatas_all for a in [_split(ad_, query_barcodes)] if a]
+    # Slice combined_tmp directly — avoids barcode mismatch caused by
+    # index_unique="-" modifying barcodes during the initial concat
+    adata_ref   = combined_tmp[ref_mask].copy()
+    adata_query = combined_tmp[query_mask].copy()
 
     # Stage 1: build reference
     ref, final_resolution = build_reference(
-        adatas_ref, batch_key=batch_key,
+        adata_ref, batch_key=batch_key,
         min_genes=min_genes, min_cells=min_cells, n_pcs=n_pcs,
         fig_dir=fig_dir, sample=sample,
         optimize_resolution=optimize_resolution,
@@ -677,7 +682,7 @@ def integrate(
 
     # Stage 2: ingest query onto reference
     query, combined = map_query_to_reference(
-        adatas_query, ref=ref, batch_key=batch_key,
+        adata_query, ref=ref, batch_key=batch_key,
         min_genes=min_genes, n_pcs=n_pcs,
         fig_dir=fig_dir, sample=sample,
     )

@@ -102,12 +102,15 @@ rule all:
                condition=CONDITIONS_WITH_BOTH_METHODS),
         expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
                condition=CONDITIONS_WITH_BOTH_METHODS),
-        # New: All conditions method comparison
-        "results/method_comparison/all_conditions_all_methods.h5ad",
-        "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf",
-        # New: Cyclum cluster analysis
-        "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
-        "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf"
+        # # New: All conditions method comparison
+        # "results/method_comparison/all_conditions_all_methods.h5ad",
+        # "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf",
+        # # New: Cyclum cluster analysis
+        # "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
+        # "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
+        # New: Integration and QC plots
+        "results/integrated/integrated_combined.h5ad",
+        "results/integrated/qc_plots/.done"
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -652,56 +655,137 @@ rule extract_abundant_16s:
 # New rules: All conditions method comparison and cell cycle analysis
 ##################################################################
 
-rule validate_pipseq_all_conditions:
+# rule validate_pipseq_all_conditions:
+#     input:
+#         input_files = expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
+#     output:
+#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad",
+#         plot = "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf"
+#     params:
+#         validate_script = config.get("validate_pipseq_script", "scripts/method_comparison/validate_pipseq.py"),
+#         sample = 'all_conditions',
+#         fig_dir = 'results/method_comparison/all_conditions'
+#     log:
+#         "logs/method_comparison/all_conditions.log"
+#     threads:
+#         config.get("validate_threads", 16)
+#     resources:
+#         slurm_partition = config.get("validate_partition", "medium"),
+#         mem_mb = config.get("validate_mem", 64000),
+#         slurm_time = config.get("validate_time", "8:00:00")
+#     shell:
+#         """
+#         exec > {log} 2>&1
+#         echo "Starting method comparison for all conditions"
+#         echo "Input files: {input.input_files}"
+        
+#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+#         conda activate {SCANPY_ENV}
+        
+#         python {params.validate_script} \
+#             --files {input.input_files} \
+#             --out_path {output.integrated} \
+#             --fig_dir {params.fig_dir} \
+#             --sample {params.sample} \
+#             --batch_key batch \
+#             --min_cells 3 \
+#             --min_genes 200 \
+#             --n_pcs 30
+        
+#         echo "All conditions method comparison complete"
+#         """
+rule integrate:
     input:
-        input_files = expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
+        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
     output:
-        integrated = "results/method_comparison/all_conditions_all_methods.h5ad",
-        plot = "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf"
+        reference = "results/integrated/integrated_reference.h5ad",
+        query     = "results/integrated/integrated_query.h5ad",
+        combined  = "results/integrated/integrated_combined.h5ad"
     params:
-        validate_script = config.get("validate_pipseq_script", "scripts/method_comparison/validate_pipseq.py"),
-        sample = 'all_conditions',
-        fig_dir = 'results/method_comparison/all_conditions'
+        script      = config["integrate_script"],
+        sample      = "wolbachia_infection",
+        fig_dir     = "results/integrated/figures",
+        out_path    = "results/integrated/integrated.h5ad",
+        resolutions = "0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5"
     log:
-        "logs/method_comparison/all_conditions.log"
+        "logs/integrate/integrate.log"
     threads:
-        config.get("validate_threads", 16)
+        config.get("integrate_threads", 16)
     resources:
-        slurm_partition = config.get("validate_partition", "medium"),
-        mem_mb = config.get("validate_mem", 64000),
-        slurm_time = config.get("validate_time", "8:00:00")
+        slurm_partition = config.get("integrate_partition", "medium"),
+        mem_mb          = config.get("integrate_mem", 128000),
+        slurm_time      = config.get("integrate_time", "8:00:00")
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting method comparison for all conditions"
-        echo "Input files: {input.input_files}"
-        
+        echo "Starting integration"
+
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
-        
-        python {params.validate_script} \
-            --files {input.input_files} \
-            --out_path {output.integrated} \
-            --fig_dir {params.fig_dir} \
+
+        python {params.script} \
+            --files {input.files} \
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
             --min_genes 200 \
-            --n_pcs 30
-        
-        echo "All conditions method comparison complete"
+            --n_pcs 30 \
+            --out_path {params.out_path} \
+            --fig_dir {params.fig_dir} \
+            --optimize_resolution \
+            --resolutions {params.resolutions}
+
+        echo "Integration complete"
         """
 
-rule scanpy_cellcycle:
+
+rule qc_clusters:
     input:
-        integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+        combined  = "results/integrated/integrated_combined.h5ad",
+        reference = "results/integrated/integrated_reference.h5ad",
+        query     = "results/integrated/integrated_query.h5ad"
     output:
-        summary = "results/cellcycle_analysis/scanpy_cellcycle_summary_all_conditions.csv",
+        flag = touch("results/integrated/qc_plots/.done")
+    params:
+        script  = config["qc_script"],
+        sample  = "wolbachia_infection",
+        fig_dir = "results/integrated/qc_plots"
+    log:
+        "logs/integrate/qc_clusters.log"
+    threads:
+        config.get("qc_threads", 4)
+    resources:
+        slurm_partition = config.get("qc_partition", "medium"),
+        mem_mb          = config.get("qc_mem", 64000),
+        slurm_time      = config.get("qc_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting QC plots"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --combined {input.combined} \
+            --ref      {input.reference} \
+            --query    {input.query} \
+            --sample   {params.sample} \
+            --fig_dir  {params.fig_dir}
+
+        echo "QC plots complete"
+        """
+
+# rule scanpy_cellcycle:
+#     input:
+#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+#     output:
+#         summary = "results/cellcycle_analysis/scanpy_cellcycle_summary_all_conditions.csv",
      
-rule characterize_clusters:
-    input:
-        integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
-rule pseudotime_analysis:
+# rule characterize_clusters:
+#     input:
+#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+# rule pseudotime_analysis:
 
 
     #use sceptic 

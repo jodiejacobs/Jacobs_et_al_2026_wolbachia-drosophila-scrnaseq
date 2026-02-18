@@ -73,3 +73,15 @@ cellcycle_threads: 16
 cellcycle_partition: "medium"
 cellcycle_mem: 64000
 cellcycle_time: "8:00:00"
+
+integrate_script: "scripts/method_comparison/integrate.py"
+integrate_threads: 16
+integrate_partition: "medium"
+integrate_mem: 128000
+integrate_time: "8:00:00"
+
+qc_script: "scripts/method_comparison/qc_plots.py"
+qc_threads: 4
+qc_partition: "medium"
+qc_mem: 64000
+qc_time: "2:00:00"
