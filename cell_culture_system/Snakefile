@@ -692,43 +692,57 @@ rule validate_pipseq_all_conditions:
         echo "All conditions method comparison complete"
         """
 
-rule cyclum_cluster_analysis:
+rule scanpy_cellcycle:
     input:
         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
     output:
-        summary = "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
-        cyclum_plot = "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
-        updated_h5ad = "results/method_comparison/all_conditions_all_methods_with_cyclum.h5ad"
-    params:
-        cellcycle_script = config.get("cellcycle_analysis_script", "scripts/method_comparison/cyclum_cluster_analysis.py"),
-        sample = 'all_conditions',
-        output_dir = 'results/cellcycle_analysis'
-    log:
-        "logs/cellcycle_analysis/all_conditions.log"
-    threads:
-        config.get("cellcycle_threads", 16)
-    resources:
-        slurm_partition = config.get("cellcycle_partition", "medium"),
-        mem_mb = config.get("cellcycle_mem", 64000),
-        slurm_time = config.get("cellcycle_time", "8:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting Cyclum and cluster-cell cycle analysis"
-        echo "Input file: {input.integrated}"
+        summary = "results/cellcycle_analysis/scanpy_cellcycle_summary_all_conditions.csv",
+     
+rule characterize_clusters:
+    input:
+        integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+rule pseudotime_analysis:
+
+
+    #use sceptic 
+
+# rule cyclum_cluster_analysis:
+#     input:
+#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
+#     output:
+#         summary = "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
+#         cyclum_plot = "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
+#         updated_h5ad = "results/method_comparison/all_conditions_all_methods_with_cyclum.h5ad"
+#     params:
+#         cellcycle_script = config.get("cellcycle_analysis_script", "scripts/method_comparison/cyclum_cluster_analysis.py"),
+#         sample = 'all_conditions',
+#         output_dir = 'results/cellcycle_analysis'
+#     log:
+#         "logs/cellcycle_analysis/all_conditions.log"
+#     threads:
+#         config.get("cellcycle_threads", 16)
+#     resources:
+#         slurm_partition = config.get("cellcycle_partition", "medium"),
+#         mem_mb = config.get("cellcycle_mem", 64000),
+#         slurm_time = config.get("cellcycle_time", "8:00:00")
+#     shell:
+#         """
+#         exec > {log} 2>&1
+#         echo "Starting Cyclum and cluster-cell cycle analysis"
+#         echo "Input file: {input.integrated}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {CYCLUM_ENV}
+#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+#         conda activate {CYCLUM_ENV}
         
-        python {params.cellcycle_script} \
-            --input {input.integrated} \
-            --output {params.output_dir} \
-            --sample {params.sample} \
-            --run-cyclum \
-            --save-output
+#         python {params.cellcycle_script} \
+#             --input {input.integrated} \
+#             --output {params.output_dir} \
+#             --sample {params.sample} \
+#             --run-cyclum \
+#             --save-output
         
-        echo "Cyclum and cluster-cell cycle analysis complete"
-        """
+#         echo "Cyclum and cluster-cell cycle analysis complete"
+#         """
 
 
 """
