@@ -109,16 +109,16 @@ rule all:
         # "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
         # "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
         # New: Integration and QC plots
-        "results/integrated/integrated_combined.h5ad",
-        "results/integrated/qc_plots/.done",
-        expand("results/cellcycle/{dataset}/.done",
-            dataset=["reference", "query", "combined"]),
-        expand("results/cellcycle/{dataset}/cluster_cellcycle_summary_{dataset}.csv",
-            dataset=["reference", "query", "combined"]),
+        # Integration
+        "results/integrated/integrated.h5ad",
+        # Cell cycle
+        "results/cellcycle/.done",
+        "results/cellcycle/cluster_cellcycle_summary.csv",
+        # SCEPTIC
         expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
             sample=["wolbachia_infection"]),
         expand("results/sceptic/{sample}/.done",
-            sample=["wolbachia_infection"])
+            sample=["wolbachia_infection"]),
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -706,19 +706,17 @@ rule integrate:
     input:
         files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
     output:
-        reference         = "results/integrated/integrated_reference.h5ad",
-        query             = "results/integrated/integrated_query.h5ad",
-        combined          = "results/integrated/integrated_combined.h5ad",
-        sceptic_matrix    = "results/integrated/figures/sceptic_matrix_wolbachia_infection.csv",
-        sceptic_labels    = "results/integrated/figures/sceptic_labels_wolbachia_infection.csv",
-        sceptic_label_list= "results/integrated/figures/sceptic_label_list_wolbachia_infection.csv",
-        sceptic_metadata  = "results/integrated/figures/sceptic_metadata_wolbachia_infection.csv"
+        integrated         = "results/integrated/integrated.h5ad",
+        sceptic_matrix     = "results/integrated/figures/sceptic_matrix_wolbachia_infection.csv",
+        sceptic_labels     = "results/integrated/figures/sceptic_labels_wolbachia_infection.csv",
+        sceptic_label_list = "results/integrated/figures/sceptic_label_list_wolbachia_infection.csv",
+        sceptic_metadata   = "results/integrated/figures/sceptic_metadata_wolbachia_infection.csv"
     params:
         script      = config["integrate_script"],
         sample      = "wolbachia_infection",
         fig_dir     = "results/integrated/figures",
         out_path    = "results/integrated/integrated.h5ad",
-        resolutions = "0.01 0.02 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5"
+        resolutions = "0.2 0.4 0.8 1.0 1.8"
     log:
         "logs/integrate/integrate.log"
     threads:
@@ -750,59 +748,17 @@ rule integrate:
         echo "Integration complete"
         """
 
-
-rule qc_clusters:
-    input:
-        combined  = "results/integrated/integrated_combined.h5ad",
-        reference = "results/integrated/integrated_reference.h5ad",
-        query     = "results/integrated/integrated_query.h5ad"
-    output:
-        flag = touch("results/integrated/qc_plots/.done")
-    params:
-        script  = config["qc_script"],
-        sample  = "wolbachia_infection",
-        fig_dir = "results/integrated/qc_plots"
-    log:
-        "logs/integrate/qc_clusters.log"
-    threads:
-        config.get("qc_threads", 4)
-    resources:
-        slurm_partition = config.get("qc_partition", "medium"),
-        mem_mb          = config.get("qc_mem", 64000),
-        slurm_time      = config.get("qc_time", "2:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting QC plots"
-
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
-
-        python {params.script} \
-            --combined {input.combined} \
-            --ref      {input.reference} \
-            --query    {input.query} \
-            --sample   {params.sample} \
-            --fig_dir  {params.fig_dir}
-
-        echo "QC plots complete"
-        """
-
 rule cell_cycle_analysis:
     input:
-        h5ad = "results/integrated/integrated_{dataset}.h5ad"
+        h5ad = rules.integrate.output.integrated
     output:
-        flag    = touch("results/cellcycle/{dataset}/.done"),
-        summary = "results/cellcycle/{dataset}/cluster_cellcycle_summary_{dataset}.csv"
+        flag    = touch("results/cellcycle/.done"),
+        summary = "results/cellcycle/cluster_cellcycle_summary.csv"
     params:
         script  = config["cellcycle_script"],
-        fig_dir = "results/cellcycle/{dataset}",
-        # Use --ctrl-only for reference and combined, NOT for query
-        ctrl_flag = lambda wildcards: "--ctrl-only" if wildcards.dataset != "query" else ""
-    wildcard_constraints:
-        dataset = "reference|query|combined"
+        fig_dir = "results/cellcycle"
     log:
-        "logs/cellcycle/{dataset}.log"
+        "logs/cellcycle/cellcycle.log"
     threads:
         config.get("cellcycle_threads", 4)
     resources:
@@ -812,7 +768,7 @@ rule cell_cycle_analysis:
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting cell cycle analysis for dataset: {wildcards.dataset}"
+        echo "Starting cell cycle analysis"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
@@ -820,22 +776,20 @@ rule cell_cycle_analysis:
         python {params.script} \
             --input   {input.h5ad} \
             --output  {params.fig_dir} \
-            --sample  {wildcards.dataset} \
+            --sample  wolbachia_infection \
             --run-scoring \
-            --save-output \
-            {params.ctrl_flag}
+            --save-output
 
-        echo "Cell cycle analysis complete for {wildcards.dataset}"
+        echo "Cell cycle analysis complete"
         """
+        
 rule run_sceptic:
     input:
-        matrix     = "results/integrated/figures/sceptic_matrix_{sample}.csv",
-        labels     = "results/integrated/figures/sceptic_labels_{sample}.csv",
-        label_list = "results/integrated/figures/sceptic_label_list_{sample}.csv",
-        metadata   = "results/integrated/figures/sceptic_metadata_{sample}.csv",
-        ref_h5ad   = "results/integrated/integrated_reference.h5ad",
-        query_h5ad = "results/integrated/integrated_query.h5ad",
-        combined_h5ad = "results/integrated/integrated_combined.h5ad"
+        matrix     = rules.integrate.output.sceptic_matrix,
+        labels     = rules.integrate.output.sceptic_labels,
+        label_list = rules.integrate.output.sceptic_label_list,
+        metadata   = rules.integrate.output.sceptic_metadata,
+        h5ad       = rules.integrate.output.integrated
     output:
         results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
         stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
@@ -866,9 +820,7 @@ rule run_sceptic:
             --labels       {input.labels} \
             --label_list   {input.label_list} \
             --metadata     {input.metadata} \
-            --ref_h5ad     {input.ref_h5ad} \
-            --query_h5ad   {input.query_h5ad} \
-            --combined_h5ad {input.combined_h5ad} \
+            --h5ad         {input.h5ad} \
             --sample       {wildcards.sample} \
             --fig_dir      {params.fig_dir} \
             --method       {params.method} \
@@ -876,7 +828,6 @@ rule run_sceptic:
 
         echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
-
 # rule scanpy_cellcycle:
 #     input:
 #         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
