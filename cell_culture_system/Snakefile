@@ -619,7 +619,7 @@ rule integrate:
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
         out_path      = "results/integrated/integrated.h5ad",
-        resolution    = config.get("integrate_resolution", 0.5),
+        resolution    = 0.4, #config.get("integrate_resolution", 0.5),
         bio_condition = config.get("integrate_bio_condition", "")
     log:
         "logs/integrate/integrate.log"
@@ -778,7 +778,50 @@ rule run_sceptic:
 ##################################################################
 # Gene program and pathway analysis rules
 ##################################################################
+rule nmf_programs:
+    input:
+        h5ad = rules.integrate.output.integrated
+    output:
+        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
+        summary = "results/nmf_programs/SUMMARY.txt",
+        flag = touch("results/nmf_programs/.done")
+    params:
+        script = config.get("nmf_script", "../snakemake_scripts/analysis/nmf_programs.py"),
+        output_dir = "results/nmf_programs",
+        n_programs = config.get("n_programs", 15),
+        n_top_genes = config.get("n_top_genes", 2000),
+        organism = config.get("organism", "Fly"),
+        gene_id_type = config.get("gene_id_type", "flybase"),
+        flybase_annotation = config.get("flybase_annotation",
+            "../reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
+    log:
+        "logs/nmf/nmf_programs.log"
+    threads:
+        config.get("nmf_threads", 8)
+    resources:
+        slurm_partition = config.get("nmf_partition", "medium"),
+        mem_mb          = config.get("nmf_mem", 64000),
+        slurm_time      = config.get("nmf_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting NMF program discovery"
 
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input {input.h5ad} \
+            --output_dir {params.output_dir} \
+            --n_programs {params.n_programs} \
+            --n_top_genes {params.n_top_genes} \
+            --organism {params.organism} \
+            --gene_id_type {params.gene_id_type} \
+            --flybase_annotation {params.flybase_annotation}
+
+        echo "NMF program discovery complete"
+        """
+        
 rule nmf_continuous_var:
     input:
         adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad"
