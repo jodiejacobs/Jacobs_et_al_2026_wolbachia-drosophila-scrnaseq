@@ -72,25 +72,68 @@ def _bin_pseudotime(pseudotime, n_bins=10):
 # ─────────────────────────────────────────────────────────────────────────────
 # Load SCEPTIC inputs
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Load SCEPTIC inputs from h5ad
+# ─────────────────────────────────────────────────────────────────────────────
 
-def load_sceptic_inputs(matrix_path, labels_path, label_list_path, metadata_path):
-    print("Loading SCEPTIC inputs …")
-    data       = pd.read_csv(matrix_path,     index_col=0)
-    labels_df  = pd.read_csv(labels_path,     index_col=0)
-    label_list = pd.read_csv(label_list_path)["timepoint"].values
-    metadata   = pd.read_csv(metadata_path)
+def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"):
+    """
+    Extract everything SCEPTIC needs directly from an h5ad object.
 
-    # Align metadata index to data index
-    metadata.index = data.index
+    Returns
+    -------
+    data       : np.ndarray  (cells x PCs)
+    labels     : np.ndarray  (numeric timepoint per cell)
+    label_list : np.ndarray  (unique sorted timepoints)
+    metadata   : pd.DataFrame
+    cell_ids   : list[str]
+    """
+    import scanpy as sc
+    print(f"Loading h5ad: {h5ad_path}")
+    adata = sc.read_h5ad(h5ad_path)
 
-    labels = labels_df["timepoint"].values
+    # ── PCA embedding ────────────────────────────────────────────────────────
+    if pca_key in adata.obsm:
+        data = adata.obsm[pca_key]
+        print(f"  Using embedding: {pca_key}  shape={data.shape}")
+    elif "X_pca" in adata.obsm:
+        data = adata.obsm["X_pca"]
+        print(f"  WARNING: '{pca_key}' not found, falling back to X_pca  shape={data.shape}")
+    else:
+        raise KeyError(f"No PCA embedding found in adata.obsm. "
+                       f"Available: {list(adata.obsm.keys())}")
 
-    print(f"  Cells:          {data.shape[0]}")
-    print(f"  Features:       {data.shape[1]}")
-    print(f"  Timepoints:     {label_list}")
-    print(f"  Label counts:   {pd.Series(labels).value_counts().sort_index().to_dict()}")
-    return data.values, labels, label_list, metadata, data.index.tolist()
+    # ── Timepoint labels ─────────────────────────────────────────────────────
+    if timepoint_col not in adata.obs.columns:
+        raise KeyError(f"Column '{timepoint_col}' not found in adata.obs. "
+                       f"Available: {list(adata.obs.columns)}")
 
+    # Convert timepoint strings like "D7" → numeric 7; "0" / NaN → 0
+    def _parse_tp(val):
+        if pd.isna(val):
+            return 0
+        s = str(val).lstrip("Dd")
+        try:
+            return int(s)
+        except ValueError:
+            return 0
+
+    labels     = adata.obs[timepoint_col].apply(_parse_tp).values.astype(int)
+    label_list = np.array(sorted(np.unique(labels)))
+
+    print(f"  Cells:        {adata.n_obs}")
+    print(f"  Features:     {data.shape[1]}")
+    print(f"  Timepoints:   {label_list}")
+    print(f"  Label counts: {pd.Series(labels).value_counts().sort_index().to_dict()}")
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
+    keep_cols = [c for c in ["leiden", "method", "timepoint", "bio_condition",
+                              "cell_line", "treatment", "replicate",
+                              "wolbachia_titer", "phase", "cyclum_theta"]
+                 if c in adata.obs.columns]
+    metadata = adata.obs[keep_cols].copy()
+
+    return data, labels, label_list, metadata, adata.obs_names.tolist()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Add Wolbachia titer from h5ad
@@ -437,56 +480,30 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run SCEPTIC pseudotime and analyse Wolbachia titer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic run using SCEPTIC exports from integrate.py
-  python run_sceptic.py \\
-      --matrix  results/integrated/figures/sceptic_matrix_wolbachia_infection.csv \\
-      --labels  results/integrated/figures/sceptic_labels_wolbachia_infection.csv \\
-      --label_list results/integrated/figures/sceptic_label_list_wolbachia_infection.csv \\
-      --metadata   results/integrated/figures/sceptic_metadata_wolbachia_infection.csv \\
-      --ref_h5ad   results/integrated/integrated_reference.h5ad \\
-      --query_h5ad results/integrated/integrated_query.h5ad \\
-      --combined_h5ad results/integrated/integrated_combined.h5ad \\
-      --sample wolbachia_infection \\
-      --fig_dir results/sceptic \\
-      --method xgboost
-        """
     )
-    parser.add_argument("--matrix",      required=True,
-                        help="sceptic_matrix_{sample}.csv from integrate.py")
-    parser.add_argument("--labels",      required=True,
-                        help="sceptic_labels_{sample}.csv from integrate.py")
-    parser.add_argument("--label_list",  required=True,
-                        help="sceptic_label_list_{sample}.csv from integrate.py")
-    parser.add_argument("--metadata",    required=True,
-                        help="sceptic_metadata_{sample}.csv from integrate.py")
-    parser.add_argument("--ref_h5ad",    default=None,
-                        help="integrated_reference.h5ad (for titer + UMAP)")
-    parser.add_argument("--query_h5ad",  default=None,
-                        help="integrated_query.h5ad (for titer + UMAP)")
-    parser.add_argument("--combined_h5ad", default=None,
-                        help="integrated_combined.h5ad (for UMAP projection)")
-    parser.add_argument("--sample",      default="wolbachia_infection",
-                        help="Label used in output filenames")
-    parser.add_argument("--fig_dir",     default="results/sceptic",
-                        help="Output directory")
-    parser.add_argument("--method",      default="xgboost",
-                        choices=["xgboost", "svm"],
-                        help="SCEPTIC classifier (default: xgboost)")
-    parser.add_argument("--n_bins",      type=int, default=10,
-                        help="Number of pseudotime bins for boxplot (default: 10)")
+    parser.add_argument("--h5ad",         required=True,
+                        help="Annotated h5ad (output of cell_cycle_analysis rule)")
+    parser.add_argument("--sample",       default="wolbachia_infection")
+    parser.add_argument("--fig_dir",      default="results/sceptic")
+    parser.add_argument("--pca_key",      default="X_pca_harmony",
+                        help="obsm key for PCA embedding (default: X_pca_harmony)")
+    parser.add_argument("--timepoint_col", default="timepoint",
+                        help="obs column with timepoint labels (default: timepoint)")
+    parser.add_argument("--method",       default="xgboost",
+                        choices=["xgboost", "svm"])
+    parser.add_argument("--n_bins",       type=int, default=10)
 
     args = parser.parse_args()
     os.makedirs(args.fig_dir, exist_ok=True)
 
-    # ── Load inputs ──────────────────────────────────────────────────────────
-    data, labels, label_list, metadata, cell_ids = load_sceptic_inputs(
-        args.matrix, args.labels, args.label_list, args.metadata
+    # ── Load ─────────────────────────────────────────────────────────────────
+    data, labels, label_list, metadata, cell_ids = load_from_h5ad(
+        args.h5ad,
+        pca_key=args.pca_key,
+        timepoint_col=args.timepoint_col,
     )
 
-    # ── Add titer from h5ad ──────────────────────────────────────────────────
-    metadata = add_titer_from_h5ad(metadata, args.ref_h5ad, args.query_h5ad)
+    # titer is already in metadata if present in adata.obs — no separate h5ad needed
 
     # ── Run SCEPTIC ──────────────────────────────────────────────────────────
     cm_result, label_predicted, pseudotime, prob = run_sceptic(
@@ -495,7 +512,6 @@ Examples:
 
     # ── Plots ─────────────────────────────────────────────────────────────────
     print("\nGenerating plots …")
-
     plot_confusion_matrix(cm_result, label_list, args.fig_dir, args.sample)
 
     rho_sp, p_sp = plot_pseudotime_violin(
@@ -506,22 +522,19 @@ Examples:
     stat_results = plot_titer_vs_pseudotime(
         pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
 
-    # Add pseudotime-timepoint correlation to stats
     stat_results["pseudotime_timepoint_spearman_rho"] = rho_sp
     stat_results["pseudotime_timepoint_spearman_p"]   = p_sp
 
-    # UMAP projection (uses combined or query h5ad)
-    umap_h5ad = args.combined_h5ad or args.query_h5ad
-    plot_pseudotime_on_umap(pseudotime, metadata, umap_h5ad,
+    # UMAP projection uses the same h5ad
+    plot_pseudotime_on_umap(pseudotime, metadata, args.h5ad,
                             args.fig_dir, args.sample)
 
-    # ── Save results ──────────────────────────────────────────────────────────
-    results_df = save_results(
+    # ── Save ──────────────────────────────────────────────────────────────────
+    save_results(
         pseudotime, label_predicted, prob, labels, label_list,
         metadata, cell_ids, stat_results, args.fig_dir, args.sample
     )
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("SCEPTIC ANALYSIS COMPLETE")
     print("=" * 60)

@@ -98,27 +98,25 @@ rule all:
                zip,
                condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
                seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        # expand("results/method_comparison/{condition}_comparison.h5ad",
-        #        condition=CONDITIONS_WITH_BOTH_METHODS),
-        # expand("results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf",
-        #        condition=CONDITIONS_WITH_BOTH_METHODS),
-        # # New: All conditions method comparison
-        # "results/method_comparison/all_conditions_all_methods.h5ad",
-        # "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf",
-        # # New: Cyclum cluster analysis
-        # "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
-        # "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
-        # New: Integration and QC plots
         # Integration
         "results/integrated/integrated.h5ad",
         # Cell cycle
         "results/cellcycle/.done",
         "results/cellcycle/cluster_cellcycle_summary.csv",
+        # Cluster marker + pathway analysis
+        expand("results/cluster_marker_pathway/{sample}/.done",
+               sample=["wolbachia_infection"]),
         # SCEPTIC
         expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
             sample=["wolbachia_infection"]),
         expand("results/sceptic/{sample}/.done",
             sample=["wolbachia_infection"]),
+                # Gene program and pathway analysis
+        "results/cluster_gsea/.done",
+        "results/nmf_programs/.done",
+        "results/nmf_continuous_var/.done",
+        "results/nmf_categorical_var/.done",
+     
 
 # Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -613,110 +611,18 @@ rule extract_abundant_16s:
         echo "Abundant sequence extraction complete"
         """
 
-# rule compare_methods:
-#     input:
-#         input_files = lambda wildcards: [
-#             f"results/annotated_h5ad/{sample_id}.h5ad"
-#             for sample_id in SAMPLE_IDS
-#             if sample_id.startswith(wildcards.condition + "-")
-#         ]
-#     output:
-#         integrated = "results/method_comparison/{condition}_comparison.h5ad",
-#         plot = "results/method_comparison/{condition}_comparison/umap_{condition}_comparison_method_overview.pdf"
-#     params:
-#         compare_script = config["compare_script"],
-#         sample = 'comparison',
-#         fig_dir = 'results/method_comparison/{condition}_comparison',
-#         bio_condition = '{condition}'
-#     log:
-#         "logs/method_comparison/{condition}.log"
-#     threads:
-#         config.get("compare_threads", 8)
-#     resources:
-#         slurm_partition = config.get("compare_partition", "medium"),
-#         mem_mb = config.get("compare_mem", 32000),
-#         slurm_time = config.get("compare_time", "4:00:00")
-#     shell:
-#         """
-#         exec > {log} 2>&1
-#         echo "Starting method comparison for {wildcards.condition}"
-#         echo "Input files: {input.input_files}"
-        
-#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-#         conda activate {SCANPY_ENV}
-        
-#         python {params.compare_script} \
-#             --files {input.input_files} \
-#             --out_path {output.integrated} \
-#             --fig_dir {params.fig_dir} \
-#             --sample {params.sample} \
-#             --bio_condition {params.bio_condition} \
-#             --batch_key batch \
-#             --min_cells 3 \
-#             --min_genes 200 \
-#             --n_pcs 30
-        
-#         echo "Method comparison complete for {wildcards.condition}"
-#         """
-
-##################################################################
-# New rules: All conditions method comparison and cell cycle analysis
-##################################################################
-
-# rule validate_pipseq_all_conditions:
-#     input:
-#         input_files = expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
-#     output:
-#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad",
-#         plot = "results/method_comparison/all_conditions/umap_all_conditions_method_overview.pdf"
-#     params:
-#         validate_script = config.get("validate_pipseq_script", "scripts/method_comparison/validate_pipseq.py"),
-#         sample = 'all_conditions',
-#         fig_dir = 'results/method_comparison/all_conditions'
-#     log:
-#         "logs/method_comparison/all_conditions.log"
-#     threads:
-#         config.get("validate_threads", 16)
-#     resources:
-#         slurm_partition = config.get("validate_partition", "medium"),
-#         mem_mb = config.get("validate_mem", 64000),
-#         slurm_time = config.get("validate_time", "8:00:00")
-#     shell:
-#         """
-#         exec > {log} 2>&1
-#         echo "Starting method comparison for all conditions"
-#         echo "Input files: {input.input_files}"
-        
-#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-#         conda activate {SCANPY_ENV}
-        
-#         python {params.validate_script} \
-#             --files {input.input_files} \
-#             --out_path {output.integrated} \
-#             --fig_dir {params.fig_dir} \
-#             --sample {params.sample} \
-#             --batch_key batch \
-#             --min_cells 3 \
-#             --min_genes 200 \
-#             --n_pcs 30
-        
-#         echo "All conditions method comparison complete"
-#         """
 rule integrate:
     input:
         files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
     output:
-        integrated         = "results/integrated/integrated.h5ad",
-        sceptic_matrix     = "results/integrated/figures/sceptic_matrix_wolbachia_infection.csv",
-        sceptic_labels     = "results/integrated/figures/sceptic_labels_wolbachia_infection.csv",
-        sceptic_label_list = "results/integrated/figures/sceptic_label_list_wolbachia_infection.csv",
-        sceptic_metadata   = "results/integrated/figures/sceptic_metadata_wolbachia_infection.csv"
+        integrated = "results/integrated/integrated.h5ad"
     params:
-        script      = config["integrate_script"],
-        sample      = "wolbachia_infection",
-        fig_dir     = "results/integrated/figures",
-        out_path    = "results/integrated/integrated.h5ad",
-        resolutions = "0.2 0.4 0.8 1.0 1.8"
+        script        = config["integrate_script"],
+        sample        = "wolbachia_infection",
+        fig_dir       = "results/integrated/figures",
+        out_path      = "results/integrated/integrated.h5ad",
+        resolution    = config.get("integrate_resolution", 0.5),
+        bio_condition = config.get("integrate_bio_condition", "")
     log:
         "logs/integrate/integrate.log"
     threads:
@@ -740,10 +646,10 @@ rule integrate:
             --min_cells 3 \
             --min_genes 200 \
             --n_pcs 30 \
+            --resolution {params.resolution} \
             --out_path {params.out_path} \
             --fig_dir {params.fig_dir} \
-            --optimize_resolution \
-            --resolutions {params.resolutions}
+            $([ -n "{params.bio_condition}" ] && echo "--bio_condition {params.bio_condition}")
 
         echo "Integration complete"
         """
@@ -776,29 +682,76 @@ rule cell_cycle_analysis:
         python {params.script} \
             --input   {input.h5ad} \
             --output  {params.fig_dir} \
-            --sample  wolbachia_infection \
-            --run-scoring \
-            --save-output
+            --sample wMel \
+            --subset-col cell_line --subset-val JW18wMel \
+            --titer-analysis --titer-col wolbachia_titer
+
+        #(scanpy) jomojaco@emerald:/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system$ python scripts/method_comparison/scanpy_cellcycle_analysis_v2.py     --input results/validated/integrated.h5ad     --output results/cellcycle/titer_wMel     --sample wMel     --subset-col cell_line --subset-val JW18wMel     --titer-analysis --titer-col wolbachia_titer
 
         echo "Cell cycle analysis complete"
         """
-        
+
+rule cluster_marker_pathway:
+    input:
+        h5ad    = rules.integrate.output.integrated,
+        mapping = config["transcripts_to_genes"]
+    output:
+        markers_full  = "results/cluster_marker_pathway/{sample}_marker_genes_full.csv",
+        markers_top50 = "results/cluster_marker_pathway/{sample}_marker_genes_top50.csv",
+        enrichment    = "results/cluster_marker_pathway/{sample}_flyenrichr_all_results.csv",
+        go_combined   = "results/cluster_marker_pathway/{sample}_GO_combined_all_categories.csv",
+        go_top20      = "results/cluster_marker_pathway/{sample}_GO_combined_top20_per_cluster.csv",
+        flag          = touch("results/cluster_marker_pathway/{sample}/.done")  # <-- wildcard here
+    params:
+        script     = config["cluster_marker_pathway_script"],
+        output_dir = "results/cluster_marker_pathway",
+        method     = config.get("cluster_marker_de_method", "wilcoxon"),
+        top_n      = config.get("cluster_marker_top_n", 100)
+    log:
+        "logs/cluster_marker_pathway/{sample}.log"
+    threads:
+        config.get("cluster_marker_threads", 8)
+    resources:
+        slurm_partition = config.get("cluster_marker_partition", "medium"),
+        mem_mb          = config.get("cluster_marker_mem", 64000),
+        slurm_time      = config.get("cluster_marker_time", "8:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cluster marker and pathway analysis for {wildcards.sample}"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input   {input.h5ad} \
+            --output  {params.output_dir} \
+            --sample  {wildcards.sample} \
+            --mapping {input.mapping} \
+            --method  {params.method} \
+            --top-n   {params.top_n}
+
+        echo "Cluster marker and pathway analysis complete"
+        """
+
 rule run_sceptic:
     input:
-        matrix     = rules.integrate.output.sceptic_matrix,
-        labels     = rules.integrate.output.sceptic_labels,
-        label_list = rules.integrate.output.sceptic_label_list,
-        metadata   = rules.integrate.output.sceptic_metadata,
-        h5ad       = rules.integrate.output.integrated
+        h5ad = rules.cell_cycle_analysis.output.flag  # waits for cell cycle to finish
+            # actual h5ad path is fixed — cell cycle rule annotates in-place or
+            # you can point directly at the integrated h5ad:
+        # h5ad = "results/integrated/integrated.h5ad"
     output:
         results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
         stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
         flag    = touch("results/sceptic/{sample}/.done")
     params:
-        script  = config["sceptic_script"],
-        fig_dir = "results/sceptic/{sample}",
-        method  = config.get("sceptic_method", "xgboost"),
-        n_bins  = config.get("sceptic_n_bins", 10)
+        script       = config["sceptic_script"],
+        h5ad         = "results/integrated/integrated.h5ad",
+        fig_dir      = "results/sceptic/{sample}",
+        pca_key      = config.get("sceptic_pca_key", "X_pca_harmony"),
+        timepoint_col = config.get("sceptic_timepoint_col", "timepoint"),
+        method       = config.get("sceptic_method", "xgboost"),
+        n_bins       = config.get("sceptic_n_bins", 10)
     log:
         "logs/sceptic/{sample}.log"
     threads:
@@ -816,69 +769,178 @@ rule run_sceptic:
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --matrix       {input.matrix} \
-            --labels       {input.labels} \
-            --label_list   {input.label_list} \
-            --metadata     {input.metadata} \
-            --h5ad         {input.h5ad} \
-            --sample       {wildcards.sample} \
-            --fig_dir      {params.fig_dir} \
-            --method       {params.method} \
-            --n_bins       {params.n_bins}
+            --h5ad          {params.h5ad} \
+            --sample        {wildcards.sample} \
+            --fig_dir       {params.fig_dir} \
+            --pca_key       {params.pca_key} \
+            --timepoint_col {params.timepoint_col} \
+            --method        {params.method} \
+            --n_bins        {params.n_bins}
 
         echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
-# rule scanpy_cellcycle:
-#     input:
-#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
-#     output:
-#         summary = "results/cellcycle_analysis/scanpy_cellcycle_summary_all_conditions.csv",
-     
-# rule characterize_clusters:
-#     input:
-#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
-# rule pseudotime_analysis:
 
+##################################################################
+# Gene program and pathway analysis rules
+##################################################################
 
-    #use sceptic 
+rule cluster_gsea:
+    input:
+        h5ad = "results/integrated/integrated.h5ad"
+    output:
+        summary = "results/cluster_gsea/cluster_summary.csv",
+        flag = touch("results/cluster_gsea/.done")
+    params:
+        script = config.get("cluster_gsea_script", "../snakemake_scripts/analysis/cluster_gsea.py"),
+        output_dir = "results/cluster_gsea",
+        organism = config.get("organism", "Fly"),
+        gene_id_type = config.get("gene_id_type", "flybase"),
+        flybase_annotation = config.get("flybase_annotation", 
+            "reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
+    log:
+        "logs/cluster_gsea/cluster_gsea.log"
+    threads:
+        config.get("cluster_gsea_threads", 8)
+    resources:
+        slurm_partition = config.get("cluster_gsea_partition", "medium"),
+        mem_mb = config.get("cluster_gsea_mem", 64000),
+        slurm_time = config.get("cluster_gsea_time", "8:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cluster GSEA analysis"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        
+        python {params.script} \
+            --input {input.h5ad} \
+            --output_dir {params.output_dir} \
+            --organism {params.organism} \
+            --gene_id_type {params.gene_id_type} \
+            --flybase_annotation {params.flybase_annotation} \
+            --threads {threads}
+        
+        echo "Cluster GSEA complete"
+        """
 
-# rule cyclum_cluster_analysis:
-#     input:
-#         integrated = "results/method_comparison/all_conditions_all_methods.h5ad"
-#     output:
-#         summary = "results/cellcycle_analysis/cluster_cellcycle_summary_all_conditions.csv",
-#         cyclum_plot = "results/cellcycle_analysis/all_conditions_cyclum_cell_cycle.pdf",
-#         updated_h5ad = "results/method_comparison/all_conditions_all_methods_with_cyclum.h5ad"
-#     params:
-#         cellcycle_script = config.get("cellcycle_analysis_script", "scripts/method_comparison/cyclum_cluster_analysis.py"),
-#         sample = 'all_conditions',
-#         output_dir = 'results/cellcycle_analysis'
-#     log:
-#         "logs/cellcycle_analysis/all_conditions.log"
-#     threads:
-#         config.get("cellcycle_threads", 16)
-#     resources:
-#         slurm_partition = config.get("cellcycle_partition", "medium"),
-#         mem_mb = config.get("cellcycle_mem", 64000),
-#         slurm_time = config.get("cellcycle_time", "8:00:00")
-#     shell:
-#         """
-#         exec > {log} 2>&1
-#         echo "Starting Cyclum and cluster-cell cycle analysis"
-#         echo "Input file: {input.integrated}"
+rule nmf_programs:
+    input:
+        h5ad = "results/integrated/integrated.h5ad"
+    output:
+        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
+        summary = "results/nmf_programs/SUMMARY.txt",
+        flag = touch("results/nmf_programs/.done")
+    params:
+        script = config.get("nmf_script", "../snakemake_scripts/analysis/nmf_programs.py"),
+        output_dir = "results/nmf_programs",
+        n_programs = config.get("n_programs", 15),
+        n_top_genes = config.get("n_top_genes", 2000),
+        organism = config.get("organism", "Fly"),
+        gene_id_type = config.get("gene_id_type", "flybase"),
+        flybase_annotation = config.get("flybase_annotation", 
+            "reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
+    log:
+        "logs/nmf/nmf_programs.log"
+    threads:
+        config.get("nmf_threads", 8)
+    resources:
+        slurm_partition = config.get("nmf_partition", "medium"),
+        mem_mb = config.get("nmf_mem", 64000),
+        slurm_time = config.get("nmf_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting NMF program discovery"
         
-#         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-#         conda activate {CYCLUM_ENV}
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
         
-#         python {params.cellcycle_script} \
-#             --input {input.integrated} \
-#             --output {params.output_dir} \
-#             --sample {params.sample} \
-#             --run-cyclum \
-#             --save-output
+        python {params.script} \
+            --input {input.h5ad} \
+            --output_dir {params.output_dir} \
+            --n_programs {params.n_programs} \
+            --n_top_genes {params.n_top_genes} \
+            --organism {params.organism} \
+            --gene_id_type {params.gene_id_type} \
+            --flybase_annotation {params.flybase_annotation}
         
-#         echo "Cyclum and cluster-cell cycle analysis complete"
-#         """
+        echo "NMF program discovery complete"
+        """
+
+rule nmf_continuous_var:
+    input:
+        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad"
+    output:
+        correlations = "results/nmf_continuous_var/program_correlations.csv",
+        summary = "results/nmf_continuous_var/SUMMARY.txt",
+        flag = touch("results/nmf_continuous_var/.done")
+    params:
+        script = config.get("nmf_continuous_script", 
+            "../snakemake_scripts/analysis/nmf_continuous_var.py"),
+        output_dir = "results/nmf_continuous_var",
+        continuous_var = config.get("continuous_var", None),  # Auto-detect if None
+        flybase_annotation = config.get("flybase_annotation", 
+            "reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
+    log:
+        "logs/nmf/nmf_continuous_var.log"
+    threads:
+        config.get("nmf_continuous_threads", 4)
+    resources:
+        slurm_partition = config.get("nmf_continuous_partition", "medium"),
+        mem_mb = config.get("nmf_continuous_mem", 32000),
+        slurm_time = config.get("nmf_continuous_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting NMF continuous variable analysis"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        
+        python {params.script} \
+            --input {input.adata_with_programs} \
+            --output_dir {params.output_dir} \
+            --continuous_var {params.continuous_var} \
+            --flybase_annotation {params.flybase_annotation}
+        
+        echo "NMF continuous variable analysis complete"
+        """
+
+rule nmf_categorical_var:
+    input:
+        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad"
+    output:
+        comparison = "results/nmf_categorical_var/program_comparison.csv",
+        flag = touch("results/nmf_categorical_var/.done")
+    params:
+        script = config.get("nmf_categorical_script", 
+            "../snakemake_scripts/analysis/nmf_categorical_var.py"),
+        output_dir = "results/nmf_categorical_var",
+        categorical_var = config.get("categorical_var", None)  # Auto-detect if None
+    log:
+        "logs/nmf/nmf_categorical_var.log"
+    threads:
+        config.get("nmf_categorical_threads", 4)
+    resources:
+        slurm_partition = config.get("nmf_categorical_partition", "medium"),
+        mem_mb = config.get("nmf_categorical_mem", 32000),
+        slurm_time = config.get("nmf_categorical_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting NMF categorical variable analysis"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        
+        python {params.script} \
+            --input {input.adata_with_programs} \
+            --output_dir {params.output_dir} \
+            --categorical_var {params.categorical_var}
+        
+        echo "NMF categorical variable analysis complete"
+        """
 
 
 """
