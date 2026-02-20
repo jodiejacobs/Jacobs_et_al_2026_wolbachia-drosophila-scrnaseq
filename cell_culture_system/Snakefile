@@ -102,7 +102,6 @@ rule all:
         "results/integrated/integrated.h5ad",
         # Cell cycle
         "results/cellcycle/.done",
-        "results/cellcycle/cluster_cellcycle_summary.csv",
         # Cluster marker + pathway analysis
         expand("results/cluster_marker_pathway/{sample}/.done",
                sample=["wolbachia_infection"]),
@@ -112,7 +111,6 @@ rule all:
         expand("results/sceptic/{sample}/.done",
             sample=["wolbachia_infection"]),
                 # Gene program and pathway analysis
-        "results/cluster_gsea/.done",
         "results/nmf_programs/.done",
         "results/nmf_continuous_var/.done",
         "results/nmf_categorical_var/.done",
@@ -658,8 +656,8 @@ rule cell_cycle_analysis:
     input:
         h5ad = rules.integrate.output.integrated
     output:
-        flag    = touch("results/cellcycle/.done"),
-        summary = "results/cellcycle/cluster_cellcycle_summary.csv"
+        flag = touch("results/cellcycle/.done")
+        # Removed cluster_cellcycle_summary.csv — script doesn't create it
     params:
         script  = config["cellcycle_script"],
         fig_dir = "results/cellcycle"
@@ -686,22 +684,19 @@ rule cell_cycle_analysis:
             --subset-col cell_line --subset-val JW18wMel \
             --titer-analysis --titer-col wolbachia_titer
 
-        #(scanpy) jomojaco@emerald:/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system$ python scripts/method_comparison/scanpy_cellcycle_analysis_v2.py     --input results/validated/integrated.h5ad     --output results/cellcycle/titer_wMel     --sample wMel     --subset-col cell_line --subset-val JW18wMel     --titer-analysis --titer-col wolbachia_titer
-
         echo "Cell cycle analysis complete"
         """
+
 
 rule cluster_marker_pathway:
     input:
         h5ad    = rules.integrate.output.integrated,
         mapping = config["transcripts_to_genes"]
     output:
+        # Only markers are guaranteed — enrichment CSVs depend on having enough sig markers
         markers_full  = "results/cluster_marker_pathway/{sample}_marker_genes_full.csv",
         markers_top50 = "results/cluster_marker_pathway/{sample}_marker_genes_top50.csv",
-        enrichment    = "results/cluster_marker_pathway/{sample}_flyenrichr_all_results.csv",
-        go_combined   = "results/cluster_marker_pathway/{sample}_GO_combined_all_categories.csv",
-        go_top20      = "results/cluster_marker_pathway/{sample}_GO_combined_top20_per_cluster.csv",
-        flag          = touch("results/cluster_marker_pathway/{sample}/.done")  # <-- wildcard here
+        flag          = touch("results/cluster_marker_pathway/{sample}/.done")
     params:
         script     = config["cluster_marker_pathway_script"],
         output_dir = "results/cluster_marker_pathway",
@@ -783,90 +778,6 @@ rule run_sceptic:
 ##################################################################
 # Gene program and pathway analysis rules
 ##################################################################
-
-rule cluster_gsea:
-    input:
-        h5ad = "results/integrated/integrated.h5ad"
-    output:
-        summary = "results/cluster_gsea/cluster_summary.csv",
-        flag = touch("results/cluster_gsea/.done")
-    params:
-        script = config.get("cluster_gsea_script", "../snakemake_scripts/analysis/cluster_gsea.py"),
-        output_dir = "results/cluster_gsea",
-        organism = config.get("organism", "Fly"),
-        gene_id_type = config.get("gene_id_type", "flybase"),
-        flybase_annotation = config.get("flybase_annotation", 
-            "reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
-    log:
-        "logs/cluster_gsea/cluster_gsea.log"
-    threads:
-        config.get("cluster_gsea_threads", 8)
-    resources:
-        slurm_partition = config.get("cluster_gsea_partition", "medium"),
-        mem_mb = config.get("cluster_gsea_mem", 64000),
-        slurm_time = config.get("cluster_gsea_time", "8:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting cluster GSEA analysis"
-        
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
-        
-        python {params.script} \
-            --input {input.h5ad} \
-            --output_dir {params.output_dir} \
-            --organism {params.organism} \
-            --gene_id_type {params.gene_id_type} \
-            --flybase_annotation {params.flybase_annotation} \
-            --threads {threads}
-        
-        echo "Cluster GSEA complete"
-        """
-
-rule nmf_programs:
-    input:
-        h5ad = "results/integrated/integrated.h5ad"
-    output:
-        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
-        summary = "results/nmf_programs/SUMMARY.txt",
-        flag = touch("results/nmf_programs/.done")
-    params:
-        script = config.get("nmf_script", "../snakemake_scripts/analysis/nmf_programs.py"),
-        output_dir = "results/nmf_programs",
-        n_programs = config.get("n_programs", 15),
-        n_top_genes = config.get("n_top_genes", 2000),
-        organism = config.get("organism", "Fly"),
-        gene_id_type = config.get("gene_id_type", "flybase"),
-        flybase_annotation = config.get("flybase_annotation", 
-            "reference/fbgn_annotation_ID_fb_2025_04.tsv.gz")
-    log:
-        "logs/nmf/nmf_programs.log"
-    threads:
-        config.get("nmf_threads", 8)
-    resources:
-        slurm_partition = config.get("nmf_partition", "medium"),
-        mem_mb = config.get("nmf_mem", 64000),
-        slurm_time = config.get("nmf_time", "4:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting NMF program discovery"
-        
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {SCANPY_ENV}
-        
-        python {params.script} \
-            --input {input.h5ad} \
-            --output_dir {params.output_dir} \
-            --n_programs {params.n_programs} \
-            --n_top_genes {params.n_top_genes} \
-            --organism {params.organism} \
-            --gene_id_type {params.gene_id_type} \
-            --flybase_annotation {params.flybase_annotation}
-        
-        echo "NMF program discovery complete"
-        """
 
 rule nmf_continuous_var:
     input:

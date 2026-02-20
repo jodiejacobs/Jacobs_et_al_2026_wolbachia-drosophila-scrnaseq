@@ -267,7 +267,6 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon'):
     # Run differential expression
     sc.tl.rank_genes_groups(adata, 'leiden', method=method, 
                             key_added='rank_genes_groups',
-                            use_raw=False,
                             tie_correct=True,
                             rankby_abs=False,
                             pts=True)
