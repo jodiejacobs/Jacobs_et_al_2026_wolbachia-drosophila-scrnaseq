@@ -109,16 +109,25 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
                        f"Available: {list(adata.obs.columns)}")
 
     # Convert timepoint strings like "D7" → numeric 7; "0" / NaN → 0
-    def _parse_tp(val):
-        if pd.isna(val):
-            return 0
-        s = str(val).lstrip("Dd")
+    def _parse_tp(row):
+        """Parse a row of adata.obs to get a numeric timepoint."""
+        bio = str(row.get("bio_condition", "")).strip()
+        tp  = str(row.get("timepoint", "")).strip()
+
+        # ── Named controls (identified via bio_condition) ─────────────────
+        if "wMel-Ctrl" in bio:
+            return 999          # persistently infected control → latest timepoint
+        if "DOX-Ctrl" in bio:
+            return 0            # cured/uninfected control → timepoint 0
+
+        # ── Standard D1, D7, D28 … format ────────────────────────────────
+        s = tp.lstrip("Dd")
         try:
             return int(s)
         except ValueError:
             return 0
 
-    labels     = adata.obs[timepoint_col].apply(_parse_tp).values.astype(int)
+    labels = adata.obs.apply(_parse_tp, axis=1).values.astype(int)
     label_list = np.array(sorted(np.unique(labels)))
 
     print(f"  Cells:        {adata.n_obs}")

@@ -615,6 +615,7 @@ rule integrate:
     output:
         integrated = "results/integrated/integrated.h5ad"
     params:
+        files         = "results/filtered_h5ad/*.h5ad",   
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
@@ -821,7 +822,7 @@ rule nmf_programs:
 
         echo "NMF program discovery complete"
         """
-        
+
 rule nmf_continuous_var:
     input:
         adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad"
