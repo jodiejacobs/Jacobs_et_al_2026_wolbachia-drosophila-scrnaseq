@@ -114,9 +114,9 @@ rule all:
         "results/nmf_programs/.done",
         "results/nmf_continuous_var/.done",
         "results/nmf_categorical_var/.done",
-     
+        "results/nmf_annotate_programs/program_cellcycle_overlap.csv"
 
-# Establish rule precedence
+# Establish rule precedencex
 ruleorder: map_pipseq > combine_files_by_condition_platform
 ruleorder: map_10x > combine_files_by_condition_platform
 
@@ -620,7 +620,7 @@ rule integrate:
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
         out_path      = "results/integrated/integrated.h5ad",
-        resolution    = 0.4, #config.get("integrate_resolution", 0.5),
+        resolution    = 0.2, #config.get("integrate_resolution", 0.5),
         bio_condition = config.get("integrate_bio_condition", "")
     log:
         "logs/integrate/integrate.log"
@@ -657,11 +657,14 @@ rule cell_cycle_analysis:
     input:
         h5ad = rules.integrate.output.integrated
     output:
-        flag = touch("results/cellcycle/.done")
-        # Removed cluster_cellcycle_summary.csv — script doesn't create it
+        annotated_h5ad = "results/integrated/integrated_with_cellcycle.h5ad",
+        flag           = touch("results/cellcycle/.done")
     params:
         script  = config["cellcycle_script"],
-        fig_dir = "results/cellcycle"
+        fig_dir = "results/cellcycle",
+        subset_col = config.get("cellcycle_subset_col", "cell_line"),
+        subset_val = config.get("cellcycle_subset_val", "JW18wMel"),
+        titer_col  = config.get("continuous_var", "wolbachia_titer")
     log:
         "logs/cellcycle/cellcycle.log"
     threads:
@@ -679,19 +682,20 @@ rule cell_cycle_analysis:
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --input   {input.h5ad} \
-            --output  {params.fig_dir} \
-            --sample wMel \
-            --subset-col cell_line --subset-val JW18wMel \
-            --titer-analysis --titer-col wolbachia_titer
+            --input        {input.h5ad} \
+            --output       {params.fig_dir} \
+            --sample       wMel \
+            --subset-col   {params.subset_col} \
+            --subset-val   {params.subset_val} \
+            --titer-analysis --titer-col {params.titer_col} \
+            --save-output
 
         echo "Cell cycle analysis complete"
         """
 
-
 rule cluster_marker_pathway:
     input:
-        h5ad    = rules.integrate.output.integrated,
+        h5ad    = rules.cell_cycle_analysis.output.annotated_h5ad,
         mapping = config["transcripts_to_genes"]
     output:
         # Only markers are guaranteed — enrichment CSVs depend on having enough sig markers
@@ -732,22 +736,18 @@ rule cluster_marker_pathway:
 
 rule run_sceptic:
     input:
-        h5ad = rules.cell_cycle_analysis.output.flag  # waits for cell cycle to finish
-            # actual h5ad path is fixed — cell cycle rule annotates in-place or
-            # you can point directly at the integrated h5ad:
-        # h5ad = "results/integrated/integrated.h5ad"
+        h5ad = "results/nmf_programs/adata_with_programs.h5ad"
     output:
         results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
         stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
         flag    = touch("results/sceptic/{sample}/.done")
     params:
-        script       = config["sceptic_script"],
-        h5ad         = "results/integrated/integrated.h5ad",
-        fig_dir      = "results/sceptic/{sample}",
-        pca_key      = config.get("sceptic_pca_key", "X_pca_harmony"),
-        timepoint_col = config.get("sceptic_timepoint_col", "timepoint"),
-        method       = config.get("sceptic_method", "xgboost"),
-        n_bins       = config.get("sceptic_n_bins", 10)
+        script        = config["sceptic_script"],
+        fig_dir       = "results/sceptic/{sample}",
+        pca_key       = config.get("sceptic_pca_key", "X_pca_harmony"),
+        timepoint_col = config.get("sceptic_timepoint_col", "timepoint_numeric"),
+        method        = config.get("sceptic_method", "xgboost"),
+        n_bins        = config.get("sceptic_n_bins", 10)
     log:
         "logs/sceptic/{sample}.log"
     threads:
@@ -765,7 +765,7 @@ rule run_sceptic:
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --h5ad          {params.h5ad} \
+            --h5ad          {input.h5ad} \
             --sample        {wildcards.sample} \
             --fig_dir       {params.fig_dir} \
             --pca_key       {params.pca_key} \
@@ -781,7 +781,7 @@ rule run_sceptic:
 ##################################################################
 rule nmf_programs:
     input:
-        h5ad = rules.integrate.output.integrated
+        h5ad = rules.cell_cycle_analysis.output.annotated_h5ad
     output:
         adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
         summary = "results/nmf_programs/SUMMARY.txt",
@@ -897,6 +897,57 @@ rule nmf_categorical_var:
         echo "NMF categorical variable analysis complete"
         """
 
+rule nmf_annotate_programs:
+    input:
+        adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
+        nmf_done            = "results/nmf_programs/.done",
+        mapping             = config["transcripts_to_genes"]
+    output:
+        output  = "results/nmf_annotate_programs/program_cellcycle_overlap.csv",
+    params:
+        script       = config.get("nmf_annotate_script",
+                           "../snakemake_scripts/analysis/annotate_nmf_programs.py"),
+        output_dir   = "results/nmf_annotate_programs",
+        program_dir  = "results/nmf_programs",
+        sample_name  = config.get("nmf_annotate_sample", "wolbachia_infection"),
+        titer_var    = config.get("continuous_var", "wolbachia_titer"),
+        cc_s_var     = config.get("cc_s_var",      "S_score"),
+        cc_g2m_var   = config.get("cc_g2m_var",    "G2M_score"),
+        cc_phase_var = config.get("cc_phase_var",  "phase"),
+        top_genes    = config.get("nmf_annotate_top_genes", 200),
+        skip_gsea    = "--skip_gsea" if config.get("nmf_annotate_skip_gsea", False) else "",
+        skip_fly     = "--skip_flyenrichr" if config.get("nmf_annotate_skip_flyenrichr", False) else ""
+    log:
+        "logs/nmf/nmf_annotate_programs.log"
+    threads:
+        config.get("nmf_annotate_threads", 8)
+    resources:
+        slurm_partition = config.get("nmf_annotate_partition", "medium"),
+        mem_mb          = config.get("nmf_annotate_mem",       32000),
+        slurm_time      = config.get("nmf_annotate_time",      "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting NMF program annotation"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input        {input.adata_with_programs} \
+            --program_dir  {params.program_dir} \
+            --output_dir   {params.output_dir} \
+            --mapping      {input.mapping} \
+            --titer_var    {params.titer_var} \
+            --cc_s_var     {params.cc_s_var} \
+            --cc_g2m_var   {params.cc_g2m_var} \
+            --cc_phase_var {params.cc_phase_var} \
+            --top_genes    {params.top_genes} \
+            {params.skip_gsea} \
+            {params.skip_fly}
+
+        echo "NMF program annotation complete"
+        """
 
 """
 # Testing commands for new rules:

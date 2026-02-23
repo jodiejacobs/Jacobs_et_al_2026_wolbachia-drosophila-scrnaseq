@@ -143,3 +143,21 @@ nmf_categorical_threads: 4
 nmf_categorical_mem: 32000
 nmf_categorical_partition: "medium"
 nmf_categorical_time: "2:00:00"
+
+# NMF program annotation
+nmf_annotate_script:       "../snakemake_scripts/analysis/annotate_nmf_programs.py"
+nmf_annotate_sample:       "wolbachia_infection"   # prefix for output file names
+nmf_annotate_top_genes:    200                     # top N genes per program for enrichment
+nmf_annotate_skip_gsea:    false                   # set true to skip local preranked GSEA
+nmf_annotate_skip_flyenrichr: false                # set true if no internet access on nodes
+
+# Cell cycle column names in adata.obs (set by your cell cycle annotation script)
+cc_s_var:     "S_score"
+cc_g2m_var:   "G2M_score"
+cc_phase_var: "phase"
+
+# Resources
+nmf_annotate_threads:   8
+nmf_annotate_partition: "medium"
+nmf_annotate_mem:       32000
+nmf_annotate_time:      "4:00:00"

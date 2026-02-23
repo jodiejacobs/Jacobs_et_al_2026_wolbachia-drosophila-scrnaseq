@@ -4,28 +4,26 @@ run_sceptic.py
 Run SCEPTIC pseudotime inference on Wolbachia infection time-series data
 and analyse how Wolbachia titer relates to pseudotime.
 
-Inputs (from integrate.py Stage 3 outputs)
--------------------------------------------
-  sceptic_matrix_{sample}.csv    : cells x PCA features
-  sceptic_labels_{sample}.csv    : numeric timepoint per cell (0 = uninfected)
-  sceptic_label_list_{sample}.csv: unique sorted timepoints
-  sceptic_metadata_{sample}.csv  : leiden cluster, method, timepoint per cell
-
-The metadata file is joined with titer values from the original h5ad files
-(reference + query) to enable titer-vs-pseudotime analysis.
+Inputs
+------
+  adata_with_programs.h5ad : h5ad containing NMF program scores (Program_0 …
+                              Program_N), PCA embedding, timepoint_numeric, and
+                              wolbachia_titer in adata.obs.
 
 Outputs
 -------
-  sceptic_results_{sample}.csv          : per-cell pseudotime + metadata
-  confusion_matrix_{sample}.pdf         : SCEPTIC classification performance
-  pseudotime_violin_{sample}.pdf        : pseudotime distribution by timepoint
-  pseudotime_by_cluster_{sample}.pdf    : pseudotime stratified by leiden cluster
-  titer_vs_pseudotime_{sample}.pdf      : scatter + regression titer ~ pseudotime
-  titer_vs_pseudotime_by_cluster_{sample}.pdf : same, faceted by cluster
-  titer_vs_pseudotime_by_timepoint_{sample}.pdf: same, faceted by timepoint
-  titer_by_pseudotime_bin_{sample}.pdf  : titer boxplot across pseudotime bins
-  pseudotime_umap_{sample}.pdf          : UMAP coloured by pseudotime (if h5ad provided)
-  sceptic_stats_{sample}.csv            : Spearman/Pearson correlations + Kruskal-Wallis
+  sceptic_results_{sample}.csv              : per-cell pseudotime + metadata
+  confusion_matrix_{sample}.pdf             : SCEPTIC classification performance
+  pseudotime_violin_{sample}.pdf            : pseudotime distribution by timepoint
+  pseudotime_by_program_{sample}.pdf        : pseudotime stratified by dominant NMF program
+  titer_vs_pseudotime_{sample}.pdf          : scatter + regression titer ~ pseudotime
+  titer_vs_pseudotime_by_program_{sample}.pdf : same, faceted by dominant NMF program
+  titer_vs_pseudotime_by_timepoint_{sample}.pdf: same, coloured by timepoint
+  titer_by_pseudotime_bin_{sample}.pdf      : titer boxplot across pseudotime bins
+  program_vs_pseudotime_{sample}.pdf        : NMF program scores vs pseudotime (per program)
+  program_pseudotime_corr_{sample}.pdf      : heatmap of Spearman rho (program x timepoint)
+  pseudotime_umap_{sample}.pdf              : UMAP coloured by pseudotime
+  sceptic_stats_{sample}.csv               : Spearman/Pearson correlations + Kruskal-Wallis
 """
 
 import os
@@ -35,17 +33,13 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 import seaborn as sns
 import scanpy as sc
 from scipy import stats
 from scipy.stats import spearmanr, pearsonr, kruskal
-from sklearn.metrics import confusion_matrix
 
 try:
     from sceptic import run_sceptic_and_evaluate
-    from sceptic import plotting as sceptic_plotting
-    from sceptic import evaluation as sceptic_evaluation
     SCEPTIC_AVAILABLE = True
 except ImportError:
     SCEPTIC_AVAILABLE = False
@@ -69,26 +63,38 @@ def _bin_pseudotime(pseudotime, n_bins=10):
     return pd.cut(pseudotime, bins=bins, labels=labels, include_lowest=True)
 
 
+def _dominant_program(metadata):
+    """
+    Return a Series of dominant NMF program labels (e.g. 'Program_3') per cell,
+    computed as the argmax across all Program_* columns.
+    """
+    prog_cols = [c for c in metadata.columns if c.startswith("Program_")]
+    if not prog_cols:
+        return None
+    return metadata[prog_cols].idxmax(axis=1).rename("dominant_program")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Load SCEPTIC inputs
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-# Load SCEPTIC inputs from h5ad
+# Load inputs from h5ad
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"):
+def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint_numeric"):
     """
     Extract everything SCEPTIC needs directly from an h5ad object.
+
+    Expects adata.obs to contain:
+      - timepoint_numeric  : integer timepoint (0=uninfected, 999=persistent ctrl)
+      - Program_0 … Program_N : NMF program usage scores
+      - wolbachia_titer    : (optional) Wolbachia titer
 
     Returns
     -------
     data       : np.ndarray  (cells x PCs)
     labels     : np.ndarray  (numeric timepoint per cell)
     label_list : np.ndarray  (unique sorted timepoints)
-    metadata   : pd.DataFrame
+    metadata   : pd.DataFrame  (includes Program_* columns)
     cell_ids   : list[str]
     """
-    import scanpy as sc
     print(f"Loading h5ad: {h5ad_path}")
     adata = sc.read_h5ad(h5ad_path)
 
@@ -104,30 +110,14 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
                        f"Available: {list(adata.obsm.keys())}")
 
     # ── Timepoint labels ─────────────────────────────────────────────────────
-    if timepoint_col not in adata.obs.columns:
-        raise KeyError(f"Column '{timepoint_col}' not found in adata.obs. "
-                       f"Available: {list(adata.obs.columns)}")
+    if timepoint_col in adata.obs.columns:
+        labels = adata.obs[timepoint_col].values.astype(int)
+        print(f"  Using timepoint column: {timepoint_col}")
+    else:
+        # Fallback: parse from bio_condition / timepoint string
+        print(f"  WARNING: '{timepoint_col}' not found, parsing from bio_condition/timepoint")
+        labels = adata.obs.apply(_parse_tp_fallback, axis=1).values.astype(int)
 
-    # Convert timepoint strings like "D7" → numeric 7; "0" / NaN → 0
-    def _parse_tp(row):
-        """Parse a row of adata.obs to get a numeric timepoint."""
-        bio = str(row.get("bio_condition", "")).strip()
-        tp  = str(row.get("timepoint", "")).strip()
-
-        # ── Named controls (identified via bio_condition) ─────────────────
-        if "wMel-Ctrl" in bio:
-            return 999          # persistently infected control → latest timepoint
-        if "DOX-Ctrl" in bio:
-            return 0            # cured/uninfected control → timepoint 0
-
-        # ── Standard D1, D7, D28 … format ────────────────────────────────
-        s = tp.lstrip("Dd")
-        try:
-            return int(s)
-        except ValueError:
-            return 0
-
-    labels = adata.obs.apply(_parse_tp, axis=1).values.astype(int)
     label_list = np.array(sorted(np.unique(labels)))
 
     print(f"  Cells:        {adata.n_obs}")
@@ -136,50 +126,31 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
     print(f"  Label counts: {pd.Series(labels).value_counts().sort_index().to_dict()}")
 
     # ── Metadata ─────────────────────────────────────────────────────────────
-    keep_cols = [c for c in ["leiden", "method", "timepoint", "bio_condition",
-                              "cell_line", "treatment", "replicate",
-                              "wolbachia_titer", "phase", "cyclum_theta"]
-                 if c in adata.obs.columns]
+    prog_cols = [c for c in adata.obs.columns if c.startswith("Program_")]
+    base_cols = ["method", "timepoint", "timepoint_numeric", "bio_condition",
+                 "cell_line", "treatment", "replicate", "wolbachia_titer",
+                 "phase", "cyclum_theta"]
+    keep_cols = [c for c in base_cols + prog_cols if c in adata.obs.columns]
     metadata = adata.obs[keep_cols].copy()
+
+    print(f"  NMF programs found: {prog_cols}")
 
     return data, labels, label_list, metadata, adata.obs_names.tolist()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Add Wolbachia titer from h5ad
-# ─────────────────────────────────────────────────────────────────────────────
 
-def add_titer_from_h5ad(metadata, ref_h5ad_path, query_h5ad_path):
-    """
-    Pull wolbachia_titer from the reference and query h5ad objects and
-    join onto the metadata dataframe by cell barcode.
-    """
-    print("\nLoading Wolbachia titer from h5ad files …")
-    titer_frames = []
-
-    for path, label in [(ref_h5ad_path, "reference"), (query_h5ad_path, "query")]:
-        if path and os.path.exists(path):
-            adata = sc.read_h5ad(path)
-            if "wolbachia_titer" in adata.obs.columns:
-                titer_frames.append(
-                    adata.obs[["wolbachia_titer"]].rename_axis("cell_id")
-                )
-                print(f"  Loaded titer from {label}: {adata.n_obs} cells")
-            else:
-                print(f"  WARNING: 'wolbachia_titer' not found in {label} h5ad")
-        else:
-            print(f"  Skipping {label}: path not provided or file not found")
-
-    if not titer_frames:
-        print("  No titer data found — titer analysis will be skipped")
-        metadata["wolbachia_titer"] = np.nan
-        return metadata
-
-    titer_df = pd.concat(titer_frames)
-    # metadata index is cell barcodes (set in load_sceptic_inputs)
-    metadata = metadata.join(titer_df, how="left")
-    n_with_titer = metadata["wolbachia_titer"].notna().sum()
-    print(f"  Cells with titer data: {n_with_titer}/{len(metadata)}")
-    return metadata
+def _parse_tp_fallback(row):
+    """Fallback timepoint parser for h5ads without timepoint_numeric."""
+    bio = str(row.get("bio_condition", "")).strip()
+    tp  = str(row.get("timepoint", "")).strip()
+    if "wMel-Ctrl" in bio:
+        return 999
+    if "DOX-Ctrl" in bio:
+        return 0
+    s = tp.lstrip("Dd")
+    try:
+        return int(s)
+    except ValueError:
+        return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +204,6 @@ def plot_pseudotime_violin(pseudotime, true_labels, label_list, fig_dir, sample)
     ax.set_ylabel("SCEPTIC Pseudotime")
     ax.set_title(f"Pseudotime distribution by timepoint — {sample}")
 
-    # Spearman correlation between pseudotime and true timepoint
     rho, p = spearmanr(pseudotime, true_labels)
     ax.text(0.02, 0.97, f"Spearman rho={rho:.3f}  p={p:.2e}",
             transform=ax.transAxes, va="top", fontsize=9,
@@ -243,43 +213,131 @@ def plot_pseudotime_violin(pseudotime, true_labels, label_list, fig_dir, sample)
     return rho, p
 
 
-def plot_pseudotime_by_cluster(pseudotime, metadata, fig_dir, sample):
-    """Pseudotime distribution per leiden cluster."""
-    leiden_col = "leiden_ref" if "leiden_ref" in metadata.columns else "leiden"
-    if leiden_col not in metadata.columns:
-        print("  Skipping cluster pseudotime plot: no leiden column in metadata")
+def plot_pseudotime_by_program(pseudotime, metadata, fig_dir, sample):
+    """Pseudotime distribution per dominant NMF program."""
+    dom_prog = _dominant_program(metadata)
+    if dom_prog is None:
+        print("  Skipping program pseudotime plot: no Program_* columns in metadata")
         return
 
     df = pd.DataFrame({
-        "pseudotime": pseudotime,
-        "cluster":    metadata[leiden_col].values,
+        "pseudotime":       pseudotime,
+        "dominant_program": dom_prog.values,
     })
-    clusters = sorted(df["cluster"].unique())
+    programs = sorted(df["dominant_program"].unique(),
+                      key=lambda x: int(x.split("_")[1]))
     cmap = plt.cm.get_cmap("tab20")
-    palette = {c: cmap(i % 20) for i, c in enumerate(clusters)}
+    palette = {p: cmap(i % 20) for i, p in enumerate(programs)}
 
-    fig, ax = plt.subplots(figsize=(max(8, len(clusters) * 1.2), 5))
-    sns.violinplot(data=df, x="cluster", y="pseudotime",
-                   order=clusters, palette=palette, inner="box", ax=ax)
-    ax.set_xlabel("Leiden Cluster")
+    fig, ax = plt.subplots(figsize=(max(10, len(programs) * 1.4), 5))
+    sns.violinplot(data=df, x="dominant_program", y="pseudotime",
+                   order=programs, palette=palette, inner="box", ax=ax)
+    ax.set_xlabel("Dominant NMF Program")
     ax.set_ylabel("SCEPTIC Pseudotime")
-    ax.set_title(f"Pseudotime by cluster — {sample}")
+    ax.set_title(f"Pseudotime by dominant NMF program — {sample}")
+    plt.xticks(rotation=45, ha="right")
 
-    # Kruskal-Wallis across clusters
-    groups = [df[df["cluster"] == c]["pseudotime"].values for c in clusters]
+    groups = [df[df["dominant_program"] == p]["pseudotime"].values for p in programs]
     if len(groups) >= 2:
-        h, p = kruskal(*groups)
-        ax.text(0.02, 0.97, f"Kruskal-Wallis H={h:.2f}  p={p:.2e}",
+        h, p_kw = kruskal(*groups)
+        ax.text(0.02, 0.97, f"Kruskal-Wallis H={h:.2f}  p={p_kw:.2e}",
                 transform=ax.transAxes, va="top", fontsize=9,
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.7))
     plt.tight_layout()
-    _savefig(fig, os.path.join(fig_dir, f"pseudotime_by_cluster_{sample}.pdf"))
+    _savefig(fig, os.path.join(fig_dir, f"pseudotime_by_program_{sample}.pdf"))
+
+
+def plot_program_vs_pseudotime(pseudotime, metadata, fig_dir, sample):
+    """
+    Two views of NMF program scores vs pseudotime:
+
+    1. Per-program scatter (score vs pseudotime) with LOWESS smoother,
+       one panel per program.
+    2. Heatmap: Spearman rho between each program score and pseudotime,
+       broken down by timepoint group.
+    """
+    prog_cols = [c for c in metadata.columns if c.startswith("Program_")]
+    if not prog_cols:
+        print("  Skipping program-vs-pseudotime plots: no Program_* columns")
+        return
+
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+
+    pt = pd.Series(pseudotime, index=metadata.index)
+
+    # ── Plot 1: per-program scatter ──────────────────────────────────────────
+    ncols = min(5, len(prog_cols))
+    nrows = int(np.ceil(len(prog_cols) / ncols))
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(ncols * 3.5, nrows * 3), sharey=False)
+    axes = np.array(axes).flatten()
+    cmap = plt.cm.get_cmap("tab20")
+
+    for i, prog in enumerate(prog_cols):
+        ax = axes[i]
+        scores = metadata[prog].values
+        valid  = ~np.isnan(scores)
+        x, y   = pt.values[valid], scores[valid]
+
+        ax.scatter(x, y, alpha=0.2, s=4, color=cmap(i % 20), rasterized=True)
+
+        if len(x) >= 10:
+            smoothed = lowess(y, x, frac=0.3)
+            ax.plot(smoothed[:, 0], smoothed[:, 1], color="black",
+                    linewidth=1.5, label="LOWESS")
+            rho, p_r = spearmanr(x, y)
+            ax.text(0.05, 0.95, f"rho={rho:.2f}\np={p_r:.1e}",
+                    transform=ax.transAxes, va="top", fontsize=7,
+                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.7))
+
+        prog_num = prog.split("_")[1]
+        ax.set_title(f"Program {prog_num}", fontsize=9)
+        ax.set_xlabel("Pseudotime", fontsize=8)
+        ax.set_ylabel("NMF score", fontsize=8)
+
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.suptitle(f"NMF program scores vs pseudotime — {sample}", fontweight="bold")
+    plt.tight_layout()
+    _savefig(fig, os.path.join(fig_dir, f"program_vs_pseudotime_{sample}.pdf"))
+
+    # ── Plot 2: Spearman rho heatmap (programs × timepoint groups) ───────────
+    tp_col = "timepoint_numeric" if "timepoint_numeric" in metadata.columns else "timepoint"
+    if tp_col in metadata.columns:
+        timepoints = sorted(metadata[tp_col].unique())
+        rho_matrix = pd.DataFrame(index=prog_cols, columns=[str(t) for t in timepoints],
+                                  dtype=float)
+        for tp in timepoints:
+            mask = metadata[tp_col] == tp
+            for prog in prog_cols:
+                x_tp = pt.values[mask]
+                y_tp = metadata.loc[mask, prog].values
+                valid = ~np.isnan(y_tp)
+                if valid.sum() >= 5:
+                    rho_matrix.loc[prog, str(tp)], _ = spearmanr(x_tp[valid], y_tp[valid])
+
+        # Rename index for readability
+        rho_matrix.index = [f"Prog {c.split('_')[1]}" for c in rho_matrix.index]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(timepoints) * 1.2),
+                                        max(5, len(prog_cols) * 0.5)))
+        sns.heatmap(rho_matrix.astype(float), cmap="RdBu_r", center=0,
+                    vmin=-1, vmax=1, annot=True, fmt=".2f",
+                    linewidths=0.5, ax=ax,
+                    cbar_kws={"label": "Spearman rho (program ~ pseudotime)"})
+        ax.set_xlabel("Timepoint")
+        ax.set_ylabel("NMF Program")
+        ax.set_title(f"Program–pseudotime correlation by timepoint — {sample}")
+        plt.tight_layout()
+        _savefig(fig, os.path.join(fig_dir, f"program_pseudotime_corr_{sample}.pdf"))
 
 
 def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     """
     Core analysis: Wolbachia titer as a function of SCEPTIC pseudotime.
-    Produces three complementary views.
+    Produces scatter + regression, binned boxplot, timepoint-coloured scatter,
+    and a per-dominant-program facet.
     """
     if "wolbachia_titer" not in metadata.columns:
         print("  Skipping titer plots: no wolbachia_titer column")
@@ -288,14 +346,16 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     df = pd.DataFrame({
         "pseudotime":      pseudotime,
         "wolbachia_titer": metadata["wolbachia_titer"].values,
-        "timepoint":       metadata["timepoint"].values.astype(str),
-    })
+        "timepoint":       metadata["timepoint"].values.astype(str)
+                           if "timepoint" in metadata.columns
+                           else metadata.get("timepoint_numeric", pd.Series(0, index=metadata.index)).values.astype(str),
+    }, index=metadata.index)
 
-    leiden_col = "leiden_ref" if "leiden_ref" in metadata.columns else "leiden"
-    if leiden_col in metadata.columns:
-        df["cluster"] = metadata[leiden_col].values
+    # Add dominant program column
+    dom_prog = _dominant_program(metadata)
+    if dom_prog is not None:
+        df["dominant_program"] = dom_prog.values
 
-    # Drop cells without titer
     df_titer = df.dropna(subset=["wolbachia_titer"])
     print(f"\n  Cells with titer for correlation: {len(df_titer)}")
 
@@ -306,7 +366,7 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     # ── Stats ────────────────────────────────────────────────────────────────
     rho_sp, p_sp = spearmanr(df_titer["pseudotime"], df_titer["wolbachia_titer"])
     rho_pe, p_pe = pearsonr( df_titer["pseudotime"], df_titer["wolbachia_titer"])
-    slope, intercept, r_value, p_lin, se = stats.linregress(
+    slope, intercept, r_value, p_lin, _ = stats.linregress(
         df_titer["pseudotime"], df_titer["wolbachia_titer"])
     print(f"  Spearman rho={rho_sp:.4f}  p={p_sp:.2e}")
     print(f"  Pearson  r  ={rho_pe:.4f}  p={p_pe:.2e}")
@@ -320,15 +380,14 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     }
 
     # ── Plot 1: scatter + regression line ────────────────────────────────────
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.scatter(df_titer["pseudotime"], df_titer["wolbachia_titer"],
                alpha=0.3, s=8, color="#2196F3", rasterized=True)
-    # Regression line
     x_line = np.linspace(df_titer["pseudotime"].min(), df_titer["pseudotime"].max(), 200)
     ax.plot(x_line, slope * x_line + intercept, color="red", linewidth=2,
             label=f"Linear fit (r²={r_value**2:.3f})")
-    # LOWESS smoother
-    from statsmodels.nonparametric.smoothers_lowess import lowess
     smoothed = lowess(df_titer["wolbachia_titer"].values,
                       df_titer["pseudotime"].values, frac=0.3)
     ax.plot(smoothed[:, 0], smoothed[:, 1], color="orange", linewidth=2,
@@ -359,16 +418,16 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_by_pseudotime_bin_{sample}.pdf"))
 
-    # ── Plot 3: coloured by timepoint ─────────────────────────────────────────
+    # ── Plot 3: coloured by timepoint ────────────────────────────────────────
     timepoints = sorted(df_titer["timepoint"].unique())
     tp_palette = dict(zip(timepoints, sns.color_palette("viridis", len(timepoints))))
 
     fig, ax = plt.subplots(figsize=(9, 6))
     for tp in timepoints:
         sub = df_titer[df_titer["timepoint"] == tp]
+        label = "uninfected" if tp in ("0", "0.0") else f"D{tp}"
         ax.scatter(sub["pseudotime"], sub["wolbachia_titer"],
-                   label=f"D{tp}" if tp != "0" else "uninfected",
-                   color=tp_palette[tp], alpha=0.5, s=8, rasterized=True)
+                   label=label, color=tp_palette[tp], alpha=0.5, s=8, rasterized=True)
     ax.set_xlabel("SCEPTIC Pseudotime")
     ax.set_ylabel("Wolbachia Titer")
     ax.set_title(f"Wolbachia titer vs pseudotime — coloured by timepoint — {sample}")
@@ -376,24 +435,25 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_vs_pseudotime_by_timepoint_{sample}.pdf"))
 
-    # ── Plot 4: faceted by cluster (if available) ─────────────────────────────
-    if "cluster" in df_titer.columns:
-        clusters = sorted(df_titer["cluster"].unique())
-        ncols = min(4, len(clusters))
-        nrows = int(np.ceil(len(clusters) / ncols))
+    # ── Plot 4: faceted by dominant NMF program ───────────────────────────────
+    if "dominant_program" in df_titer.columns:
+        programs = sorted(df_titer["dominant_program"].unique(),
+                          key=lambda x: int(x.split("_")[1]))
+        ncols = min(4, len(programs))
+        nrows = int(np.ceil(len(programs) / ncols))
         fig, axes = plt.subplots(nrows, ncols,
                                  figsize=(ncols * 4, nrows * 3.5), sharey=True)
         axes = np.array(axes).flatten()
         cmap = plt.cm.get_cmap("tab20")
 
-        for i, cluster in enumerate(clusters):
+        for i, prog in enumerate(programs):
             ax = axes[i]
-            sub = df_titer[df_titer["cluster"] == cluster]
+            sub = df_titer[df_titer["dominant_program"] == prog]
+            prog_num = int(prog.split("_")[1])
             ax.scatter(sub["pseudotime"], sub["wolbachia_titer"],
-                       color=cmap(i % 20), alpha=0.4, s=6, rasterized=True)
+                       color=cmap(prog_num % 20), alpha=0.4, s=6, rasterized=True)
             if len(sub) >= 5:
                 s, p_s = spearmanr(sub["pseudotime"], sub["wolbachia_titer"])
-                # Mini regression line
                 sl, ic, _, _, _ = stats.linregress(sub["pseudotime"],
                                                     sub["wolbachia_titer"])
                 xl = np.linspace(sub["pseudotime"].min(), sub["pseudotime"].max(), 100)
@@ -401,7 +461,7 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
                 ax.text(0.05, 0.95, f"rho={s:.2f} p={p_s:.1e}",
                         transform=ax.transAxes, va="top", fontsize=7,
                         bbox=dict(boxstyle="round", facecolor="white", alpha=0.7))
-            ax.set_title(f"Cluster {cluster}", fontsize=9)
+            ax.set_title(f"Program {prog_num}", fontsize=9)
             ax.set_xlabel("Pseudotime", fontsize=8)
             if i % ncols == 0:
                 ax.set_ylabel("Wolbachia Titer", fontsize=8)
@@ -409,10 +469,11 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
         for j in range(i + 1, len(axes)):
             axes[j].set_visible(False)
 
-        plt.suptitle(f"Titer vs pseudotime by cluster — {sample}", fontweight="bold")
+        plt.suptitle(f"Titer vs pseudotime by dominant NMF program — {sample}",
+                     fontweight="bold")
         plt.tight_layout()
         _savefig(fig, os.path.join(fig_dir,
-                                   f"titer_vs_pseudotime_by_cluster_{sample}.pdf"))
+                                   f"titer_vs_pseudotime_by_program_{sample}.pdf"))
 
     return stat_results
 
@@ -430,7 +491,6 @@ def plot_pseudotime_on_umap(pseudotime, metadata, h5ad_path, fig_dir, sample):
         print("  Skipping UMAP pseudotime plot: no X_umap in h5ad")
         return
 
-    # Match pseudotime to cells present in this h5ad
     pt_series = pd.Series(pseudotime, index=metadata.index)
     common    = adata.obs_names.intersection(pt_series.index)
     if len(common) == 0:
@@ -455,16 +515,19 @@ def save_results(pseudotime, label_predicted, prob, labels, label_list,
                  metadata, cell_ids, stat_results, fig_dir, sample):
     """Write per-cell results and summary statistics to CSV."""
     results_df = pd.DataFrame({
-        "cell_id":         cell_ids,
-        "pseudotime":      pseudotime,
-        "true_timepoint":  labels,
-        "pred_timepoint":  label_predicted,
+        "cell_id":        cell_ids,
+        "pseudotime":     pseudotime,
+        "true_timepoint": labels,
+        "pred_timepoint": label_predicted,
     })
-    # Add probability columns
     for i, tp in enumerate(label_list):
         results_df[f"prob_t{tp}"] = prob[:, i]
 
-    # Merge metadata
+    # Add dominant program assignment
+    dom_prog = _dominant_program(metadata)
+    if dom_prog is not None:
+        results_df["dominant_program"] = dom_prog.values
+
     metadata_reset = metadata.reset_index(drop=True)
     results_df = pd.concat([results_df, metadata_reset], axis=1)
 
@@ -487,20 +550,20 @@ def save_results(pseudotime, label_predicted, prob, labels, label_list,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run SCEPTIC pseudotime and analyse Wolbachia titer",
+        description="Run SCEPTIC pseudotime and analyse Wolbachia titer with NMF programs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--h5ad",         required=True,
-                        help="Annotated h5ad (output of cell_cycle_analysis rule)")
-    parser.add_argument("--sample",       default="wolbachia_infection")
-    parser.add_argument("--fig_dir",      default="results/sceptic")
-    parser.add_argument("--pca_key",      default="X_pca_harmony",
+    parser.add_argument("--h5ad",          required=True,
+                        help="h5ad with NMF programs (adata_with_programs.h5ad)")
+    parser.add_argument("--sample",        default="wolbachia_infection")
+    parser.add_argument("--fig_dir",       default="results/sceptic")
+    parser.add_argument("--pca_key",       default="X_pca_harmony",
                         help="obsm key for PCA embedding (default: X_pca_harmony)")
-    parser.add_argument("--timepoint_col", default="timepoint",
-                        help="obs column with timepoint labels (default: timepoint)")
-    parser.add_argument("--method",       default="xgboost",
+    parser.add_argument("--timepoint_col", default="timepoint_numeric",
+                        help="obs column with numeric timepoints (default: timepoint_numeric)")
+    parser.add_argument("--method",        default="xgboost",
                         choices=["xgboost", "svm"])
-    parser.add_argument("--n_bins",       type=int, default=10)
+    parser.add_argument("--n_bins",        type=int, default=10)
 
     args = parser.parse_args()
     os.makedirs(args.fig_dir, exist_ok=True)
@@ -511,8 +574,6 @@ def main():
         pca_key=args.pca_key,
         timepoint_col=args.timepoint_col,
     )
-
-    # titer is already in metadata if present in adata.obs — no separate h5ad needed
 
     # ── Run SCEPTIC ──────────────────────────────────────────────────────────
     cm_result, label_predicted, pseudotime, prob = run_sceptic(
@@ -526,7 +587,9 @@ def main():
     rho_sp, p_sp = plot_pseudotime_violin(
         pseudotime, labels, label_list, args.fig_dir, args.sample)
 
-    plot_pseudotime_by_cluster(pseudotime, metadata, args.fig_dir, args.sample)
+    plot_pseudotime_by_program(pseudotime, metadata, args.fig_dir, args.sample)
+
+    plot_program_vs_pseudotime(pseudotime, metadata, args.fig_dir, args.sample)
 
     stat_results = plot_titer_vs_pseudotime(
         pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
@@ -534,7 +597,6 @@ def main():
     stat_results["pseudotime_timepoint_spearman_rho"] = rho_sp
     stat_results["pseudotime_timepoint_spearman_p"]   = p_sp
 
-    # UMAP projection uses the same h5ad
     plot_pseudotime_on_umap(pseudotime, metadata, args.h5ad,
                             args.fig_dir, args.sample)
 

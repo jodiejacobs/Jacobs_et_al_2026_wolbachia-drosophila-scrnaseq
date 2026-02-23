@@ -1472,6 +1472,8 @@ Examples:
                         help='Run Scanpy cell cycle scoring')
     parser.add_argument('--save-output', action='store_true',
                         help='Save updated h5ad with cell cycle annotations')
+    parser.add_argument('--output-h5ad', default=None,
+                        help='Path for saved h5ad (default: input with _with_cellcycle suffix)')    
     parser.add_argument('--ctrl-only', action='store_true',
                         help='Restrict to treatment==Ctrl cells only')
     parser.add_argument('--subset-col', default=None,
@@ -1555,11 +1557,13 @@ Examples:
         if result is None:
             print("\nERROR: Cell cycle scoring failed. Exiting.")
             return
-        adata = result
-        if args.save_output:
-            out_path = args.input.replace('.h5ad', '_with_cellcycle.h5ad')
-            print(f"\nSaving updated h5ad to {out_path}")
-            adata.write(out_path)
+    if args.save_output:
+        out_path = args.output_h5ad or args.input.replace('.h5ad', '_with_cellcycle.h5ad')
+        os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+        print(f"\nSaving updated h5ad to {out_path}")
+        adata.write_h5ad(out_path)
+        print(f"Saved: {adata.n_obs} cells with columns: "
+            f"{[c for c in ['phase','S_score','G2M_score'] if c in adata.obs.columns]}")
     else:
         print("\nCell cycle scoring already present, skipping scoring step.")
         print(f"Phase distribution: {adata.obs['phase'].value_counts().to_dict()}")
