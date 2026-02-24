@@ -142,7 +142,7 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
                  if c in adata.obs.columns]
     metadata = adata.obs[keep_cols].copy()
 
-    return data, labels, label_list, metadata, adata.obs_names.tolist()
+    return data, labels, label_list, metadata, adata.obs_names.tolist(), adata
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Add Wolbachia titer from h5ad
@@ -417,20 +417,12 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
     return stat_results
 
 
-def plot_pseudotime_on_umap(pseudotime, metadata, h5ad_path, fig_dir, sample):
+def plot_pseudotime_on_umap(pseudotime, metadata, adata, fig_dir, sample):
     """Project pseudotime back onto the existing UMAP embedding."""
-    if not h5ad_path or not os.path.exists(h5ad_path):
-        print("  Skipping UMAP pseudotime plot: no h5ad path provided")
-        return
-
-    print(f"  Loading h5ad for UMAP: {h5ad_path}")
-    adata = sc.read_h5ad(h5ad_path)
-
     if "X_umap" not in adata.obsm:
         print("  Skipping UMAP pseudotime plot: no X_umap in h5ad")
         return
 
-    # Match pseudotime to cells present in this h5ad
     pt_series = pd.Series(pseudotime, index=metadata.index)
     common    = adata.obs_names.intersection(pt_series.index)
     if len(common) == 0:
@@ -705,14 +697,12 @@ def main():
     args = parser.parse_args()
     os.makedirs(args.fig_dir, exist_ok=True)
 
-    # ── Load ─────────────────────────────────────────────────────────────────
-    data, labels, label_list, metadata, cell_ids = load_from_h5ad(
+    # ── Load once ─────────────────────────────────────────────────────────────
+    data, labels, label_list, metadata, cell_ids, adata = load_from_h5ad(
         args.h5ad,
         pca_key=args.pca_key,
         timepoint_col=args.timepoint_col,
     )
-
-    # titer is already in metadata if present in adata.obs — no separate h5ad needed
 
     # ── Run SCEPTIC ──────────────────────────────────────────────────────────
     cm_result, label_predicted, pseudotime, prob = run_sceptic(
@@ -737,19 +727,7 @@ def main():
     stat_results["pseudotime_timepoint_spearman_rho"] = rho_sp
     stat_results["pseudotime_timepoint_spearman_p"]   = p_sp
 
-    plot_pseudotime_on_umap(pseudotime, metadata, args.h5ad,
-                            args.fig_dir, args.sample)
-
-
-    stat_results = plot_titer_vs_pseudotime(
-        pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
-
-    stat_results["pseudotime_timepoint_spearman_rho"] = rho_sp
-    stat_results["pseudotime_timepoint_spearman_p"]   = p_sp
-
-    # UMAP projection uses the same h5ad
-    plot_pseudotime_on_umap(pseudotime, metadata, args.h5ad,
-                            args.fig_dir, args.sample)
+    plot_pseudotime_on_umap(pseudotime, metadata, adata, args.fig_dir, args.sample)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     save_results(
@@ -772,7 +750,6 @@ def main():
             print(f"  Cluster {row['cluster']:>4}  "
                   f"median={row['median_pseudotime']:.3f}")
     print(f"\nOutputs -> {args.fig_dir}/")
-
 
 if __name__ == "__main__":
     main()
