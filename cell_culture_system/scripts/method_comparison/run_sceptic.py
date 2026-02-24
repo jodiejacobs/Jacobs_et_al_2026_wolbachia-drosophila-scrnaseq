@@ -116,7 +116,7 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
 
         # ── Named controls (identified via bio_condition) ─────────────────
         if "wMel-Ctrl" in bio:
-            return 999          # persistently infected control → latest timepoint
+            return 100          # persistently infected control → latest timepoint
         if "DOX-Ctrl" in bio:
             return 0            # cured/uninfected control → timepoint 0
 
@@ -446,6 +446,206 @@ def plot_pseudotime_on_umap(pseudotime, metadata, h5ad_path, fig_dir, sample):
                title=f"SCEPTIC Pseudotime — {sample}")
     print(f"  Saved: {fig_dir}/umap_pseudotime_{sample}.pdf")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cluster vs pseudotime composition analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+def analyze_cluster_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=20):
+    """
+    Characterise how Leiden cluster composition changes along pseudotime.
+
+    Produces
+    --------
+    cluster_pseudotime_stacked_{sample}.pdf
+        Stacked area chart: fraction of each cluster per pseudotime bin.
+    cluster_pseudotime_heatmap_{sample}.pdf
+        Z-scored cluster enrichment heatmap across pseudotime bins.
+    cluster_pseudotime_ridge_{sample}.pdf
+        Ridgeline (KDE) plot — pseudotime density per cluster, ordered by
+        median pseudotime so you can read off trajectory order at a glance.
+    cluster_pseudotime_stats_{sample}.csv
+        Per-cluster median/mean pseudotime, IQR, Kruskal-Wallis result,
+        and pairwise Mann-Whitney U vs the earliest cluster.
+    """
+    from scipy.stats import mannwhitneyu
+    from scipy.stats import gaussian_kde
+
+    leiden_col = "leiden_ref" if "leiden_ref" in metadata.columns else "leiden"
+    if leiden_col not in metadata.columns:
+        print("  Skipping cluster-pseudotime analysis: no leiden column in metadata")
+        return
+
+    os.makedirs(fig_dir, exist_ok=True)
+
+    df = pd.DataFrame({
+        "pseudotime": pseudotime,
+        "cluster":    metadata[leiden_col].values,
+    })
+
+    clusters = sorted(df["cluster"].unique())
+    n_clusters = len(clusters)
+    cmap = plt.cm.get_cmap("tab20")
+    cluster_colors = {c: cmap(i % 20) for i, c in enumerate(clusters)}
+
+    # ── Per-cluster summary stats ─────────────────────────────────────────────
+    stats_rows = []
+    for c in clusters:
+        vals = df.loc[df["cluster"] == c, "pseudotime"].values
+        stats_rows.append({
+            "cluster":          c,
+            "n_cells":          len(vals),
+            "median_pseudotime": np.median(vals),
+            "mean_pseudotime":   np.mean(vals),
+            "iqr_low":          np.percentile(vals, 25),
+            "iqr_high":         np.percentile(vals, 75),
+        })
+    stats_df = pd.DataFrame(stats_rows).sort_values("median_pseudotime").reset_index(drop=True)
+
+    # Cluster order by median pseudotime (used throughout)
+    ordered_clusters = stats_df["cluster"].tolist()
+
+    # Kruskal-Wallis (already computed in plot_pseudotime_by_cluster, redo here
+    # so the CSV is self-contained)
+    groups = [df.loc[df["cluster"] == c, "pseudotime"].values for c in clusters]
+    h_stat, kw_p = kruskal(*groups)
+    stats_df["kruskal_H"] = h_stat
+    stats_df["kruskal_p"] = kw_p
+
+    # Pairwise Mann-Whitney vs earliest cluster
+    ref_cluster = ordered_clusters[0]
+    ref_vals = df.loc[df["cluster"] == ref_cluster, "pseudotime"].values
+    mw_p_vals = {}
+    for c in ordered_clusters:
+        if c == ref_cluster:
+            mw_p_vals[c] = np.nan
+            continue
+        u, p = mannwhitneyu(
+            df.loc[df["cluster"] == c, "pseudotime"].values,
+            ref_vals, alternative="two-sided"
+        )
+        mw_p_vals[c] = p
+    stats_df["mw_p_vs_earliest"] = stats_df["cluster"].map(mw_p_vals)
+
+    stats_csv = os.path.join(fig_dir, f"cluster_pseudotime_stats_{sample}.csv")
+    stats_df.to_csv(stats_csv, index=False)
+    print(f"  Saved: {stats_csv}")
+    print(f"\n  Cluster pseudotime order (by median):")
+    for _, row in stats_df.iterrows():
+        print(f"    Cluster {row['cluster']:>4}  "
+              f"median={row['median_pseudotime']:.3f}  "
+              f"n={int(row['n_cells'])}")
+    print(f"  Kruskal-Wallis: H={h_stat:.2f}  p={kw_p:.2e}")
+
+    # ── Bin pseudotime ────────────────────────────────────────────────────────
+    pt_min, pt_max = pseudotime.min(), pseudotime.max()
+    bins = np.linspace(pt_min, pt_max, n_bins + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    df["pt_bin_idx"] = pd.cut(df["pseudotime"], bins=bins,
+                               labels=False, include_lowest=True)
+
+    # Cluster fraction per bin  (cells × bin matrix)
+    frac_matrix = pd.DataFrame(0.0, index=ordered_clusters,
+                                columns=range(n_bins))
+    for b in range(n_bins):
+        bin_cells = df[df["pt_bin_idx"] == b]
+        if len(bin_cells) == 0:
+            continue
+        counts = bin_cells["cluster"].value_counts()
+        for c in ordered_clusters:
+            frac_matrix.loc[c, b] = counts.get(c, 0) / len(bin_cells)
+
+    # ── Plot 1: stacked area chart ────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(12, 5))
+    bottom = np.zeros(n_bins)
+    for c in ordered_clusters:
+        vals = frac_matrix.loc[c].values.astype(float)
+        ax.fill_between(bin_centers, bottom, bottom + vals,
+                        color=cluster_colors[c], alpha=0.85,
+                        label=f"Cluster {c}")
+        bottom += vals
+
+    ax.set_xlim(pt_min, pt_max)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("SCEPTIC Pseudotime", fontsize=12)
+    ax.set_ylabel("Fraction of cells", fontsize=12)
+    ax.set_title(f"Cluster composition along pseudotime — {sample}\n"
+                 f"(clusters ordered by median pseudotime, bottom→top = early→late)",
+                 fontsize=12)
+    ax.legend(title="Cluster", bbox_to_anchor=(1.02, 1),
+              loc="upper left", fontsize=8, ncol=max(1, n_clusters // 15))
+    plt.tight_layout()
+    _savefig(fig, os.path.join(fig_dir, f"cluster_pseudotime_stacked_{sample}.pdf"))
+
+    # ── Plot 2: Z-scored enrichment heatmap ───────────────────────────────────
+    # Z-score each cluster row so rare clusters are still visible
+    frac_arr = frac_matrix.values.astype(float)
+    row_means = frac_arr.mean(axis=1, keepdims=True)
+    row_stds  = frac_arr.std(axis=1, keepdims=True) + 1e-10
+    z_scored  = (frac_arr - row_means) / row_stds
+
+    fig, ax = plt.subplots(figsize=(14, max(4, n_clusters * 0.4 + 2)))
+    sns.heatmap(
+        z_scored,
+        ax=ax,
+        cmap="RdBu_r",
+        center=0,
+        xticklabels=[f"{c:.2f}" for c in bin_centers[::max(1, n_bins // 10)]],
+        yticklabels=[f"Cluster {c}" for c in ordered_clusters],
+        cbar_kws={"label": "Z-score (row-normalised fraction)"},
+        linewidths=0.3,
+    )
+    # Only label every nth bin on x axis to avoid crowding
+    step = max(1, n_bins // 10)
+    ax.set_xticks(np.arange(0, n_bins, step) + 0.5)
+    ax.set_xticklabels([f"{bin_centers[i]:.2f}" for i in range(0, n_bins, step)],
+                       rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Pseudotime bin centre", fontsize=11)
+    ax.set_ylabel("Leiden Cluster (ordered by median pseudotime)", fontsize=11)
+    ax.set_title(f"Cluster enrichment across pseudotime — {sample}", fontsize=12)
+    plt.tight_layout()
+    _savefig(fig, os.path.join(fig_dir, f"cluster_pseudotime_heatmap_{sample}.pdf"))
+
+    # ── Plot 3: Ridgeline (KDE density per cluster) ───────────────────────────
+    # Ordered bottom-to-top by median pseudotime so trajectory reads left-to-right
+    ridge_height = 1.5          # vertical spacing between ridges
+    fig, ax = plt.subplots(figsize=(10, max(5, n_clusters * 0.55 + 1)))
+
+    x_eval = np.linspace(pt_min, pt_max, 300)
+
+    for rank, c in enumerate(ordered_clusters):
+        vals = df.loc[df["cluster"] == c, "pseudotime"].values
+        if len(vals) < 5:
+            continue
+        kde = gaussian_kde(vals, bw_method="scott")
+        density = kde(x_eval)
+        # Normalise so the tallest peak = ridge_height * 0.9
+        density = density / density.max() * ridge_height * 0.9
+
+        baseline = rank * ridge_height
+        color = cluster_colors[c]
+        ax.fill_between(x_eval, baseline, baseline + density,
+                        color=color, alpha=0.6)
+        ax.plot(x_eval, baseline + density, color=color, linewidth=1.2)
+        # Median marker
+        med = np.median(vals)
+        ax.axvline(med, ymin=(baseline) / (n_clusters * ridge_height),
+                   ymax=(baseline + ridge_height * 0.85) / (n_clusters * ridge_height),
+                   color=color, linewidth=1, linestyle="--", alpha=0.7)
+        ax.text(pt_max + (pt_max - pt_min) * 0.01,
+                baseline + ridge_height * 0.35,
+                f"C{c}  (n={len(vals)})", va="center", fontsize=8,
+                color=color)
+
+    ax.set_xlim(pt_min, pt_max + (pt_max - pt_min) * 0.12)
+    ax.set_ylim(-ridge_height * 0.3, n_clusters * ridge_height)
+    ax.set_xlabel("SCEPTIC Pseudotime", fontsize=12)
+    ax.set_yticks([])
+    ax.set_title(f"Pseudotime density per cluster (ordered by median) — {sample}\n"
+                 f"Kruskal-Wallis H={h_stat:.2f}  p={kw_p:.2e}", fontsize=11)
+    plt.tight_layout()
+    _savefig(fig, os.path.join(fig_dir, f"cluster_pseudotime_ridge_{sample}.pdf"))
+
+    return stats_df
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Save results
@@ -528,6 +728,19 @@ def main():
 
     plot_pseudotime_by_cluster(pseudotime, metadata, args.fig_dir, args.sample)
 
+    cluster_pt_stats = analyze_cluster_pseudotime(
+        pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
+
+    stat_results = plot_titer_vs_pseudotime(
+        pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
+
+    stat_results["pseudotime_timepoint_spearman_rho"] = rho_sp
+    stat_results["pseudotime_timepoint_spearman_p"]   = p_sp
+
+    plot_pseudotime_on_umap(pseudotime, metadata, args.h5ad,
+                            args.fig_dir, args.sample)
+
+
     stat_results = plot_titer_vs_pseudotime(
         pseudotime, metadata, args.fig_dir, args.sample, n_bins=args.n_bins)
 
@@ -553,6 +766,11 @@ def main():
         print(f"Titer ~ pseudotime:          "
               f"Spearman rho={stat_results.get('spearman_rho', np.nan):.3f}  "
               f"p={stat_results.get('spearman_p', np.nan):.2e}")
+    if cluster_pt_stats is not None:
+        print(f"\nCluster pseudotime order (earliest → latest):")
+        for _, row in cluster_pt_stats.iterrows():
+            print(f"  Cluster {row['cluster']:>4}  "
+                  f"median={row['median_pseudotime']:.3f}")
     print(f"\nOutputs -> {args.fig_dir}/")
 
 
