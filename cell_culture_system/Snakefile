@@ -609,7 +609,7 @@ rule extract_abundant_16s:
         echo "Abundant sequence extraction complete"
         """
 
-rule integrate:
+rule integrate: 
     input:
         files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
     output:
@@ -620,7 +620,7 @@ rule integrate:
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
         out_path      = "results/integrated/integrated.h5ad",
-        resolution    = 0.2, #config.get("integrate_resolution", 0.5),
+        resolution    = config.get("integrate_resolution", 0.2),
         bio_condition = config.get("integrate_bio_condition", "")
     log:
         "logs/integrate/integrate.log"
@@ -647,9 +647,8 @@ rule integrate:
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} \
-            $([ -n "{params.bio_condition}" ] && echo "--bio_condition {params.bio_condition}")
-
+            --fig_dir {params.fig_dir} 
+            
         echo "Integration complete"
         """
 
@@ -662,8 +661,6 @@ rule cell_cycle_analysis:
     params:
         script  = config["cellcycle_script"],
         fig_dir = "results/cellcycle",
-        subset_col = config.get("cellcycle_subset_col", "cell_line"),
-        subset_val = config.get("cellcycle_subset_val", "JW18wMel"),
         titer_col  = config.get("continuous_var", "wolbachia_titer")
     log:
         "logs/cellcycle/cellcycle.log"
@@ -685,8 +682,6 @@ rule cell_cycle_analysis:
             --input        {input.h5ad} \
             --output       {params.fig_dir} \
             --sample       wMel \
-            --subset-col   {params.subset_col} \
-            --subset-val   {params.subset_val} \
             --titer-analysis --titer-col {params.titer_col} \
             --save-output
 
@@ -695,7 +690,7 @@ rule cell_cycle_analysis:
 
 rule cluster_marker_pathway:
     input:
-        h5ad    = rules.cell_cycle_analysis.output.annotated_h5ad,
+        h5ad    = "results/integrated/integrated_with_cellcycle.h5ad",
         mapping = config["transcripts_to_genes"]
     output:
         # Only markers are guaranteed — enrichment CSVs depend on having enough sig markers
@@ -736,7 +731,7 @@ rule cluster_marker_pathway:
 
 rule run_sceptic:
     input:
-        h5ad = "results/nmf_programs/adata_with_programs.h5ad"
+        h5ad = "results/nmf_programs/adata_with_programs.h5ad",
     output:
         results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
         stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
@@ -781,7 +776,7 @@ rule run_sceptic:
 ##################################################################
 rule nmf_programs:
     input:
-        h5ad = rules.cell_cycle_analysis.output.annotated_h5ad
+        h5ad = "results/integrated/integrated_with_cellcycle.h5ad"
     output:
         adata_with_programs = "results/nmf_programs/adata_with_programs.h5ad",
         summary = "results/nmf_programs/SUMMARY.txt",

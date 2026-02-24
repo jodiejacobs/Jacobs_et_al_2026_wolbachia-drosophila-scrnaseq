@@ -74,7 +74,7 @@ validate_time: "8:00:00"
 # cellcycle_mem: 64000
 # cellcycle_time: "8:00:00"
 
-integrate_script: "scripts/method_comparison/validate_pipseq.py"
+integrate_script: scripts/method_comparison/integrate.py #"scripts/method_comparison/validate_pipseq.py" 
 integrate_threads: 16
 integrate_partition: "medium"
 integrate_mem: 128000
