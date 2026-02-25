@@ -92,6 +92,9 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
     print(f"Loading h5ad: {h5ad_path}")
     adata = sc.read_h5ad(h5ad_path)
 
+    # Filter adata object for only the pipseq methods
+    adata = adata[adata.obs["method"] == "pipseq"].copy()
+
     # ── PCA embedding ────────────────────────────────────────────────────────
     if pca_key in adata.obsm:
         data = adata.obsm[pca_key]
@@ -144,42 +147,42 @@ def load_from_h5ad(h5ad_path, pca_key="X_pca_harmony", timepoint_col="timepoint"
 
     return data, labels, label_list, metadata, adata.obs_names.tolist(), adata
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Add Wolbachia titer from h5ad
-# ─────────────────────────────────────────────────────────────────────────────
+# # ─────────────────────────────────────────────────────────────────────────────
+# # Add Wolbachia titer from h5ad
+# # ─────────────────────────────────────────────────────────────────────────────
 
-def add_titer_from_h5ad(metadata, ref_h5ad_path, query_h5ad_path):
-    """
-    Pull wolbachia_titer from the reference and query h5ad objects and
-    join onto the metadata dataframe by cell barcode.
-    """
-    print("\nLoading Wolbachia titer from h5ad files …")
-    titer_frames = []
+# def add_titer_from_h5ad(metadata, ref_h5ad_path, query_h5ad_path):
+#     """
+#     Pull wolbachia_titer from the reference and query h5ad objects and
+#     join onto the metadata dataframe by cell barcode.
+#     """
+#     print("\nLoading Wolbachia titer from h5ad files …")
+#     titer_frames = []
 
-    for path, label in [(ref_h5ad_path, "reference"), (query_h5ad_path, "query")]:
-        if path and os.path.exists(path):
-            adata = sc.read_h5ad(path)
-            if "wolbachia_titer" in adata.obs.columns:
-                titer_frames.append(
-                    adata.obs[["wolbachia_titer"]].rename_axis("cell_id")
-                )
-                print(f"  Loaded titer from {label}: {adata.n_obs} cells")
-            else:
-                print(f"  WARNING: 'wolbachia_titer' not found in {label} h5ad")
-        else:
-            print(f"  Skipping {label}: path not provided or file not found")
+#     for path, label in [(ref_h5ad_path, "reference"), (query_h5ad_path, "query")]:
+#         if path and os.path.exists(path):
+#             adata = sc.read_h5ad(path)
+#             if "wolbachia_titer" in adata.obs.columns:
+#                 titer_frames.append(
+#                     adata.obs[["wolbachia_titer"]].rename_axis("cell_id")
+#                 )
+#                 print(f"  Loaded titer from {label}: {adata.n_obs} cells")
+#             else:
+#                 print(f"  WARNING: 'wolbachia_titer' not found in {label} h5ad")
+#         else:
+#             print(f"  Skipping {label}: path not provided or file not found")
 
-    if not titer_frames:
-        print("  No titer data found — titer analysis will be skipped")
-        metadata["wolbachia_titer"] = np.nan
-        return metadata
+#     if not titer_frames:
+#         print("  No titer data found — titer analysis will be skipped")
+#         metadata["wolbachia_titer"] = np.nan
+#         return metadata
 
-    titer_df = pd.concat(titer_frames)
-    # metadata index is cell barcodes (set in load_sceptic_inputs)
-    metadata = metadata.join(titer_df, how="left")
-    n_with_titer = metadata["wolbachia_titer"].notna().sum()
-    print(f"  Cells with titer data: {n_with_titer}/{len(metadata)}")
-    return metadata
+#     titer_df = pd.concat(titer_frames)
+#     # metadata index is cell barcodes (set in load_sceptic_inputs)
+#     metadata = metadata.join(titer_df, how="left")
+#     n_with_titer = metadata["wolbachia_titer"].notna().sum()
+#     print(f"  Cells with titer data: {n_with_titer}/{len(metadata)}")
+#     return metadata
 
 
 # ─────────────────────────────────────────────────────────────────────────────

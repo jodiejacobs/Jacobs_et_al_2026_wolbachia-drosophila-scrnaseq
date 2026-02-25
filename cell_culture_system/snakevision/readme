@@ -1,0 +1,9 @@
+snakemake --executor slurm --default-resources slurm_partition=medium slurm_time="2:00:00" runtime=120 mem_mb=8000 -j 16 \
+    --forceall \
+    --rulegraph \
+> pipeline_rulegraph.dot
+
+snakevision \
+    -s all mutliqc \
+    -o pipeline_rulegraph.svg \
+    pipeline_rulegraph.dot
