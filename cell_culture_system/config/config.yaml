@@ -13,6 +13,7 @@ combine_script: "../snakemake_scripts/analysis/integrate_h5ad_by_condition.py"
 kallisto_index: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
 filter_script: "../snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata.py"
 cell_cycle_script: "../snakemake_scripts/analysis/cyclum_cell_cycle.py"
+cyclum_analysis_script: "../snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"
 transcripts_to_genes: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
 
 # Compute resources for cellranger 
