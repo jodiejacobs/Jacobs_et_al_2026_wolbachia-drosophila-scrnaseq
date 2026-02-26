@@ -102,7 +102,7 @@ rule all:
         "results/integrated/integrated.h5ad",
         # Cell cycle for uninfected samples
         "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-        "results/integrated/integrated_uninfected_with_cellcycle_annotated.h5ad",
+        "results/integrated/integrated_uninfected_with_cellcycle_annotated/.done",
         # Cell cycle
         "results/cellcycle/.done",
         # Cluster marker + pathway analysis
@@ -727,12 +727,12 @@ rule cell_cycle_analysis_uninfected:
         
         """
 
-
 rule cyclum_analysis_uninfected:
     input:
         h5ad = "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
     output:
-        annotated_h5ad = "results/integrated/integrated_uninfected_with_cellcycle_annotated.h5ad",
+        annotated = "results/integrated/integrated_uninfected_with_cellcycle_annotated",
+        flag     = touch("results/integrated/integrated_uninfected_with_cellcycle_annotated/.done")
     params:
         script = config["cyclum_analysis_script"]
     log:
@@ -754,13 +754,12 @@ rule cyclum_analysis_uninfected:
 
         python {params.script} \
             --input {input.h5ad} \
-            --output {output.annotated_h5ad} \
+            --output {output.annotated} \
             --sample JW18_uninfected \
             --save-h5ad \
             --skip-cyclum 
         
         """
-
 
 rule cell_cycle_analysis:
     input:
