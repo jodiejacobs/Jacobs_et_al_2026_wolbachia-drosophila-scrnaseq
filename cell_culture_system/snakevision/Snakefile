@@ -541,6 +541,50 @@ rule extract_abundant_16s:
         echo "Abundant sequence extraction complete"
         """
 
+rule integrate_uninfected:
+    input:
+        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "DOX" in s and "SV" not in s]),
+    output:
+        integrated = "results/integrated/integrated_uninfected.h5ad",
+    params:
+        files        = "rls results/filtered_h5ad/*DOX-Ctrl*.h5ad",
+        script       = config["integrate_script"],
+        sample       = "uninfected",
+        fig_dir      = "results/integrated/figures_uninfected",
+        out_path     = "results/integrated/integrated_uninfected.h5ad",
+        resolution   = config.get("integrate_resolution", 0.2),
+        bio_condition = config.get("integrate_bio_condition", "uninfected")
+    log:
+        "logs/integrate/integrate_uninfected.log"   
+    threads:
+        config.get("integrate_threads", 16)
+    resources:
+        slurm_partition = config.get("integrate_partition", "medium"),
+        mem_mb          = config.get("integrate_mem", 128000),
+        slurm_time      = config.get("integrate_time", "8:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting integration of uninfected samples"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --files {params.files} \
+            --sample {params.sample} \
+            --batch_key batch \
+            --min_cells 3 \
+            --min_genes 200 \
+            --n_pcs 30 \
+            --resolution {params.resolution} \
+            --bio_condition {params.bio_condition} \
+            --out_path {params.out_path} \
+            --fig_dir {params.fig_dir} 
+            
+        echo "Integration of uninfected samples complete"
+        """
+
 rule integrate: 
     input:
         files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
@@ -582,6 +626,40 @@ rule integrate:
             --fig_dir {params.fig_dir} 
             
         echo "Integration complete"
+        """
+
+rule cell_cycle_analysis_uninfected:
+    input:
+        h5ad = "results/integrated/integrated_uninfected.h5ad"
+    output:
+        annotated_h5ad = "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
+        flag           = touch("results/cellcycle_uninfected/.done")
+    params:
+        script  = config["cellcycle_script"],
+        fig_dir = "results/cellcycle_uninfected",
+    log:
+        "logs/cellcycle/cellcycle_uninfected.log"
+    threads:
+        config.get("cellcycle_threads", 4)
+    resources:
+        slurm_partition = config.get("cellcycle_partition", "medium"),
+        mem_mb          = config.get("cellcycle_mem", 32000),
+        slurm_time      = config.get("cellcycle_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cell cycle analysis for uninfected samples"
+        
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input        {input.h5ad} \
+            --output       {params.fig_dir} \
+            --sample       DOX \
+            --save-output
+
+        echo "Cell cycle analysis complete"
         """
 
 rule cell_cycle_analysis:
