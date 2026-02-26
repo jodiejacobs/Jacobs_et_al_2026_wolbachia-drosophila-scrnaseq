@@ -704,7 +704,7 @@ rule cell_cycle_analysis_uninfected:
     params:
         script = config["cell_cycle_script"]
     log:
-        "logs/annotate/uninfected.log"
+        "logs/cellcycle/cyclum_uninfected.log"
     threads:
         config["cell_cycle_threads"]
     resources:
