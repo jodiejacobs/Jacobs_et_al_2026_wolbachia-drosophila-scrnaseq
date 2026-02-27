@@ -102,7 +102,7 @@ rule all:
         "results/integrated/integrated.h5ad",
         # Cell cycle for uninfected samples
         "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-        "results/integrated/integrated_uninfected_with_cellcycle_annotated/.done",
+        "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
         # Cell cycle
         "results/cellcycle/.done",
         # Cluster marker + pathway analysis
@@ -731,24 +731,29 @@ rule cyclum_analysis_uninfected:
     input:
         h5ad = "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
     output:
-        annotated = "results/integrated/integrated_uninfected_with_cellcycle_annotated",
-        flag     = touch("results/integrated/integrated_uninfected_with_cellcycle_annotated/.done")
+        annotated    = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated"),
+        result       = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
+        umap_dir     = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_umap_per_gene"),
+        cc_stats     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cc_cluster_stats.csv",
+        de_genes     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_validation_de_genes.csv",
     params:
-        script = config["cyclum_analysis_script"]
+        script       = config["cyclum_analysis_script"],
+        n_top_genes  = config.get("cyclum_n_top_genes", 5),
+        n_umap_genes = config.get("cyclum_n_umap_genes", 6),
     log:
         "logs/cellcycle/cyclum_uninfected.log"
     threads:
         config["cell_cycle_threads"]
     resources:
         slurm_partition = config["cell_cycle_partition"],
-        mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
+        mem_mb          = config["cell_cycle_mem"],
+        slurm_time      = config["cell_cycle_time"]
     shell:
         """
         exec > {log} 2>&1
         echo "Starting cell cycle annotation for Uninfected samples"
         echo "Input file: {input.h5ad}"
-        
+
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
 
@@ -757,8 +762,9 @@ rule cyclum_analysis_uninfected:
             --output {output.annotated} \
             --sample JW18_uninfected \
             --save-h5ad \
-            --skip-cyclum 
-        
+            --skip-cyclum \
+            --n-top-genes {params.n_top_genes} \
+            --n-umap-genes {params.n_umap_genes}
         """
 
 rule cell_cycle_analysis:

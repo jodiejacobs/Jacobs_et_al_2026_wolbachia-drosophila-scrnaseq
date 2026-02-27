@@ -100,8 +100,7 @@ FBGN_TO_SYMBOL = {v: k for k, v in FLYBASE_CELL_CYCLE_GENES.items()}
 PHASE_ORDER  = ['g0/g1', 's', 'g2/m']
 PHASE_COLORS = {'g0/g1': '#FF6B6B', 's': '#4ECDC4', 'g2/m': '#45B7D1'}
 
-# Expected enrichment direction for validation
-EXPECTED_HIGH = {'S_score': 's', 'G2M_score': 'g2/m'}
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,13 +170,6 @@ def _find_marker_genes(adata, verbose=True):
                   (f"  (+{len(g2m_present)-10} more)" if len(g2m_present) > 10 else ""))
 
     return s_present, g2m_present
-
-
-def _mean_gene_set_score(X_lognorm, gene_indices):
-    """Mean log-normalised expression across a gene set. Returns shape (n_cells,)."""
-    if not gene_indices:
-        return np.zeros(X_lognorm.shape[0])
-    return X_lognorm[:, gene_indices].mean(axis=1)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -254,292 +246,278 @@ def assign_cell_cycle_stage_simple(pseudotime_flat):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 – MARKER GENE VALIDATION OF CYCLUM PHASES
+# SECTION 2 – DATA-DRIVEN VALIDATION: TOP DE GENES BETWEEN CYCLUM PHASES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def validate_cyclum_phases(adata, output_dir, sample_name):
+def validate_cyclum_phases(adata, output_dir, sample_name,
+                            n_top_genes=5, n_umap_genes=6):
     """
-    Validate cyclum phase assignments using Drosophila cell cycle marker genes.
+    Visually validate cyclum phase assignments by identifying the genes most
+    differentially expressed between cyclum phases and plotting their expression
+    on UMAPs — no assumption about which specific genes should be present.
 
     Strategy
     --------
-    Per-cell S_score and G2M_score are computed as the mean log-normalised
-    expression of S-phase and G2/M-phase FlyBase marker genes respectively.
-    These scores are stored in adata.obs but are NOT used to re-call phases —
-    cyclum_stage remains the authoritative label.
+    1. Run sc.tl.rank_genes_groups (Wilcoxon) with cyclum_stage as groupby.
+       This finds the top genes that distinguish each phase from the others.
+    2. Select the top `n_top_genes` per phase (deduplicated), preferring genes
+       that overlap with known FlyBase cell cycle markers where possible.
+    3. Plot one UMAP panel per gene coloured by expression, with inset showing
+       cyclum phase labels for reference.
+    4. Also produce a heatmap of top DE genes sorted by cyclum phase.
 
-    A good cyclum assignment should show:
-      S_score   highest in cells assigned to 's'
-      G2M_score highest in cells assigned to 'g2/m'
-      Both      lowest  in cells assigned to 'g0/g1'
+    A good cyclum assignment should show clear spatial structure on the UMAP:
+    top 's' genes high in one UMAP region, top 'g2/m' genes in another.
 
-    Statistical tests (Kruskal-Wallis + pairwise Mann-Whitney U with Bonferroni
-    correction) formally test whether scores differ significantly across phases.
+    Parameters
+    ----------
+    n_top_genes : int
+        Top DE genes to extract per phase for heatmap / CSV (default 5).
+    n_umap_genes : int
+        Number of genes to show per phase on UMAP grid (default 6).
+        Total UMAPs = n_umap_genes * 3 phases + 1 (phase label).
 
     Outputs
     -------
-    {sample}_validation_score_violin.pdf      score distributions per phase
-    {sample}_validation_score_scatter.pdf     S vs G2M score scatter
-    {sample}_validation_pseudotime_scores.pdf scores along pseudotime
-    {sample}_validation_marker_heatmap.pdf    per-gene Z-score heatmap
-    {sample}_validation_phase_means.csv       mean score per phase
-    {sample}_validation_stats.csv             KW + pairwise test results
+    {sample}_validation_de_genes.csv         top DE genes per phase
+    {sample}_validation_umap_phase.pdf       UMAP coloured by cyclum phase
+    {sample}_validation_umap_{phase}.pdf     UMAP grids per phase (expression)
+    {sample}_validation_umap_pseudotime.pdf  UMAP coloured by pseudotime
+    {sample}_validation_heatmap.pdf          DE gene heatmap sorted by phase
     """
     print("\n" + "=" * 60)
-    print("MARKER GENE VALIDATION OF CYCLUM PHASES")
+    print("DATA-DRIVEN VALIDATION: TOP DE GENES BETWEEN CYCLUM PHASES")
     print("=" * 60)
 
     if 'cyclum_stage' not in adata.obs.columns:
         print("  ERROR: 'cyclum_stage' not in adata.obs. Run cyclum first.")
         return None
 
+    if 'X_umap' not in adata.obsm:
+        print("  WARNING: No UMAP found in adata.obsm. "
+              "UMAP plots will be skipped. Run sc.pp.neighbors + sc.tl.umap first.")
+
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Find marker genes ─────────────────────────────────────────────────────
-    s_genes, g2m_genes = _find_marker_genes(adata)
+    # ── Ensure log-normalised layer exists for DE ─────────────────────────────
+    # rank_genes_groups works on adata.X — normalise a copy if needed
+    adata_de = adata.copy()
+    X_check  = adata_de.X
+    mat_max  = float(X_check.max() if not scipy.sparse.issparse(X_check)
+                     else X_check.max())
+    if mat_max > 20:
+        print(f"  Raw counts detected (max={mat_max:.1f}). "
+              "Normalising copy for DE (adata.X unchanged).")
+        sc.pp.normalize_total(adata_de, target_sum=1e4)
+        sc.pp.log1p(adata_de)
+    else:
+        print(f"  Data appears log-normalised (max={mat_max:.3f}).")
 
-    if len(s_genes) < 2 and len(g2m_genes) < 2:
-        print("  ERROR: Fewer than 2 marker genes found. "
-              "Check that var_names use FBgn IDs or matching gene symbols.")
-        return None
+    # ── Known FlyBase cell cycle gene IDs/symbols present in dataset ──────────
+    s_known, g2m_known = _find_marker_genes(adata, verbose=True)
+    known_cc_genes = set(s_known + g2m_known)
+    # Build a lookup: gene name → 'S marker' / 'G2M marker' / ''
+    gene_type_label = {}
+    for g in s_known:
+        gene_type_label[g] = f"S ({FBGN_TO_SYMBOL.get(g, g)})"
+    for g in g2m_known:
+        gene_type_label[g] = f"G2M ({FBGN_TO_SYMBOL.get(g, g)})"
 
-    # ── Compute scores ────────────────────────────────────────────────────────
-    X_ln    = _get_lognorm_matrix(adata)
-    var_idx = list(adata.var_names)
+    # ── Differential expression: top genes per cyclum phase ───────────────────
+    print("\n  Running Wilcoxon rank-sum DE (cyclum_stage groups)...")
+    sc.tl.rank_genes_groups(
+        adata_de,
+        groupby='cyclum_stage',
+        groups=PHASE_ORDER,
+        reference='rest',
+        method='wilcoxon',
+        key_added='rank_genes_cyclum',
+        pts=True,
+    )
 
-    s_idx   = [var_idx.index(g) for g in s_genes   if g in var_idx]
-    g2m_idx = [var_idx.index(g) for g in g2m_genes if g in var_idx]
-
-    adata.obs['S_score']   = _mean_gene_set_score(X_ln, s_idx)
-    adata.obs['G2M_score'] = _mean_gene_set_score(X_ln, g2m_idx)
-
-    phases = adata.obs['cyclum_stage']
-
-    # ── Mean scores per phase ─────────────────────────────────────────────────
-    phase_means = adata.obs.groupby('cyclum_stage')[['S_score', 'G2M_score']].mean()
-    # Reindex to canonical order
-    phase_means = phase_means.reindex([p for p in PHASE_ORDER
-                                        if p in phase_means.index])
-    print("\n  Mean marker scores per cyclum phase:")
-    print(phase_means.round(4).to_string())
-
-    print("\n  Enrichment direction check (validation):")
-    for score, expected in EXPECTED_HIGH.items():
-        actual = phase_means[score].idxmax()
-        ok = "PASS ✓" if actual == expected else "FAIL ✗ — check phase boundaries"
-        print(f"    {score}: highest in '{actual}' (expected '{expected}') — {ok}")
-
-    # ── Statistical tests ─────────────────────────────────────────────────────
-    print("\n  Kruskal-Wallis (score ~ cyclum phase):")
-    stats_rows = []
-    for score in ['S_score', 'G2M_score']:
-        phase_groups = [adata.obs.loc[phases == p, score].values
-                        for p in PHASE_ORDER if p in phases.unique()]
-        phase_groups = [g for g in phase_groups if len(g) >= 3]
-        if len(phase_groups) < 2:
-            continue
-        h, p_kw = kruskal(*phase_groups)
-        print(f"    {score}: H={h:.2f}, p={p_kw:.2e} "
-              f"({'SIGNIFICANT' if p_kw < 0.05 else 'not significant'})")
-
-        # Pairwise Mann-Whitney U with Bonferroni correction
-        pairs    = list(combinations(PHASE_ORDER, 2))
-        bonf_thr = 0.05 / len(pairs)
-        for pa, pb in pairs:
-            if pa not in phases.unique() or pb not in phases.unique():
-                continue
-            ga = adata.obs.loc[phases == pa, score].values
-            gb = adata.obs.loc[phases == pb, score].values
-            u, p_mw = mannwhitneyu(ga, gb, alternative='two-sided')
-            stats_rows.append({
-                'score':            score,
-                'phase_A':          pa,
-                'phase_B':          pb,
-                'KW_H':             h,
-                'KW_p':             p_kw,
-                'MW_U':             u,
-                'MW_p':             p_mw,
-                'bonf_significant': p_mw < bonf_thr,
-            })
-
-    stats_df = pd.DataFrame(stats_rows)
-    if not stats_df.empty:
-        sig = stats_df[stats_df['bonf_significant']]
-        print(f"\n  Bonferroni-significant pairwise differences "
-              f"({sig.shape[0]}/{stats_df.shape[0]} pairs):")
-        if sig.empty:
-            print("    None")
-        else:
-            for _, row in sig.iterrows():
-                print(f"    {row['score']}: {row['phase_A']} vs {row['phase_B']} "
-                      f"U={row['MW_U']:.0f}, p={row['MW_p']:.2e} *")
-
-    # ── Figure 1: violin plots of scores per cyclum phase ─────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for ax, score in zip(axes, ['S_score', 'G2M_score']):
-        data_by_phase = [adata.obs.loc[phases == p, score].values
-                         for p in PHASE_ORDER if p in phases.unique()]
-        present_phases = [p for p in PHASE_ORDER if p in phases.unique()]
-        vp = ax.violinplot(data_by_phase, positions=range(len(present_phases)),
-                           showmedians=True, showextrema=False)
-        for i, body in enumerate(vp['bodies']):
-            body.set_facecolor(PHASE_COLORS[present_phases[i]])
-            body.set_alpha(0.75)
-        vp['cmedians'].set_color('black')
-        ax.set_xticks(range(len(present_phases)))
-        ax.set_xticklabels(present_phases)
-        ax.set_xlabel('Cyclum phase')
-        ax.set_ylabel(score)
-        ax.set_title(f'{score} by Cyclum phase')
-
-        # Annotate Bonferroni-significant pairs
-        if not stats_df.empty:
-            y_max   = adata.obs[score].max()
-            y_range = adata.obs[score].max() - adata.obs[score].min()
-            step    = y_range * 0.08
-            for k_off, (_, row) in enumerate(
-                stats_df[(stats_df['score'] == score) &
-                          stats_df['bonf_significant']].iterrows()
-            ):
-                if row['phase_A'] not in present_phases or row['phase_B'] not in present_phases:
-                    continue
-                i = present_phases.index(row['phase_A'])
-                j = present_phases.index(row['phase_B'])
-                y = y_max + step * (k_off + 1)
-                ax.plot([i, j], [y, y], color='black', linewidth=1)
-                ax.text((i+j)/2, y + step*0.15, '*', ha='center',
-                        fontsize=12, fontweight='bold')
-
-    plt.suptitle(f'Marker gene score validation — {sample_name}\n'
-                 f'(S_score = mean S-phase FlyBase markers; '
-                 f'G2M_score = mean G2/M FlyBase markers)',
-                 fontsize=10)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'{sample_name}_validation_score_violin.pdf'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # ── Figure 2: S_score vs G2M_score scatter ────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    # Extract top genes per phase
+    de_rows   = []
+    top_genes = {phase: [] for phase in PHASE_ORDER}
 
     for phase in PHASE_ORDER:
-        if phase not in phases.unique():
+        if phase not in adata_de.obs['cyclum_stage'].unique():
             continue
-        mask = phases == phase
-        axes[0].scatter(
-            adata.obs.loc[mask, 'S_score'],
-            adata.obs.loc[mask, 'G2M_score'],
-            c=PHASE_COLORS[phase], label=phase,
-            alpha=0.5, s=8, rasterized=True,
+        df = sc.get.rank_genes_groups_df(
+            adata_de, group=phase, key='rank_genes_cyclum',
+            pval_cutoff=None, log2fc_min=None,
         )
-    axes[0].axhline(0, color='k', linestyle='--', alpha=0.3)
-    axes[0].axvline(0, color='k', linestyle='--', alpha=0.3)
-    axes[0].set_xlabel('S score (FlyBase S-phase markers)')
-    axes[0].set_ylabel('G2M score (FlyBase G2/M markers)')
-    axes[0].set_title('Marker scores coloured by Cyclum phase')
-    axes[0].legend(title='Cyclum phase', fontsize=9)
+        df = df.sort_values('scores', ascending=False)
 
-    if 'cyclum_pseudotime' in adata.obs.columns:
-        pt      = adata.obs['cyclum_pseudotime'].values
-        pt_norm = (pt - pt.min()) / (pt.max() - pt.min() + 1e-10)
-        sc_pt   = axes[1].scatter(
-            adata.obs['S_score'], adata.obs['G2M_score'],
-            c=pt_norm, cmap='hsv', alpha=0.5, s=8, rasterized=True,
-        )
-        plt.colorbar(sc_pt, ax=axes[1], label='Cyclum pseudotime (normalised)')
-    axes[1].axhline(0, color='k', linestyle='--', alpha=0.3)
-    axes[1].axvline(0, color='k', linestyle='--', alpha=0.3)
-    axes[1].set_xlabel('S score (FlyBase S-phase markers)')
-    axes[1].set_ylabel('G2M score (FlyBase G2/M markers)')
-    axes[1].set_title('Marker scores coloured by pseudotime')
+        # Annotate with known cell cycle gene info
+        df['known_cc_gene'] = df['names'].isin(known_cc_genes)
+        df['gene_label']    = df['names'].map(
+            lambda g: gene_type_label.get(g, FBGN_TO_SYMBOL.get(g, g)))
+        df['phase'] = phase
+        de_rows.append(df.head(50))   # save top 50 per phase to CSV
 
-    plt.suptitle(f'S score vs G2M score — {sample_name}', fontsize=12)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'{sample_name}_validation_score_scatter.pdf'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
+        # For plotting: take top n_umap_genes, boosting known CC genes
+        # by pulling them to the front if they rank in top 20
+        top_all  = list(df['names'].head(20))
+        top_cc   = [g for g in top_all if g in known_cc_genes]
+        top_rest = [g for g in top_all if g not in known_cc_genes]
+        # Interleave: put known CC genes first, fill rest to n_umap_genes
+        prioritised = (top_cc + top_rest)[:n_umap_genes]
+        top_genes[phase] = prioritised
 
-    # ── Figure 3: scores along pseudotime ────────────────────────────────────
-    if 'cyclum_pseudotime' in adata.obs.columns:
-        pt       = adata.obs['cyclum_pseudotime'].values
-        sort_idx = np.argsort(pt)
-        window   = max(1, len(pt) // 100)
+        label_str = ", ".join([gene_type_label.get(g, FBGN_TO_SYMBOL.get(g, g))
+                               for g in prioritised[:5]])
+        print(f"  Top genes for '{phase}': {label_str}"
+              + (f"  (+{len(prioritised)-5} more)" if len(prioritised) > 5 else ""))
 
-        fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-        for ax, score, color in zip(axes,
-                                    ['S_score', 'G2M_score'],
-                                    ['#4ECDC4', '#45B7D1']):
-            vals     = adata.obs[score].values[sort_idx]
-            smoothed = pd.Series(vals).rolling(window, center=True,
-                                               min_periods=1).mean().values
-            ax.scatter(pt[sort_idx], vals, c=color, alpha=0.2, s=5, rasterized=True)
-            ax.plot(pt[sort_idx], smoothed, color='black', linewidth=1.5,
-                    label=f'Rolling mean (w={window})')
-            ax.set_ylabel(score)
-            ax.legend(fontsize=8)
-            # Shade cyclum phase regions
-            for phase, col in PHASE_COLORS.items():
-                mask = adata.obs['cyclum_stage'].values == phase
-                if mask.any():
-                    pt_phase = pt[mask]
-                    ax.axvspan(pt_phase.min(), pt_phase.max(),
-                               alpha=0.08, color=col, label=phase)
+    de_df = pd.concat(de_rows, ignore_index=True)
+    de_df.to_csv(
+        os.path.join(output_dir, f'{sample_name}_validation_de_genes.csv'),
+        index=False)
+    print(f"  DE results saved ({len(de_df)} rows)")
 
-        axes[1].set_xlabel('Cyclum pseudotime')
-        axes[0].set_title(
-            f'FlyBase marker scores along pseudotime — {sample_name}\n'
-            f'Shaded regions = cyclum phase boundaries')
+    # ── UMAP: cyclum phase labels + pseudotime ────────────────────────────────
+    if 'X_umap' in adata.obsm:
+
+        # 1. Phase label UMAP
+        fig, ax = plt.subplots(figsize=(7, 6))
+        sc.pl.umap(adata, color='cyclum_stage', ax=ax, show=False,
+                   title=f'Cyclum phase — {sample_name}',
+                   palette=PHASE_COLORS, frameon=False)
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir,
-                                 f'{sample_name}_validation_pseudotime_scores.pdf'),
+                                 f'{sample_name}_validation_umap_phase.pdf'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
-    # ── Figure 4: per-gene Z-score heatmap sorted by cyclum phase ─────────────
-    all_markers = [g for g in (s_genes + g2m_genes) if g in var_idx]
-    if all_markers:
-        # Sort cells: g0/g1 → s → g2/m then by pseudotime within each phase
-        sort_key = phases.map({'g0/g1': 0, 's': 1, 'g2/m': 2})
+        # 2. Pseudotime UMAP
+        if 'cyclum_pseudotime' in adata.obs.columns:
+            fig, ax = plt.subplots(figsize=(7, 6))
+            sc.pl.umap(adata, color='cyclum_pseudotime', ax=ax, show=False,
+                       title=f'Cyclum pseudotime — {sample_name}',
+                       cmap='hsv', frameon=False)
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir,
+                                     f'{sample_name}_validation_umap_pseudotime.pdf'),
+                        dpi=300, bbox_inches='tight')
+            plt.close()
+
+        # 3. Per-phase UMAP grids: top DE gene expression
+        for phase in PHASE_ORDER:
+            genes = top_genes.get(phase, [])
+            if not genes:
+                continue
+
+            # Filter to genes actually in adata
+            genes = [g for g in genes if g in adata.var_names]
+            if not genes:
+                continue
+
+            n_genes = len(genes)
+            # Layout: phase label in first panel, then gene expression panels
+            n_cols  = min(4, n_genes + 1)
+            n_rows  = int(np.ceil((n_genes + 1) / n_cols))
+            fig, axes = plt.subplots(n_rows, n_cols,
+                                      figsize=(5 * n_cols, 4.5 * n_rows))
+            axes = np.array(axes).flatten()
+
+            # First panel: phase label
+            sc.pl.umap(adata, color='cyclum_stage', ax=axes[0], show=False,
+                       title='Cyclum phase', palette=PHASE_COLORS,
+                       frameon=False, legend_loc='on data', legend_fontsize=8)
+
+            # Remaining panels: expression of top DE genes
+            for i, gene in enumerate(genes):
+                ax = axes[i + 1]
+                gene_display = gene_type_label.get(gene, FBGN_TO_SYMBOL.get(gene, gene))
+                # Flag if this is a known cell cycle gene
+                cc_flag = ' ★' if gene in known_cc_genes else ''
+                sc.pl.umap(adata, color=gene, ax=ax, show=False,
+                           title=f'{gene_display}{cc_flag}',
+                           cmap='viridis', frameon=False)
+
+            # Hide unused axes
+            for ax in axes[n_genes + 1:]:
+                ax.set_visible(False)
+
+            fig.suptitle(
+                f"Top DE genes for cyclum phase '{phase}' — {sample_name}\n"
+                f"(★ = known Drosophila cell cycle gene; "
+                f"ranked by Wilcoxon score vs other phases)",
+                fontsize=11, y=1.01,
+            )
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir,
+                                     f'{sample_name}_validation_umap_{phase}.pdf'),
+                        dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  UMAP grid saved for phase '{phase}'")
+
+    else:
+        print("  Skipping UMAP plots (no X_umap).")
+
+    # ── Heatmap: top DE genes sorted by cyclum phase ──────────────────────────
+    # Collect unique top-n_top_genes per phase (in phase order)
+    all_top = []
+    for phase in PHASE_ORDER:
+        df_phase = de_df[de_df['phase'] == phase].head(n_top_genes)
+        all_top += list(df_phase['names'])
+    heatmap_genes = list(dict.fromkeys(all_top))   # deduplicate, preserve order
+    heatmap_genes = [g for g in heatmap_genes if g in adata.var_names]
+
+    if heatmap_genes:
+        # Sort cells: g0/g1 → s → g2/m, then by pseudotime
+        sort_key = adata.obs['cyclum_stage'].map({'g0/g1': 0, 's': 1, 'g2/m': 2})
         if 'cyclum_pseudotime' in adata.obs.columns:
             sort_order = adata.obs.assign(_sk=sort_key).sort_values(
                 ['_sk', 'cyclum_pseudotime']).index
         else:
             sort_order = adata.obs.assign(_sk=sort_key).sort_values('_sk').index
 
-        cell_order_idx = [list(adata.obs_names).index(c) for c in sort_order]
-        marker_col_idx = [var_idx.index(g) for g in all_markers]
+        # Expression matrix (log-normed)
+        X_ln       = _get_lognorm_matrix(adata)
+        var_list   = list(adata.var_names)
+        gene_idx   = [var_list.index(g) for g in heatmap_genes]
+        cell_idx   = [list(adata.obs_names).index(c) for c in sort_order]
+        X_sub      = X_ln[np.ix_(cell_idx, gene_idx)]
+        means      = X_sub.mean(axis=0)
+        stds       = X_sub.std(axis=0) + 1e-10
+        X_z        = ((X_sub - means) / stds).T       # genes × cells
 
-        X_sub = X_ln[np.ix_(cell_order_idx, marker_col_idx)]
-        means = X_sub.mean(axis=0)
-        stds  = X_sub.std(axis=0) + 1e-10
-        X_z   = ((X_sub - means) / stds).T   # genes × cells
+        gene_labels = [gene_type_label.get(g, FBGN_TO_SYMBOL.get(g, g))
+                       for g in heatmap_genes]
 
-        gene_labels   = [FBGN_TO_SYMBOL.get(g, g) for g in all_markers]
-        n_s_present   = len([g for g in s_genes   if g in var_idx])
-        n_g2m_present = len([g for g in g2m_genes if g in var_idx])
+        # Assign gene-row colours by which phase they came from
+        phase_of_gene = {}
+        for phase in PHASE_ORDER:
+            for g in de_df[de_df['phase'] == phase].head(n_top_genes)['names']:
+                if g not in phase_of_gene:
+                    phase_of_gene[g] = phase
+        row_colors = pd.Series(
+            [PHASE_COLORS.get(phase_of_gene.get(g, ''), '#CCCCCC')
+             for g in heatmap_genes],
+            index=gene_labels,
+        )
 
-        fig_h = max(6, len(gene_labels) * 0.35 + 2)
+        fig_h = max(6, len(heatmap_genes) * 0.4 + 2)
         fig, ax = plt.subplots(figsize=(12, fig_h))
-
         sns.heatmap(X_z, cmap='RdBu_r', center=0, vmin=-2, vmax=2,
                     xticklabels=False, yticklabels=gene_labels,
                     cbar_kws={'label': 'Z-score'}, ax=ax)
+
+        # Colour gene labels by phase
+        for ytick, gene in zip(ax.get_yticklabels(), heatmap_genes):
+            phase = phase_of_gene.get(gene, '')
+            ytick.set_color(PHASE_COLORS.get(phase, 'black'))
+            if gene in known_cc_genes:
+                ytick.set_fontweight('bold')
+
         ax.set_xlabel('Cells (sorted: g0/g1 → s → g2/m, then by pseudotime)')
-        ax.set_ylabel('Drosophila cell cycle marker genes')
-        ax.set_title(f'Marker gene expression by cyclum phase — {sample_name}')
+        ax.set_ylabel(f'Top {n_top_genes} DE genes per phase')
+        ax.set_title(
+            f'Top DE genes by cyclum phase — {sample_name}\n'
+            f'Colour = source phase  |  Bold = known Drosophila CC gene')
 
-        # Dividing line between S and G2M gene blocks
-        if 0 < n_s_present < len(gene_labels):
-            ax.axhline(n_s_present, color='black', linewidth=1.5, linestyle='--')
-            ax.text(X_z.shape[1] * 1.01, n_s_present / 2,
-                    'S genes', va='center', fontsize=8, color='#4ECDC4',
-                    fontweight='bold')
-            ax.text(X_z.shape[1] * 1.01,
-                    n_s_present + n_g2m_present / 2,
-                    'G2M genes', va='center', fontsize=8, color='#45B7D1',
-                    fontweight='bold')
-
-        # Phase colour strip below heatmap
+        # Phase colour strip
         phase_strip = np.array([[
             list(plt.cm.colors.to_rgb(PHASE_COLORS.get(p, '#CCCCCC')))
             for p in adata.obs.loc[sort_order, 'cyclum_stage']
@@ -556,24 +534,284 @@ def validate_cyclum_phases(adata, output_dir, sample_name):
 
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir,
-                                 f'{sample_name}_validation_marker_heatmap.pdf'),
+                                 f'{sample_name}_validation_heatmap.pdf'),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  Heatmap saved ({len(heatmap_genes)} genes × {len(sort_order)} cells)")
+
+    print(f"\n  Validation outputs saved to: {output_dir}")
+    return de_df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 – CELL CYCLE GENE EXPRESSION ACROSS LEIDEN CLUSTERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
+    """
+    Test which FlyBase cell cycle genes are differentially expressed between
+    Leiden clusters, and visualise their expression.
+
+    Strategy
+    --------
+    - Restrict to the FlyBase S-phase and G2/M marker genes present in the dataset
+    - Run Kruskal-Wallis per gene across clusters (non-parametric, no normality
+      assumption), Bonferroni-corrected across the number of genes tested
+    - Rank by H-statistic (effect size proxy) to find the most cluster-variable
+      cell cycle genes
+    - Plot: dot plot, heatmap, and UMAPs for the top significant genes
+
+    Outputs
+    -------
+    {sample}_cc_cluster_stats.csv         per-gene KW results, ranked by H
+    {sample}_cc_cluster_dotplot.pdf       dot plot: mean expression + % expressing
+    {sample}_cc_cluster_heatmap.pdf       Z-score heatmap across clusters
+    {sample}_cc_cluster_umap_{gene}.pdf   UMAP per top gene (top n_umap_genes)
+    {sample}_cc_cluster_umap_grid.pdf     all top genes in one grid
+    """
+    print("\n" + "=" * 60)
+    print("CELL CYCLE GENES: DIFFERENTIAL EXPRESSION ACROSS CLUSTERS")
+    print("=" * 60)
+
+    try:
+        leiden_col = _get_leiden_col(adata)
+    except KeyError as e:
+        print(f"  ERROR: {e}")
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    sc.settings.figdir = output_dir
+
+    # ── Find which FlyBase CC genes are in the dataset ────────────────────────
+    s_genes, g2m_genes = _find_marker_genes(adata, verbose=True)
+    cc_genes = s_genes + g2m_genes
+
+    if len(cc_genes) == 0:
+        print("  ERROR: No FlyBase cell cycle genes found in dataset.")
+        return None
+
+    print(f"\n  Testing {len(cc_genes)} cell cycle genes across "
+          f"{adata.obs[leiden_col].nunique()} clusters...")
+
+    # ── Log-normalise for scoring ─────────────────────────────────────────────
+    X_ln   = _get_lognorm_matrix(adata)
+    var_list = list(adata.var_names)
+    clusters = sorted(adata.obs[leiden_col].unique())
+
+    # ── Kruskal-Wallis per gene across clusters ───────────────────────────────
+    bonf_thr = 0.05 / len(cc_genes)
+    rows = []
+    for gene in cc_genes:
+        gene_idx = var_list.index(gene)
+        expr     = X_ln[:, gene_idx]
+        groups   = [expr[adata.obs[leiden_col].values == c] for c in clusters]
+        groups   = [g for g in groups if len(g) >= 3]
+        if len(groups) < 2:
+            continue
+        h, p = kruskal(*groups)
+        rows.append({
+            'gene':             gene,
+            'gene_symbol':      FBGN_TO_SYMBOL.get(gene, gene),
+            'gene_type':        'S' if gene in s_genes else 'G2M',
+            'KW_H':             h,
+            'KW_p':             p,
+            'bonf_significant': p < bonf_thr,
+            'mean_expr':        float(expr.mean()),
+            'pct_expressing':   float((expr > 0).mean() * 100),
+        })
+
+    stats_df = pd.DataFrame(rows).sort_values('KW_H', ascending=False)
+
+    n_sig = stats_df['bonf_significant'].sum()
+    print(f"\n  Bonferroni threshold: p < {bonf_thr:.2e}")
+    print(f"  Significant genes: {n_sig}/{len(stats_df)}")
+    print(f"\n  Top 10 most variable cell cycle genes across clusters:")
+    print(stats_df[['gene_symbol', 'gene_type', 'KW_H', 'KW_p',
+                     'bonf_significant']].head(10).to_string(index=False))
+
+    stats_df.to_csv(
+        os.path.join(output_dir, f'{sample_name}_cc_cluster_stats.csv'),
+        index=False)
+
+    # Use top significant genes for plots; fall back to top by H if none are sig
+    plot_genes_df = (stats_df[stats_df['bonf_significant']]
+                     if n_sig > 0 else stats_df.head(15))
+    plot_genes = list(plot_genes_df['gene'].values)
+    plot_symbols = list(plot_genes_df['gene_symbol'].values)
+
+    if not plot_genes:
+        print("  No genes to plot.")
+        return stats_df
+
+    # ── Dot plot: mean expression + % expressing per cluster ─────────────────
+    # sc.pl.dotplot needs gene names in adata.var_names
+    fig_title = (f"Cell cycle gene expression by cluster — {sample_name}\n"
+                 f"({n_sig} Bonferroni-significant of {len(stats_df)} tested, "
+                 f"ranked by Kruskal-Wallis H)")
+    try:
+        dp = sc.pl.dotplot(
+            adata,
+            var_names={
+                'S-phase': [g for g in plot_genes if g in s_genes],
+                'G2/M':    [g for g in plot_genes if g in g2m_genes],
+            },
+            groupby=leiden_col,
+            gene_symbols=None,           # var_names are already IDs
+            use_raw=False,
+            show=False,
+            return_fig=True,
+            title=fig_title,
+            var_group_rotation=0,
+        )
+        # Rename tick labels from FBgn IDs to symbols for readability
+        ax_main = dp.get_axes()['mainplot_ax']
+        ax_main.set_xticklabels(
+            [FBGN_TO_SYMBOL.get(t.get_text(), t.get_text())
+             for t in ax_main.get_xticklabels()],
+            rotation=45, ha='right', fontsize=8,
+        )
+        dp.savefig(os.path.join(output_dir,
+                                f'{sample_name}_cc_cluster_dotplot.pdf'),
+                   bbox_inches='tight', dpi=300)
+        plt.close()
+        print("  Dot plot saved.")
+    except Exception as e:
+        print(f"  WARNING: dot plot failed ({e}). Skipping.")
+
+    # ── Heatmap: mean Z-score per cluster for each CC gene ────────────────────
+    # Build cluster × gene mean-expression matrix
+    cluster_mean = pd.DataFrame(index=clusters, columns=plot_genes, dtype=float)
+    for gene in plot_genes:
+        gene_idx = var_list.index(gene)
+        expr     = X_ln[:, gene_idx]
+        for c in clusters:
+            mask = adata.obs[leiden_col].values == c
+            cluster_mean.loc[c, gene] = float(expr[mask].mean())
+
+    # Z-score across clusters (per gene)
+    cluster_mean_z = cluster_mean.apply(
+        lambda col: (col - col.mean()) / (col.std() + 1e-10), axis=0)
+    cluster_mean_z.columns = [FBGN_TO_SYMBOL.get(g, g) for g in plot_genes]
+
+    # Annotate column headers with gene type
+    col_colors = pd.Series(
+        ['#4ECDC4' if g in s_genes else '#45B7D1' for g in plot_genes],
+        index=cluster_mean_z.columns,
+    )
+
+    fig_w = max(8, len(plot_genes) * 0.55 + 2)
+    fig_h = max(4, len(clusters) * 0.5 + 2)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    sns.heatmap(cluster_mean_z, cmap='RdBu_r', center=0, vmin=-2, vmax=2,
+                annot=False, linewidths=0.4,
+                cbar_kws={'label': 'Z-score (across clusters)'}, ax=ax)
+    ax.set_xlabel('Cell cycle gene')
+    ax.set_ylabel(f'Leiden cluster ({leiden_col})')
+    ax.set_title(
+        f'Mean CC gene expression by cluster (Z-scored) — {sample_name}\n'
+        f'Blue ticks = S-phase  |  Teal ticks = G2/M')
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right', fontsize=8)
+
+    # Colour x-axis tick labels by gene type
+    for tick, gene in zip(ax.get_xticklabels(), plot_genes):
+        tick.set_color('#4ECDC4' if gene in s_genes else '#45B7D1')
+        if stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]:
+            tick.set_fontweight('bold')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir,
+                             f'{sample_name}_cc_cluster_heatmap.pdf'),
+                dpi=300, bbox_inches='tight')
+    plt.close()
+    print("  Cluster heatmap saved.")
+
+    # ── UMAP grid: top genes coloured by expression ───────────────────────────
+    if 'X_umap' in adata.obsm:
+        # All top genes in one grid
+        n_genes = len(plot_genes)
+        n_cols  = min(5, n_genes + 1)
+        n_rows  = int(np.ceil((n_genes + 1) / n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                  figsize=(5 * n_cols, 4.5 * n_rows))
+        axes = np.array(axes).flatten()
+
+        # First panel: cluster labels
+        sc.pl.umap(adata, color=leiden_col, ax=axes[0], show=False,
+                   title=f'Clusters ({leiden_col})', frameon=False,
+                   legend_loc='on data', legend_fontsize=8)
+
+        for i, (gene, symbol) in enumerate(zip(plot_genes, plot_symbols)):
+            ax  = axes[i + 1]
+            h   = stats_df.loc[stats_df['gene'] == gene, 'KW_H'].values[0]
+            sig = stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]
+            gtype = 'S' if gene in s_genes else 'G2M'
+            title = f'{symbol} ({gtype})\nH={h:.1f}{"*" if sig else ""}'
+            sc.pl.umap(adata, color=gene, ax=ax, show=False,
+                       title=title, cmap='viridis', frameon=False)
+
+        for ax in axes[n_genes + 1:]:
+            ax.set_visible(False)
+
+        fig.suptitle(
+            f'Cell cycle gene expression by cluster — {sample_name}\n'
+            f'* = Bonferroni-significant (p < {bonf_thr:.1e})  |  '
+            f'Ranked by Kruskal-Wallis H',
+            fontsize=11, y=1.01,
+        )
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir,
+                                 f'{sample_name}_cc_cluster_umap_grid.pdf'),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  UMAP grid saved ({n_genes} genes).")
+
+        # Individual per-gene UMAPs
+        umap_dir = os.path.join(output_dir, f'{sample_name}_umap_per_gene')
+        os.makedirs(umap_dir, exist_ok=True)
+
+        # Reference page: clusters + cyclum phase side by side
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        sc.pl.umap(adata, color=leiden_col, ax=axes[0], show=False,
+                   title=f'Leiden clusters ({leiden_col})', frameon=False,
+                   legend_loc='on data')
+        sc.pl.umap(adata, color='cyclum_stage', ax=axes[1], show=False,
+                   title='Cyclum phase', frameon=False,
+                   palette=PHASE_COLORS)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir,
+                                 f'{sample_name}_cc_cluster_umap_reference.pdf'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
-    # ── Save CSVs ──────────────────────────────────────────────────────────────
-    phase_means.to_csv(
-        os.path.join(output_dir, f'{sample_name}_validation_phase_means.csv'))
-    if not stats_df.empty:
-        stats_df.to_csv(
-            os.path.join(output_dir, f'{sample_name}_validation_stats.csv'),
-            index=False)
+        # One file per gene, named by gene symbol
+        for gene, symbol in zip(plot_genes, plot_symbols):
+            h     = stats_df.loc[stats_df['gene'] == gene, 'KW_H'].values[0]
+            p     = stats_df.loc[stats_df['gene'] == gene, 'KW_p'].values[0]
+            sig   = stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]
+            gtype = 'S-phase' if gene in s_genes else 'G2/M'
+            title = (f'{symbol}  [{gtype}]\n'
+                     f'KW H={h:.2f}, p={p:.2e}'
+                     f'{"  *Bonferroni-sig" if sig else ""}')
 
-    print(f"\n  Validation outputs saved to: {output_dir}")
+            fig, ax = plt.subplots(figsize=(7, 6))
+            sc.pl.umap(adata, color=gene, ax=ax, show=False,
+                       title=title, cmap='viridis', frameon=False)
+            plt.tight_layout()
+
+            safe_symbol = symbol.replace('/', '-').replace(' ', '_')
+            plt.savefig(os.path.join(umap_dir,
+                                     f'{sample_name}_umap_{safe_symbol}.pdf'),
+                        dpi=300, bbox_inches='tight')
+            plt.close()
+
+        print(f"  Individual gene UMAPs saved to: {umap_dir}/")
+
+    print(f"\n  Cell cycle cluster outputs saved to: {output_dir}")
     return stats_df
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 – LEIDEN CLUSTER ~ CYCLUM PHASE ASSOCIATION
+# SECTION 4 – LEIDEN CLUSTER ~ CYCLUM PHASE ASSOCIATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 def analyze_cluster_cellcycle_association(adata, output_dir, sample_name):
@@ -628,7 +866,7 @@ def analyze_cluster_cellcycle_association(adata, output_dir, sample_name):
     print(f"\n  Phase distribution by cluster (%):")
     print(contingency_pct.round(1).to_string())
 
-    # ── Kruskal-Wallis on continuous marker scores ────────────────────────────
+    # ── Kruskal-Wallis on continuous marker scores (only if present) ──────────
     kw_results = {}
     for score in ['S_score', 'G2M_score']:
         if score not in adata.obs.columns:
@@ -900,11 +1138,15 @@ def main():
     # ── STEP 2: Validate cyclum phases with marker gene expression ────────────
     validate_cyclum_phases(adata, args.output, args.sample)
 
-    # ── STEP 3: Leiden cluster ~ cyclum phase association ─────────────────────
+    # ── STEP 3: Which CC genes differ between clusters? ───────────────────────
+    cc_cluster_results = analyze_cc_genes_by_cluster(
+        adata, args.output, args.sample)
+
+    # ── STEP 4: Leiden cluster ~ cyclum phase association ─────────────────────
     cluster_results = analyze_cluster_cellcycle_association(
         adata, args.output, args.sample)
 
-    # ── STEP 4: Save h5ad ────────────────────────────────────────────────────
+    # ── STEP 5: Save h5ad ────────────────────────────────────────────────────
     if args.save_h5ad:
         out_h5ad = os.path.join(args.output, f'{args.sample}_cyclum_annotated.h5ad')
         adata.write_h5ad(out_h5ad)
@@ -925,7 +1167,18 @@ def main():
         pm = adata.obs.groupby('cyclum_stage')[['S_score', 'G2M_score']].mean()
         print(pm.reindex([p for p in PHASE_ORDER if p in pm.index]).round(4))
 
-    if cluster_results:
+    if cc_cluster_results is not None:
+        n_sig = cc_cluster_results['bonf_significant'].sum()
+        print(f"\nCell cycle genes significant across clusters: "
+              f"{n_sig}/{len(cc_cluster_results)}")
+        if n_sig > 0:
+            top = cc_cluster_results[cc_cluster_results['bonf_significant']].head(5)
+            print("  Top genes:")
+            for _, r in top.iterrows():
+                print(f"    {r['gene_symbol']} ({r['gene_type']})  "
+                      f"H={r['KW_H']:.2f}, p={r['KW_p']:.2e}")
+
+
         print(f"\nCluster ~ cyclum phase:")
         print(f"  chi2={cluster_results['chi2']:.2f}, "
               f"p={cluster_results['p_value']:.2e}, "
