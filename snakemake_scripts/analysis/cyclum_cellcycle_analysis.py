@@ -1057,6 +1057,12 @@ def main():
                         help='Cyclum training epochs (default: 800)')
     parser.add_argument('--rate',        type=float, default=2e-4,
                         help='Cyclum learning rate (default: 2e-4)')
+    parser.add_argument('--n-top-genes',  type=int, default=5,
+                        help='Top DE genes per phase saved to CSV / shown in '
+                             'heatmap (default: 5)')
+    parser.add_argument('--n-umap-genes', type=int, default=6,
+                        help='Top DE genes per phase shown in UMAP grid '
+                             '(default: 6)')
     parser.add_argument('--skip-cyclum', action='store_true',
                         help='Skip cyclum training; use cyclum_stage already in h5ad')
     parser.add_argument('--save-h5ad',   action='store_true',
@@ -1136,7 +1142,9 @@ def main():
         plt.close()
 
     # ── STEP 2: Validate cyclum phases with marker gene expression ────────────
-    validate_cyclum_phases(adata, args.output, args.sample)
+    validate_cyclum_phases(adata, args.output, args.sample,
+                           n_top_genes=args.n_top_genes,
+                           n_umap_genes=args.n_umap_genes)
 
     # ── STEP 3: Which CC genes differ between clusters? ───────────────────────
     cc_cluster_results = analyze_cc_genes_by_cluster(
