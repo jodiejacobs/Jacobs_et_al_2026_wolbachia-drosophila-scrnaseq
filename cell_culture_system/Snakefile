@@ -733,9 +733,9 @@ rule cyclum_analysis_uninfected:
     output:
         annotated    = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated"),
         result       = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
-        umap_dir     = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_umap_per_gene"),
-        cc_stats     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cc_cluster_stats.csv",
-        de_genes     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_validation_de_genes.csv",
+        # umap_dir     = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_umap_per_gene"),
+        # cc_stats     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cc_cluster_stats.csv",
+        # de_genes     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_validation_de_genes.csv",
     params:
         script       = config["cyclum_analysis_script"],
         n_top_genes  = config.get("cyclum_n_top_genes", 5),
