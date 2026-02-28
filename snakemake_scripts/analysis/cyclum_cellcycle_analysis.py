@@ -34,78 +34,76 @@ import scipy.sparse
 # ── FlyBase cell cycle gene sets ──────────────────────────────────────────────
 FLYBASE_CELL_CYCLE_GENES = {
     # G0/G1 — markers of G1 arrest and cell cycle exit
-    'dap':            'FBgn0010523',   # dacapo: p21/p27 homolog, inhibits CycE/Cdk2
-    'fzr':            'FBgn0024338',   # fizzy-related: APC/C activator, degrades mitotic cyclins
+    'dap':            'FBgn0010316',   # dacapo: p21/p27 homolog, inhibits CycE/Cdk2
+    'fzr':            'FBgn0262699',   # fizzy-related: APC/C activator, degrades mitotic cyclins
     'Rbf':            'FBgn0015799',   # RBF: represses E2F-dependent S-phase genes in G1
-    'Rbf2':           'FBgn0028396',   # RBF2: related Rb family member
+    'Rbf2':           'FBgn0038390',   # RBF2: related Rb family member
     # S phase — high expression marks active DNA replication
     'Pcna':           'FBgn0005655',
-    'RPA1':           'FBgn0015806',
-    'RPA2':           'FBgn0034898',
-    'pol-alpha1':     'FBgn0011230',
-    'DNApol-alpha60': 'FBgn0015278',
+    'RPA1':           'FBgn0010173',
+    'RPA2':           'FBgn0288834',
+    'pol-alpha1':     'FBgn0259113',
     'DNApol-delta':   'FBgn0019624',
-    'RnrL':           'FBgn0020369',
-    'RnrS':           'FBgn0261933',
-    'Mcm2':           'FBgn0020651',
-    'Mcm3':           'FBgn0020652',
-    'Mcm5':           'FBgn0015929',
-    'Mcm6':           'FBgn0032435',
-    'Mcm7':           'FBgn0015308',
+    'RnrL':           'FBgn0011703',
+    'RnrS':           'FBgn0011704',
+    'Mcm2':           'FBgn0014861',
+    'Mcm3':           'FBgn0284442',
+    'Mcm5':           'FBgn0017577',
+    'Mcm6':           'FBgn0025815',
+    'Mcm7':           'FBgn0020633',
     'E2f1':           'FBgn0011766',   # high E2f1 drives S-phase entry
-    'E2f2':           'FBgn0262656',
+    'E2f2':           'FBgn0024371',
     'CycE':           'FBgn0010382',   # high CycE triggers G1→S; absence marks G1
-    'Cdk2':           'FBgn0010314',
-    'Dp':             'FBgn0000499',
-    'Orc1':           'FBgn0015270',
-    'Orc2':           'FBgn0015714',
-    'Orc6':           'FBgn0025926',
-    'Rrp1':           'FBgn0003257',
+    'Cdk2':           'FBgn0004107',
+    'Dp':             'FBgn0011763',
+    'Orc1':           'FBgn0286788',
+    'Orc2':           'FBgn0015270',
+    'Orc6':           'FBgn0023180',
+    'Rrp1':           'FBgn0004584',
     # G2/M
-    'CycA':           'FBgn0010114',
-    'CycB':           'FBgn0010113',
-    'CycB3':          'FBgn0011577',
-    'Cdk1':           'FBgn0004107',
+    'CycA':           'FBgn0000404',
+    'CycB':           'FBgn0000405',
+    'CycB3':          'FBgn0015625',
+    'Cdk1':           'FBgn0004106',
     'stg':            'FBgn0003525',
     'polo':           'FBgn0003124',
-    'aurA':           'FBgn0025564',
-    'aurB':           'FBgn0025948',
-    'Nek2':           'FBgn0027548',
-    'Pbl':            'FBgn0005619',
-    'Wee1':           'FBgn0011739',
-    'myt':            'FBgn0002863',
-    'BubR1':          'FBgn0024822',
-    'Mad2':           'FBgn0002610',
-    'Cdc20':          'FBgn0010309',
-    'APC2':           'FBgn0261823',
-    'APC10':          'FBgn0036449',
+    'aurA':           'FBgn0000147',
+    'aurB':           'FBgn0024227',
+    'Nek2':           'FBgn0029970',
+    'Pbl':            'FBgn0003041',
+    'Wee1':           'FBgn0011737',
+    'myt':            'FBgn0040298',
+    'BubR1':          'FBgn0263855',
+    'Mad2':           'FBgn0035640',
+    'Cdc20':          'FBgn0001086',
+    'APC10':          'FBgn0034231'
 }
 
 # G0/G1: high expression marks G1 arrest / cell cycle exit
 G0G1_GENES_FBGN = [
-    'FBgn0010523',   # dap
-    'FBgn0024338',   # fzr
-    'FBgn0015799',   # Rbf
-    'FBgn0028396',   # Rbf2
+    # G0/G1 — markers of G1 arrest and cell cycle exit
+    'FBgn0010316',   # dacapo: p21/p27 homolog, inhibits CycE/Cdk2
+    'FBgn0262699',   # fizzy-related: APC/C activator, degrades mitotic cyclins
+    'FBgn0015799',   # RBF: represses E2F-dependent S-phase genes in G1
+    'FBgn0038390',   # RBF2: related Rb family member
 ]
 
 # S phase: high expression marks active DNA replication
 S_GENES_FBGN = [
-    'FBgn0005655', 'FBgn0015806', 'FBgn0034898', 'FBgn0011230',
-    'FBgn0015278', 'FBgn0019624', 'FBgn0020369', 'FBgn0261933',
-    'FBgn0020651', 'FBgn0020652', 'FBgn0015929', 'FBgn0032435',
-    'FBgn0015308', 'FBgn0011766', 'FBgn0262656', 'FBgn0010382',
-    'FBgn0010314', 'FBgn0000499', 'FBgn0015270', 'FBgn0015714',
-    'FBgn0025926', 'FBgn0003257',
-]
+    'FBgn0005655', 'FBgn0010173', 'FBgn0288834', 'FBgn0259113',
+    'FBgn0019624', 'FBgn0011703', 'FBgn0011704', 'FBgn0014861',
+    'FBgn0284442', 'FBgn0017577', 'FBgn0025815', 'FBgn0020633', 
+    'FBgn0011766', 'FBgn0024371', 'FBgn0010382', 'FBgn0004107', 
+    'FBgn0011763', 'FBgn0286788', 'FBgn0015270', 'FBgn0023180', 
+    'FBgn0004584'
+    ]
 
 # G2/M: high expression marks mitotic entry and progression
 G2M_GENES_FBGN = [
-    'FBgn0010114', 'FBgn0010113', 'FBgn0011577', 'FBgn0004107',
-    'FBgn0003525', 'FBgn0003124', 'FBgn0025564', 'FBgn0025948',
-    'FBgn0027548', 'FBgn0005619', 'FBgn0011739', 'FBgn0002863',
-    'FBgn0024822', 'FBgn0002610', 'FBgn0010309', 'FBgn0261823',
-    'FBgn0036449',
+    'FBgn0000404', 'FBgn0000405', 'FBgn0015625', 'FBgn0004106',
+    'FBgn0003525', 'FBgn0003124', 'FBgn0000147', 'FBgn0024227',
+    'FBgn0029970', 'FBgn0003041', 'FBgn0011737', 'FBgn0040298', 
+    'FBgn0263855', 'FBgn0035640', 'FBgn0001086', 'FBgn0034231'
 ]
 
 # All CC genes in display order: G0/G1 → S → G2M
