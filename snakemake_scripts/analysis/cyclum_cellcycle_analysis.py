@@ -32,40 +32,53 @@ from itertools import combinations
 import scipy.sparse
 
 # ── FlyBase cell cycle gene sets ──────────────────────────────────────────────
+#
+# Four-phase classification based on observed expression peaks in Drosophila
+# scRNA-seq and known biology:
+#
+#   G0/G1  — arrest/exit markers; high when cells are quiescent or in G1
+#   G1/S   — replication licensing factors transcribed in late G1 in
+#             preparation for S phase; mRNA peaks BEFORE replication begins
+#   S      — active replisome components and E2F targets expressed during
+#             ongoing DNA synthesis; peak coincides with replication fork
+#   G2/M   — mitotic entry and progression; peak at G2/M boundary
+#
+# FlyBase IDs verified against FlyBase r6 (2024).
 FLYBASE_CELL_CYCLE_GENES = {
-    # G0/G1 — markers of G1 arrest and cell cycle exit
-    'dap':            'FBgn0010316',   # dacapo: p21/p27 homolog, inhibits CycE/Cdk2
-    'fzr':            'FBgn0262699',   # fizzy-related: APC/C activator, degrades mitotic cyclins
-    'Rbf':            'FBgn0015799',   # RBF: represses E2F-dependent S-phase genes in G1
-    'Rbf2':           'FBgn0038390',   # RBF2: related Rb family member
-    # S phase — high expression marks active DNA replication
-    'Pcna':           'FBgn0005655',
-    'RPA1':           'FBgn0010173',
-    'RPA2':           'FBgn0288834',
-    'pol-alpha1':     'FBgn0259113',
-    'DNApol-delta':   'FBgn0019624',
-    'RnrL':           'FBgn0011703',
-    'RnrS':           'FBgn0011704',
+    # G0/G1 — quiescence and G1 arrest
+    'dap':            'FBgn0010316',   # p21/p27 homolog; inhibits CycE/Cdk2
+    'fzr':            'FBgn0262699',   # APC/C activator; degrades mitotic cyclins in G1
+    'Rbf':            'FBgn0015799',   # Rb homolog; represses E2F targets in G1
+    'Rbf2':           'FBgn0038390',   # Rb family member
+    # G1/S — replication licensing; loaded in late G1, mRNA peaks before fork firing
     'Mcm2':           'FBgn0014861',
     'Mcm3':           'FBgn0284442',
     'Mcm5':           'FBgn0017577',
-    'Mcm6':           'FBgn0025815',
     'Mcm7':           'FBgn0020633',
-    'E2f1':           'FBgn0011766',   # high E2f1 drives S-phase entry
-    'E2f2':           'FBgn0024371',
-    'CycE':           'FBgn0010382',   # high CycE triggers G1→S; absence marks G1
-    'Cdk2':           'FBgn0004107',
-    'Dp':             'FBgn0011763',
-    'Orc1':           'FBgn0286788',
+    'Orc1':           'FBgn0286788',   # origin recognition complex
     'Orc2':           'FBgn0015270',
     'Orc6':           'FBgn0023180',
+    'RPA1':           'FBgn0010173',   # ssDNA binding; pre-S loading
+    'Pcna':           'FBgn0005655',   # sliding clamp; peaks in late G1
+    'DNApol-delta':   'FBgn0019624',   # loaded at origins in G1
+    'Dp':             'FBgn0011763',   # E2F partner; G1→S transcription factor
+    'E2f2':           'FBgn0024371',   # repressive E2F; active at G1→S boundary
+    'RnrS':           'FBgn0011704',   # ribonucleotide reductase small subunit
     'Rrp1':           'FBgn0004584',
-    # G2/M
+    # S phase — active replisome; peak during ongoing DNA synthesis
+    'E2f1':           'FBgn0011766',   # activating E2F; drives S-phase transcription
+    'CycE':           'FBgn0010382',   # CycE/Cdk2 triggers G1→S; peaks mid-S
+    'Cdk2':           'FBgn0004107',
+    'Mcm6':           'FBgn0025815',   # MCM subunit that peaks in S (not late G1)
+    'RnrL':           'FBgn0011703',   # large RnR subunit; peaks during replication
+    'RPA2':           'FBgn0288834',
+    'pol-alpha1':     'FBgn0259113',   # primase; active at replication forks
+    # G2/M — mitotic entry and progression
     'CycA':           'FBgn0000404',
     'CycB':           'FBgn0000405',
     'CycB3':          'FBgn0015625',
     'Cdk1':           'FBgn0004106',
-    'stg':            'FBgn0003525',
+    'stg':            'FBgn0003525',   # Cdc25; activates Cdk1
     'polo':           'FBgn0003124',
     'aurA':           'FBgn0000147',
     'aurB':           'FBgn0024227',
@@ -76,46 +89,81 @@ FLYBASE_CELL_CYCLE_GENES = {
     'BubR1':          'FBgn0263855',
     'Mad2':           'FBgn0035640',
     'Cdc20':          'FBgn0001086',
-    'APC10':          'FBgn0034231'
+    'APC10':          'FBgn0034231',
 }
 
-# G0/G1: high expression marks G1 arrest / cell cycle exit
+# G0/G1: quiescence / G1 arrest markers
 G0G1_GENES_FBGN = [
-    # G0/G1 — markers of G1 arrest and cell cycle exit
-    'FBgn0010316',   # dacapo: p21/p27 homolog, inhibits CycE/Cdk2
-    'FBgn0262699',   # fizzy-related: APC/C activator, degrades mitotic cyclins
-    'FBgn0015799',   # RBF: represses E2F-dependent S-phase genes in G1
-    'FBgn0038390',   # RBF2: related Rb family member
+    'FBgn0010316',   # dap
+    'FBgn0262699',   # fzr
+    'FBgn0015799',   # Rbf
+    'FBgn0038390',   # Rbf2
 ]
 
-# S phase: high expression marks active DNA replication
+# G1/S: replication licensing — transcribed in late G1, peak before fork firing
+G1S_GENES_FBGN = [
+    'FBgn0014861',   # Mcm2
+    'FBgn0284442',   # Mcm3
+    'FBgn0017577',   # Mcm5
+    'FBgn0020633',   # Mcm7
+    'FBgn0286788',   # Orc1
+    'FBgn0015270',   # Orc2
+    'FBgn0023180',   # Orc6
+    'FBgn0010173',   # RPA1
+    'FBgn0005655',   # Pcna
+    'FBgn0019624',   # DNApol-delta
+    'FBgn0011763',   # Dp
+    'FBgn0024371',   # E2f2
+    'FBgn0011704',   # RnrS
+    'FBgn0004584',   # Rrp1
+]
+
+# S phase: active replisome components; peak during ongoing DNA synthesis
 S_GENES_FBGN = [
-    'FBgn0005655', 'FBgn0010173', 'FBgn0288834', 'FBgn0259113',
-    'FBgn0019624', 'FBgn0011703', 'FBgn0011704', 'FBgn0014861',
-    'FBgn0284442', 'FBgn0017577', 'FBgn0025815', 'FBgn0020633', 
-    'FBgn0011766', 'FBgn0024371', 'FBgn0010382', 'FBgn0004107', 
-    'FBgn0011763', 'FBgn0286788', 'FBgn0015270', 'FBgn0023180', 
-    'FBgn0004584'
-    ]
-
-# G2/M: high expression marks mitotic entry and progression
-G2M_GENES_FBGN = [
-    'FBgn0000404', 'FBgn0000405', 'FBgn0015625', 'FBgn0004106',
-    'FBgn0003525', 'FBgn0003124', 'FBgn0000147', 'FBgn0024227',
-    'FBgn0029970', 'FBgn0003041', 'FBgn0011737', 'FBgn0040298', 
-    'FBgn0263855', 'FBgn0035640', 'FBgn0001086', 'FBgn0034231'
+    'FBgn0011766',   # E2f1
+    'FBgn0010382',   # CycE
+    'FBgn0004107',   # Cdk2
+    'FBgn0025815',   # Mcm6
+    'FBgn0011703',   # RnrL
+    'FBgn0288834',   # RPA2
+    'FBgn0259113',   # pol-alpha1
 ]
 
-# All CC genes in display order: G0/G1 → S → G2M
-ALL_CC_GENES_FBGN = G0G1_GENES_FBGN + S_GENES_FBGN + G2M_GENES_FBGN
+# G2/M: mitotic entry and progression
+G2M_GENES_FBGN = [
+    'FBgn0000404',   # CycA
+    'FBgn0000405',   # CycB
+    'FBgn0015625',   # CycB3
+    'FBgn0004106',   # Cdk1
+    'FBgn0003525',   # stg
+    'FBgn0003124',   # polo
+    'FBgn0000147',   # aurA
+    'FBgn0024227',   # aurB
+    'FBgn0029970',   # Nek2
+    'FBgn0003041',   # Pbl
+    'FBgn0011737',   # Wee1
+    'FBgn0040298',   # myt
+    'FBgn0263855',   # BubR1
+    'FBgn0035640',   # Mad2
+    'FBgn0001086',   # Cdc20
+    'FBgn0034231',   # APC10
+]
+
+# All CC genes in display order: G0/G1 → G1/S → S → G2/M
+ALL_CC_GENES_FBGN = G0G1_GENES_FBGN + G1S_GENES_FBGN + S_GENES_FBGN + G2M_GENES_FBGN
 
 FBGN_TO_SYMBOL = {v: k for k, v in FLYBASE_CELL_CYCLE_GENES.items()}
 
 PHASE_ORDER  = ['g0/g1', 's', 'g2/m']
 PHASE_COLORS = {'g0/g1': '#FF6B6B', 's': '#4ECDC4', 'g2/m': '#45B7D1'}
 
-# Gene type label and colour per gene list
-GENE_TYPE_COLORS = {'G0G1': '#FF6B6B', 'S': '#4ECDC4', 'G2M': '#45B7D1'}
+# Gene type labels and colours — four-phase classification
+GENE_TYPE_COLORS = {
+    'G0G1': '#FF6B6B',   # red    — quiescence / G1 arrest
+    'G1S':  '#FFA500',   # orange — late G1 / replication licensing
+    'S':    '#4ECDC4',   # teal   — active S phase
+    'G2M':  '#45B7D1',   # blue   — G2/M
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -135,9 +183,15 @@ def _get_leiden_col(adata):
 
 def _find_marker_genes(adata, verbose=True):
     """
-    Return lists of G0G1, S, and G2M marker gene IDs present in the dataset.
+    Return lists of G0G1, G1S, S, and G2M marker gene IDs present in dataset.
     Checks adata.raw first (full gene set), then adata.var_names (HVGs).
     Tries FBgn IDs first, then falls back to gene symbols.
+
+    Four-phase classification:
+      G0G1 — quiescence / G1 arrest markers
+      G1S  — replication licensing factors; transcribed in late G1
+      S    — active replisome components; peak during DNA synthesis
+      G2M  — mitotic entry and progression
     """
     var_names = (list(adata.raw.var_names)
                  if adata.raw is not None
@@ -145,15 +199,18 @@ def _find_marker_genes(adata, verbose=True):
     source = 'raw' if adata.raw is not None else 'X'
 
     g0g1_present = [g for g in G0G1_GENES_FBGN if g in var_names]
+    g1s_present  = [g for g in G1S_GENES_FBGN  if g in var_names]
     s_present    = [g for g in S_GENES_FBGN    if g in var_names]
     g2m_present  = [g for g in G2M_GENES_FBGN  if g in var_names]
 
     # Fall back to gene symbols if no FBgn IDs found
-    if not g0g1_present and not s_present and not g2m_present:
+    if not any([g0g1_present, g1s_present, s_present, g2m_present]):
         for sym, fbgn in FLYBASE_CELL_CYCLE_GENES.items():
             if sym in var_names:
                 if fbgn in G0G1_GENES_FBGN:
                     g0g1_present.append(sym)
+                elif fbgn in G1S_GENES_FBGN:
+                    g1s_present.append(sym)
                 elif fbgn in S_GENES_FBGN:
                     s_present.append(sym)
                 elif fbgn in G2M_GENES_FBGN:
@@ -162,9 +219,10 @@ def _find_marker_genes(adata, verbose=True):
     if verbose:
         print(f"  Searching in adata.{source} ({len(var_names)} genes)")
         for label, present, total in [
-            ("G0/G1 markers", g0g1_present, G0G1_GENES_FBGN),
-            ("S-phase markers", s_present,  S_GENES_FBGN),
-            ("G2/M markers",   g2m_present, G2M_GENES_FBGN),
+            ("G0/G1 markers",   g0g1_present, G0G1_GENES_FBGN),
+            ("G1/S markers",    g1s_present,  G1S_GENES_FBGN),
+            ("S-phase markers", s_present,    S_GENES_FBGN),
+            ("G2/M markers",    g2m_present,  G2M_GENES_FBGN),
         ]:
             print(f"  {label:<18}: {len(present)}/{len(total)}")
             if present:
@@ -172,7 +230,7 @@ def _find_marker_genes(adata, verbose=True):
                 print("    " + ", ".join(labels) +
                       (f"  (+{len(present)-10} more)" if len(present) > 10 else ""))
 
-    return g0g1_present, s_present, g2m_present
+    return g0g1_present, g1s_present, s_present, g2m_present
 
 
 def _get_cc_expression(adata, cc_genes):
@@ -330,8 +388,8 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
     os.makedirs(output_dir, exist_ok=True)
 
     # ── Find and extract CC gene expression ──────────────────────────────────
-    g0g1_genes, s_genes, g2m_genes = _find_marker_genes(adata, verbose=True)
-    cc_genes  = g0g1_genes + s_genes + g2m_genes
+    g0g1_genes, g1s_genes, s_genes, g2m_genes = _find_marker_genes(adata, verbose=True)
+    cc_genes  = g0g1_genes + g1s_genes + s_genes + g2m_genes
 
     if not cc_genes:
         print("  ERROR: No FlyBase cell cycle genes found. "
@@ -345,7 +403,7 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
         return None
 
     symbols_found = [FBGN_TO_SYMBOL.get(g, g) for g in genes_found]
-    gene_type     = {g: ('G0G1' if g in g0g1_genes else 'S' if g in s_genes else 'G2M') for g in genes_found}
+    gene_type     = {g: ('G0G1' if g in g0g1_genes else 'G1S' if g in g1s_genes else 'S' if g in s_genes else 'G2M') for g in genes_found}
 
     # ── Mean expression per phase per gene ────────────────────────────────────
     phases = adata.obs['cyclum_stage'].values
@@ -376,7 +434,9 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
         best = row.idxmax()
         gtype = expr_df.loc[expr_df['gene_symbol'] == row.name,
                              'gene_type'].values[0]
-        expected = 's' if gtype == 'S' else 'g2/m'
+        expected = ('g0/g1' if gtype == 'G0G1' else
+                    'g0/g1' if gtype == 'G1S'  else   # G1S peaks in g0/g1 by design
+                    's'     if gtype == 'S'    else 'g2/m')
         flag = '✓' if best == expected else '✗'
         print(f"    {row.name:<20} {best}  {flag}  (expected {expected})")
 
@@ -401,9 +461,10 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
 
     # Group S genes above G2M genes
     g0g1_idx_local = [i for i, g in enumerate(genes_found) if g in g0g1_genes]
+    g1s_idx_local  = [i for i, g in enumerate(genes_found) if g in g1s_genes]
     s_idx_local    = [i for i, g in enumerate(genes_found) if g in s_genes]
     g2m_idx_local  = [i for i, g in enumerate(genes_found) if g in g2m_genes]
-    row_order      = g0g1_idx_local + s_idx_local + g2m_idx_local
+    row_order      = g0g1_idx_local + g1s_idx_local + s_idx_local + g2m_idx_local
     X_z_ordered   = X_z[row_order, :]
     labels_ordered = [symbols_found[i] for i in row_order]
     types_ordered  = [gene_type[genes_found[i]] for i in row_order]
@@ -417,11 +478,13 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
     for ytick, gtype in zip(ax.get_yticklabels(), types_ordered):
         ytick.set_color(GENE_TYPE_COLORS.get(gtype, 'black'))
         ytick.set_fontweight('bold')
+        ytick.set_fontsize(9)
 
     # Dividing lines between gene type blocks
     n_g0g1 = len(g0g1_idx_local)
+    n_g1s  = len(g1s_idx_local)
     n_s    = len(s_idx_local)
-    for boundary in [n_g0g1, n_g0g1 + n_s]:
+    for boundary in [n_g0g1, n_g0g1 + n_g1s, n_g0g1 + n_g1s + n_s]:
         if 0 < boundary < len(genes_found):
             ax.axhline(boundary, color='black', linewidth=1.5, linestyle='--')
 
@@ -429,7 +492,7 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
     ax.set_ylabel('FlyBase cell cycle genes')
     ax.set_title(
         f'Cell cycle gene expression by cyclum phase — {sample_name}\n'
-        f'Red = G0/G1  |  Teal = S-phase  |  Blue = G2/M  |  '
+        f'Red = G0/G1  |  Orange = G1/S  |  Teal = S  |  Blue = G2/M  |  '
         f'(from adata.{source})')
 
     # Phase colour strip
@@ -440,9 +503,9 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
     ax2 = ax.inset_axes([0, -0.03, 1, 0.02])
     ax2.imshow(phase_strip, aspect='auto')
     ax2.axis('off')
-    from matplotlib.patches import Patch
+    from matplotlib.patches import Patch as _Patch
     ax2.legend(
-        handles=[Patch(facecolor=c, label=p) for p, c in PHASE_COLORS.items()],
+        handles=[_Patch(facecolor=c, label=p) for p, c in PHASE_COLORS.items()],
         loc='lower right', bbox_to_anchor=(1, -2), ncol=3,
         fontsize=8, frameon=True, title='Cyclum phase',
     )
@@ -533,7 +596,7 @@ def validate_cyclum_phases(adata, output_dir, sample_name,
         color_key = _umap_color_key(gene)
         fig, ax   = plt.subplots(figsize=(7, 6))
         sc.pl.umap(adata, color=color_key, ax=ax, show=False,
-                   title=f'{symbol}  [{gtype}-phase marker]\n'
+                   title=f'{symbol}  [{gtype} marker]\n'
                          f'(adata.{source})',
                    cmap='viridis', frameon=False)
         plt.tight_layout()
@@ -593,7 +656,7 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
     sc.settings.figdir = output_dir
 
     # ── Find CC genes and extract expression ──────────────────────────────────
-    g0g1_genes, s_genes, g2m_genes = _find_marker_genes(adata, verbose=True)
+    g0g1_genes, g1s_genes, s_genes, g2m_genes = _find_marker_genes(adata, verbose=True)
     cc_genes = s_genes + g2m_genes
 
     if not cc_genes:
@@ -606,8 +669,10 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
         print("  ERROR: Could not extract CC gene expression.")
         return None
 
-    s_genes   = [g for g in genes_found if g in s_genes]
-    g2m_genes = [g for g in genes_found if g in g2m_genes]
+    g0g1_genes = [g for g in genes_found if g in g0g1_genes]
+    g1s_genes  = [g for g in genes_found if g in g1s_genes]
+    s_genes    = [g for g in genes_found if g in s_genes]
+    g2m_genes  = [g for g in genes_found if g in g2m_genes]
 
     print(f"\n  Testing {len(genes_found)} cell cycle genes "
           f"(from adata.{source}) across "
@@ -628,7 +693,7 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
         rows.append({
             'gene':             gene,
             'gene_symbol':      FBGN_TO_SYMBOL.get(gene, gene),
-            'gene_type':        'G0G1' if gene in g0g1_genes else 'S' if gene in s_genes else 'G2M',
+            'gene_type':        ('G0G1' if gene in g0g1_genes else 'G1S' if gene in g1s_genes else 'S' if gene in s_genes else 'G2M'),
             'KW_H':             h,
             'KW_p':             p,
             'bonf_significant': p < bonf_thr,
@@ -675,14 +740,15 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
                  f"ranked by Kruskal-Wallis H)")
     # dotplot only works with var_names keys; skip genes only in obs
     dp_g0g1_genes = [g for g in plot_genes if g in g0g1_genes and g in genes_in_var]
+    dp_g1s_genes  = [g for g in plot_genes if g in g1s_genes  and g in genes_in_var]
     dp_s_genes    = [g for g in plot_genes if g in s_genes    and g in genes_in_var]
     dp_g2m_genes  = [g for g in plot_genes if g in g2m_genes  and g in genes_in_var]
-    if dp_g0g1_genes or dp_s_genes or dp_g2m_genes:
+    if dp_g0g1_genes or dp_g1s_genes or dp_s_genes or dp_g2m_genes:
         try:
             dp = sc.pl.dotplot(
                 adata,
                 var_names={k: v for k, v in
-                           [('G0/G1', dp_g0g1_genes), ('S-phase', dp_s_genes), ('G2/M', dp_g2m_genes)] if v},
+                           [('G0/G1', dp_g0g1_genes), ('G1/S', dp_g1s_genes), ('S-phase', dp_s_genes), ('G2/M', dp_g2m_genes)] if v},
                 groupby=leiden_col,
                 use_raw=False,
                 show=False,
@@ -707,9 +773,9 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
         print("  Skipping dot plot (all CC genes sourced from .raw, "
               "not in adata.var_names).")
 
-    # ── Heatmap: mean Z-score per cluster for each CC gene ────────────────────
+    # ── Clustermap: mean Z-score per cluster × CC gene, with dendrograms ────
     # Build cluster × gene mean-expression matrix from X_cc
-    gene_to_idx = {g: i for i, g in enumerate(genes_found)}
+    gene_to_idx  = {g: i for i, g in enumerate(genes_found)}
     cluster_mean = pd.DataFrame(index=clusters, columns=plot_genes, dtype=float)
     for gene in plot_genes:
         expr = X_cc[:, gene_to_idx[gene]]
@@ -717,44 +783,88 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
             mask = leiden_vals == c
             cluster_mean.loc[c, gene] = float(expr[mask].mean())
 
-    # Z-score across clusters (per gene)
+    # Z-score per gene across clusters
     cluster_mean_z = cluster_mean.apply(
         lambda col: (col - col.mean()) / (col.std() + 1e-10), axis=0)
     cluster_mean_z.columns = [FBGN_TO_SYMBOL.get(g, g) for g in plot_genes]
 
-    # Annotate column headers with gene type
+    # Gene type colour strip (columns)
+    symbol_to_gene = {FBGN_TO_SYMBOL.get(g, g): g for g in plot_genes}
     col_colors = pd.Series(
-        [GENE_TYPE_COLORS['G0G1'] if g in g0g1_genes
-          else GENE_TYPE_COLORS['S'] if g in s_genes
-          else GENE_TYPE_COLORS['G2M'] for g in plot_genes],
-        index=cluster_mean_z.columns,
+        {sym: (GENE_TYPE_COLORS['G0G1'] if symbol_to_gene[sym] in g0g1_genes
+               else GENE_TYPE_COLORS['G1S'] if symbol_to_gene[sym] in g1s_genes
+               else GENE_TYPE_COLORS['S']   if symbol_to_gene[sym] in s_genes
+               else GENE_TYPE_COLORS['G2M'])
+         for sym in cluster_mean_z.columns},
+        name='Gene type',
     )
 
-    fig_w = max(8, len(plot_genes) * 0.55 + 2)
-    fig_h = max(4, len(clusters) * 0.5 + 2)
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    sns.heatmap(cluster_mean_z, cmap='RdBu_r', center=0, vmin=-2, vmax=2,
-                annot=False, linewidths=0.4,
-                cbar_kws={'label': 'Z-score (across clusters)'}, ax=ax)
-    ax.set_xlabel('Cell cycle gene')
-    ax.set_ylabel(f'Leiden cluster ({leiden_col})')
-    ax.set_title(
-        f'Mean CC gene expression by cluster (Z-scored) — {sample_name}\n'
-        f'Blue ticks = S-phase  |  Teal ticks = G2/M')
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right', fontsize=8)
+    fig_w = max(9,  len(plot_genes)  * 0.55 + 3)
+    fig_h = max(5,  len(clusters)    * 0.5  + 3)
 
-    # Colour x-axis tick labels by gene type
-    for tick, gene in zip(ax.get_xticklabels(), plot_genes):
-        tick.set_color('#4ECDC4' if gene in s_genes else '#45B7D1')
+    g = sns.clustermap(
+        cluster_mean_z,
+        method='ward',
+        metric='euclidean',
+        row_cluster=True,      # cluster Leiden clusters by CC gene profile
+        col_cluster=True,      # cluster genes by expression across clusters
+        col_colors=col_colors,
+        cmap='RdBu_r',
+        center=0, vmin=-2, vmax=2,
+        linewidths=0.3,
+        figsize=(fig_w, fig_h),
+        cbar_pos=(1.02, 0.3, 0.03, 0.35),
+        cbar_kws={'label': 'Z-score (across clusters)'},
+        dendrogram_ratio=(0.12, 0.12),
+        colors_ratio=0.03,
+    )
+
+    ax = g.ax_heatmap
+    reordered_genes = list(cluster_mean_z.columns[g.dendrogram_col.reordered_ind])
+
+    # Colour x-tick (gene) labels by type; bold = Bonferroni-significant
+    for xtick, sym in zip(ax.get_xticklabels(), reordered_genes):
+        gene = symbol_to_gene[sym]
+        xtick.set_color(
+            GENE_TYPE_COLORS['G0G1'] if gene in g0g1_genes
+            else GENE_TYPE_COLORS['S'] if gene in s_genes
+            else GENE_TYPE_COLORS['G2M']
+        )
         if stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]:
-            tick.set_fontweight('bold')
+            xtick.set_fontweight('bold')
+        xtick.set_fontsize(8)
+        xtick.set_rotation(45)
+        xtick.set_ha('right')
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir,
-                             f'{sample_name}_cc_cluster_heatmap.pdf'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-    print("  Cluster heatmap saved.")
+    ax.set_xlabel('Cell cycle gene', fontsize=10)
+    ax.set_ylabel(f'Leiden cluster ({leiden_col})', fontsize=10)
+    g.fig.suptitle(
+        f'CC gene expression by cluster (Z-scored) — {sample_name}\n'
+        f'Rows = Leiden clusters  |  Cols = CC genes  |  '
+        f'Bold = Bonferroni-sig  |  Ward linkage',
+        fontsize=9, y=1.01,
+    )
+
+    # Gene type legend
+    from matplotlib.patches import Patch
+    legend_patches = [Patch(color=c, label=l) for l, c in [
+        ('G0/G1',   GENE_TYPE_COLORS['G0G1']),
+        ('G1/S',    GENE_TYPE_COLORS['G1S']),
+        ('S-phase', GENE_TYPE_COLORS['S']),
+        ('G2/M',    GENE_TYPE_COLORS['G2M']),
+    ]]
+    g.ax_heatmap.legend(
+        handles=legend_patches, title='Gene type',
+        loc='upper left', bbox_to_anchor=(1.18, 1.02),
+        fontsize=8, frameon=True,
+    )
+
+    g.fig.savefig(os.path.join(output_dir,
+                               f'{sample_name}_cc_cluster_heatmap.pdf'),
+                  dpi=300, bbox_inches='tight')
+    plt.close(g.fig)
+    print("  Cluster clustermap (with dendrograms) saved.")
+
 
     # ── UMAP grid: top genes coloured by expression ───────────────────────────
     if 'X_umap' in adata.obsm:
@@ -774,7 +884,8 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
             ax    = axes[i + 1]
             h     = stats_df.loc[stats_df['gene'] == gene, 'KW_H'].values[0]
             sig   = stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]
-            gtype = 'G0G1' if gene in g0g1_genes else 'S' if gene in s_genes else 'G2M'
+            gtype = ('G0G1' if gene in g0g1_genes else 'G1S' if gene in g1s_genes
+                     else 'S' if gene in s_genes else 'G2M')
             title = f'{symbol} ({gtype})\nH={h:.1f}{"*" if sig else ""}'
             sc.pl.umap(adata, color=_plot_key(gene), ax=ax, show=False,
                        title=title, cmap='viridis', frameon=False)
@@ -815,7 +926,8 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
             h     = stats_df.loc[stats_df['gene'] == gene, 'KW_H'].values[0]
             p     = stats_df.loc[stats_df['gene'] == gene, 'KW_p'].values[0]
             sig   = stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]
-            gtype = 'G0/G1' if gene in g0g1_genes else 'S-phase' if gene in s_genes else 'G2/M'
+            gtype = ('G0/G1' if gene in g0g1_genes else 'G1/S' if gene in g1s_genes
+                     else 'S-phase' if gene in s_genes else 'G2/M')
             title = (f'{symbol}  [{gtype}]\n'
                      f'KW H={h:.2f}, p={p:.2e}'
                      f'{"  *Bonferroni-sig" if sig else ""}')
