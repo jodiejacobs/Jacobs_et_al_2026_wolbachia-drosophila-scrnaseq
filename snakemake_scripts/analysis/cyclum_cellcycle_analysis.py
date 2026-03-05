@@ -773,23 +773,155 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
         print("  Skipping dot plot (all CC genes sourced from .raw, "
               "not in adata.var_names).")
 
-    # ── Clustermap: mean Z-score per cluster × CC gene, with dendrograms ────
-    # Build cluster × gene mean-expression matrix from X_cc
-    gene_to_idx  = {g: i for i, g in enumerate(genes_found)}
-    cluster_mean = pd.DataFrame(index=clusters, columns=plot_genes, dtype=float)
-    for gene in plot_genes:
+    # ── Clustermap: mean expression per cluster × CC gene ────────────────────
+    # Design choices:
+    #   - ALL CC genes shown (not just Bonferroni-sig), ordered G0G1→G1S→S→G2M
+    #   - Raw mean log-normalised expression (not Z-scored) so colour reflects
+    #     actual expression levels, not just rank within gene
+    #   - Columns fixed in biological order; rows (clusters) dendrogrammed by
+    #     Ward linkage so similar-CC-profile clusters group together
+    #   - Dividing lines separate gene type blocks
+    #   - Asterisk on x-tick = Bonferroni-significant KW test
+
+    # Build full cluster × gene matrix (all CC genes, biological column order)
+    gene_to_idx = {g: i for i, g in enumerate(genes_found)}
+    col_order   = ([g for g in G0G1_GENES_FBGN + G1S_GENES_FBGN +
+                    S_GENES_FBGN + G2M_GENES_FBGN
+                    if g in genes_found])
+    col_symbols = [FBGN_TO_SYMBOL.get(g, g) for g in col_order]
+
+    cluster_mean = pd.DataFrame(index=clusters, columns=col_order, dtype=float)
+    for gene in col_order:
         expr = X_cc[:, gene_to_idx[gene]]
         for c in clusters:
-            mask = leiden_vals == c
-            cluster_mean.loc[c, gene] = float(expr[mask].mean())
+            cluster_mean.loc[c, gene] = float(expr[leiden_vals == c].mean())
 
-    # Z-score per gene across clusters
+    # Rename columns to gene symbols for display
+    cluster_mean.columns = col_symbols
+
+    # Row dendrogram only — cluster Leiden clusters by CC expression profile
+    from matplotlib.patches import Patch
+    fig_w = max(10, len(col_order) * 0.6 + 3)
+    fig_h = max(5,  len(clusters)  * 0.5 + 3)
+
+    g = sns.clustermap(
+        cluster_mean,
+        method='ward',
+        metric='euclidean',
+        row_cluster=True,       # cluster rows (Leiden clusters)
+        col_cluster=False,      # keep biological gene order fixed
+        cmap='viridis',         # sequential: shows absolute expression levels
+        linewidths=0.3,
+        figsize=(fig_w, fig_h),
+        cbar_pos=(1.02, 0.35, 0.025, 0.3),
+        cbar_kws={'label': 'Mean log-normalised expression'},
+        dendrogram_ratio=(0.15, 0.0),
+        yticklabels=True,
+        xticklabels=True,
+    )
+
+    ax = g.ax_heatmap
+
+    # X-tick labels: colour by gene type, bold + asterisk if Bonferroni-sig
+    sig_genes = set(stats_df.loc[stats_df['bonf_significant'], 'gene'].values)
+    for xtick, (sym, gene) in zip(ax.get_xticklabels(),
+                                   zip(col_symbols, col_order)):
+        gtype = ('G0G1' if gene in g0g1_genes else
+                 'G1S'  if gene in g1s_genes  else
+                 'S'    if gene in s_genes    else 'G2M')
+        xtick.set_color(GENE_TYPE_COLORS[gtype])
+        xtick.set_fontsize(8)
+        xtick.set_rotation(45)
+        xtick.set_ha('right')
+        if gene in sig_genes:
+            xtick.set_fontweight('bold')
+            xtick.set_text(sym + ' *')
+
+    # Vertical dividing lines between gene type blocks
+    boundaries = []
+    prev_type  = None
+    for i, gene in enumerate(col_order):
+        gtype = ('G0G1' if gene in g0g1_genes else
+                 'G1S'  if gene in g1s_genes  else
+                 'S'    if gene in s_genes    else 'G2M')
+        if prev_type is not None and gtype != prev_type:
+            boundaries.append(i)
+        prev_type = gtype
+    for b in boundaries:
+        ax.axvline(b, color='white', linewidth=2.5, linestyle='-')
+
+    # Gene type colour bar above x-axis
+    type_strip_data = np.array([[
+        matplotlib.colors.to_rgb(
+            GENE_TYPE_COLORS['G0G1'] if g in g0g1_genes else
+            GENE_TYPE_COLORS['G1S']  if g in g1s_genes  else
+            GENE_TYPE_COLORS['S']    if g in s_genes    else
+            GENE_TYPE_COLORS['G2M']
+        ) for g in col_order
+    ]])
+    ax_strip = ax.inset_axes([0, 1.0, 1, 0.03])
+    ax_strip.imshow(type_strip_data, aspect='auto', interpolation='none')
+    ax_strip.set_axis_off()
+
+    # Gene type block labels above strip
+    block_starts = [0] + boundaries
+    block_ends   = boundaries + [len(col_order)]
+    block_labels = []
+    for gene in [col_order[s] for s in block_starts]:
+        block_labels.append(
+            'G0/G1' if gene in g0g1_genes else
+            'G1/S'  if gene in g1s_genes  else
+            'S'     if gene in s_genes    else 'G2M'
+        )
+    ax_label = ax.inset_axes([0, 1.04, 1, 0.04])
+    ax_label.set_xlim(0, len(col_order))
+    ax_label.set_axis_off()
+    for label, start, end in zip(block_labels, block_starts, block_ends):
+        mid = (start + end) / 2
+        gtype_key = ('G0G1' if label == 'G0/G1' else
+                     'G1S'  if label == 'G1/S'  else
+                     'S'    if label == 'S'      else 'G2M')
+        ax_label.text(mid, 0.1, label, ha='center', va='bottom',
+                      fontsize=9, fontweight='bold',
+                      color=GENE_TYPE_COLORS[gtype_key])
+
+    ax.set_xlabel('')
+    ax.set_ylabel(f'Leiden cluster ({leiden_col})', fontsize=10)
+
+    g.fig.suptitle(
+        f'CC gene expression by cluster — {sample_name}\n'
+        f'Mean log-normalised expression  |  '
+        f'Clusters dendrogrammed by Ward linkage  |  * = Bonferroni-sig',
+        fontsize=9, y=1.06,
+    )
+
+    # Legend
+    legend_patches = [Patch(color=c, label=l) for l, c in [
+        ('G0/G1',   GENE_TYPE_COLORS['G0G1']),
+        ('G1/S',    GENE_TYPE_COLORS['G1S']),
+        ('S-phase', GENE_TYPE_COLORS['S']),
+        ('G2/M',    GENE_TYPE_COLORS['G2M']),
+    ]]
+    g.ax_heatmap.legend(
+        handles=legend_patches, title='Gene type',
+        loc='upper left', bbox_to_anchor=(1.08, 1.0),
+        fontsize=8, frameon=True,
+    )
+
+    g.fig.savefig(os.path.join(output_dir,
+                               f'{sample_name}_cc_cluster_heatmap.pdf'),
+                  dpi=300, bbox_inches='tight')
+    plt.close(g.fig)
+    print("  Cluster heatmap saved (fixed column order).")
+
+    # ── Second heatmap: fully clustered rows AND cols, Z-scored ──────────────
+    # Z-scoring per gene removes absolute expression differences so the
+    # dendrogram reflects which genes co-vary across clusters — useful for
+    # seeing whether G2M genes all behave as a bloc vs. sub-groups.
     cluster_mean_z = cluster_mean.apply(
         lambda col: (col - col.mean()) / (col.std() + 1e-10), axis=0)
-    cluster_mean_z.columns = [FBGN_TO_SYMBOL.get(g, g) for g in plot_genes]
 
-    # Gene type colour strip (columns)
-    symbol_to_gene = {FBGN_TO_SYMBOL.get(g, g): g for g in plot_genes}
+    symbol_to_gene = {FBGN_TO_SYMBOL.get(g, g): g for g in col_order}
     col_colors = pd.Series(
         {sym: (GENE_TYPE_COLORS['G0G1'] if symbol_to_gene[sym] in g0g1_genes
                else GENE_TYPE_COLORS['G1S'] if symbol_to_gene[sym] in g1s_genes
@@ -799,71 +931,63 @@ def analyze_cc_genes_by_cluster(adata, output_dir, sample_name):
         name='Gene type',
     )
 
-    fig_w = max(9,  len(plot_genes)  * 0.55 + 3)
-    fig_h = max(5,  len(clusters)    * 0.5  + 3)
-
-    g = sns.clustermap(
+    g2 = sns.clustermap(
         cluster_mean_z,
         method='ward',
         metric='euclidean',
-        row_cluster=True,      # cluster Leiden clusters by CC gene profile
-        col_cluster=True,      # cluster genes by expression across clusters
+        row_cluster=True,
+        col_cluster=True,
         col_colors=col_colors,
         cmap='RdBu_r',
         center=0, vmin=-2, vmax=2,
         linewidths=0.3,
         figsize=(fig_w, fig_h),
-        cbar_pos=(1.02, 0.3, 0.03, 0.35),
+        cbar_pos=(1.02, 0.35, 0.025, 0.3),
         cbar_kws={'label': 'Z-score (across clusters)'},
-        dendrogram_ratio=(0.12, 0.12),
+        dendrogram_ratio=(0.15, 0.12),
         colors_ratio=0.03,
+        yticklabels=True,
+        xticklabels=True,
     )
 
-    ax = g.ax_heatmap
-    reordered_genes = list(cluster_mean_z.columns[g.dendrogram_col.reordered_ind])
-
-    # Colour x-tick (gene) labels by type; bold = Bonferroni-significant
-    for xtick, sym in zip(ax.get_xticklabels(), reordered_genes):
-        gene = symbol_to_gene[sym]
-        xtick.set_color(
-            GENE_TYPE_COLORS['G0G1'] if gene in g0g1_genes
-            else GENE_TYPE_COLORS['S'] if gene in s_genes
-            else GENE_TYPE_COLORS['G2M']
-        )
-        if stats_df.loc[stats_df['gene'] == gene, 'bonf_significant'].values[0]:
-            xtick.set_fontweight('bold')
+    ax2 = g2.ax_heatmap
+    reordered_genes = [col_order[i] for i in g2.dendrogram_col.reordered_ind]
+    for xtick, gene in zip(ax2.get_xticklabels(), reordered_genes):
+        sym   = FBGN_TO_SYMBOL.get(gene, gene)
+        gtype = ('G0G1' if gene in g0g1_genes else
+                 'G1S'  if gene in g1s_genes  else
+                 'S'    if gene in s_genes    else 'G2M')
+        xtick.set_color(GENE_TYPE_COLORS[gtype])
         xtick.set_fontsize(8)
         xtick.set_rotation(45)
         xtick.set_ha('right')
+        if gene in sig_genes:
+            xtick.set_fontweight('bold')
+            xtick.set_text(sym + ' *')
 
-    ax.set_xlabel('Cell cycle gene', fontsize=10)
-    ax.set_ylabel(f'Leiden cluster ({leiden_col})', fontsize=10)
-    g.fig.suptitle(
-        f'CC gene expression by cluster (Z-scored) — {sample_name}\n'
-        f'Rows = Leiden clusters  |  Cols = CC genes  |  '
-        f'Bold = Bonferroni-sig  |  Ward linkage',
-        fontsize=9, y=1.01,
+    ax2.set_xlabel('')
+    ax2.set_ylabel(f'Leiden cluster ({leiden_col})', fontsize=10)
+    g2.fig.suptitle(
+        f'CC gene expression by cluster (Z-scored, fully clustered) — {sample_name}\n'
+        f'Both rows and cols dendrogrammed  |  * = Bonferroni-sig  |  Ward linkage',
+        fontsize=9, y=1.04,
     )
-
-    # Gene type legend
-    from matplotlib.patches import Patch
-    legend_patches = [Patch(color=c, label=l) for l, c in [
+    legend_patches2 = [Patch(color=c, label=l) for l, c in [
         ('G0/G1',   GENE_TYPE_COLORS['G0G1']),
         ('G1/S',    GENE_TYPE_COLORS['G1S']),
         ('S-phase', GENE_TYPE_COLORS['S']),
         ('G2/M',    GENE_TYPE_COLORS['G2M']),
     ]]
-    g.ax_heatmap.legend(
-        handles=legend_patches, title='Gene type',
-        loc='upper left', bbox_to_anchor=(1.18, 1.02),
+    g2.ax_heatmap.legend(
+        handles=legend_patches2, title='Gene type',
+        loc='upper left', bbox_to_anchor=(1.08, 1.0),
         fontsize=8, frameon=True,
     )
-
-    g.fig.savefig(os.path.join(output_dir,
-                               f'{sample_name}_cc_cluster_heatmap.pdf'),
-                  dpi=300, bbox_inches='tight')
-    plt.close(g.fig)
-    print("  Cluster clustermap (with dendrograms) saved.")
+    g2.fig.savefig(os.path.join(output_dir,
+                                f'{sample_name}_cc_cluster_heatmap_clustered.pdf'),
+                   dpi=300, bbox_inches='tight')
+    plt.close(g2.fig)
+    print("  Cluster heatmap saved (fully clustered, Z-scored).")
 
 
     # ── UMAP grid: top genes coloured by expression ───────────────────────────

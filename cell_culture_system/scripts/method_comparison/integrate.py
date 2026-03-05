@@ -137,26 +137,20 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
       3.  Filter low-quality cells (min_genes, min_counts) and genes (min_cells)
       4.  Convert to dense float64, nan_to_num
       5.  Final zero-count cell/gene removal after dense conversion
-      6.  HVG selection on raw counts (flavor='seurat', batch_key='method')
-          NOTE: seurat flavor operates on raw counts intentionally here
+      6.  HVG selection on raw counts (flavor='seurat_v3', batch_key='method')
       7.  normalize_total + log1p
       8.  nan_to_num after log1p
       9.  Store adata.raw (normalized log counts, pre-scale)
       10. Subset to HVGs
       11. scale (zero mean, unit variance)
       12. PCA
-
-    Without normalize + log1p + scale, PCA is driven by library size
-    rather than biological variation, producing 1-2 clusters.
     """
     # Remove bacterial / rRNA genes
     bacteria_genes = ["GQX67_00940", "GQX67_05945"] + [
         g for g in adata.var_names if g.startswith("16S_")]
     adata = adata[:, ~adata.var_names.isin(bacteria_genes)].copy()
 
-    # Remove explicitly stored zeros from sparse matrix — these pass
-    # min_counts filtering (the entry exists but sums to 0) and cause
-    # normalize_total to warn "Some cells have zero counts"
+    # Remove explicitly stored zeros from sparse matrix
     if scipy.sparse.issparse(adata.X):
         adata.X.eliminate_zeros()
 
@@ -172,25 +166,23 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     adata.X = np.nan_to_num(adata.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
     # Remove any zero-count cells/genes that appeared after dense conversion
-    # (NaN values become 0.0 via nan_to_num, potentially creating empty rows)
     cell_sums = adata.X.sum(axis=1)
     gene_sums = adata.X.sum(axis=0)
     adata = adata[cell_sums > 0].copy()
     adata = adata[:, gene_sums > 0].copy()
     print(f"  After filtering: {adata.n_obs} cells, {adata.n_vars} genes")
 
-    # Remove near-constant genes — these produce NaN dispersion (log(0)) in HVG
+    # Remove near-constant genes
     gene_var = adata.X.var(axis=0)
     gene_mean = adata.X.mean(axis=0)
     keep = gene_var > np.maximum(gene_mean * 1e-6, 1e-10)
     adata = adata[:, keep].copy()
     print(f"  After removing near-constant genes: {adata.n_vars} genes")
 
-    # HVG selection on raw counts (before normalization).
-    # flavor="seurat" uses mean/dispersion on raw counts — correct here.
-    # batch_key="method" selects HVGs that are variable in BOTH 10X and PIPseq,
-    # preventing method-specific genes from driving clustering.
-    sc.pp.highly_variable_genes(adata, flavor="seurat", n_top_genes=n_top_genes,
+    # HVG selection on raw counts
+    # flavor="seurat_v3" correctly models mean-variance on raw counts.
+    # batch_key="method" selects HVGs that are variable in BOTH 10X and PIPseq.
+    sc.pp.highly_variable_genes(adata, flavor="seurat_v3", n_top_genes=n_top_genes,
                                  batch_key="method")
 
     # Normalize + log1p
@@ -200,7 +192,7 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
         adata.X = adata.X.toarray()
     adata.X = np.nan_to_num(adata.X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Store normalized log counts before scaling (needed for DE, visualization)
+    # Store normalized log counts before scaling
     adata.raw = adata
 
     # Subset to HVGs, scale, PCA
@@ -209,7 +201,6 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     sc.pp.pca(adata, n_comps=n_pcs)
 
     return adata
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Resolution optimisation
@@ -352,7 +343,7 @@ def cluster_all(
 
     Steps:
       1. Preprocess (filter, HVG, PCA)
-      2. BBKNN — correct for 10X vs PIPseq only
+      2. Harmony — correct PCA for 10X vs PIPseq and replicate effects
       3. UMAP
       4. Leiden clustering (optimised or fixed resolution)
 
@@ -360,7 +351,7 @@ def cluster_all(
     it drives the clustering and is visible in the embedding.
     """
     print("\n" + "=" * 60)
-    print("JOINT CLUSTERING — all conditions, method correction only")
+    print("JOINT CLUSTERING — all conditions, method correction via Harmony")
     print("=" * 60)
 
     print(f"\nTotal cells: {adata.n_obs}")
@@ -381,9 +372,8 @@ def cluster_all(
                title=["Method (pre-correction)", "Bio condition (pre-correction)"])
     del tmp
 
-    # BBKNN: correct for method only
-    print("\nRunning BBKNN (batch_key='method') …")
-    # Harmony: corrects PCA embedding for both method and replicate simultaneously.
+    # Harmony: correct PCA for method and replicate
+    print("\nRunning Harmony (vars_use=['method', 'replicate']) …")
     import harmonypy
     ho = harmonypy.run_harmony(
         adata.obsm["X_pca"][:, :n_pcs],
@@ -393,8 +383,20 @@ def cluster_all(
         random_state=42,
     )
     adata.obsm["X_pca_harmony"] = ho.Z_corr.T
-    sc.pp.neighbors(adata, use_rep="X_pca_harmony", n_pcs=n_pcs)
-    sc.tl.umap(adata)
+    
+    # Compute neighborhood graph on the Harmony-corrected PCA
+    sc.pp.neighbors(
+        adata, 
+        use_rep="X_pca_harmony", 
+        n_pcs=n_pcs, 
+        n_neighbors=50,       # Increased from default 15
+        metric="cosine"       # Often better for scRNA-seq
+    )
+    sc.tl.umap(
+        adata, 
+        min_dist=0.2,         # Decreased from default 0.5
+        spread=1.5            # Slightly increased to separate the denser clusters
+    )
 
     # Post-correction QC
     sc.pl.umap(adata, color=["method", "bio_condition", "cell_line", "timepoint_numeric"],
@@ -431,7 +433,6 @@ def cluster_all(
                    title="Wolbachia titer")
 
     return adata, final_resolution
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Condition enrichment analysis
