@@ -623,7 +623,7 @@ rule integrate_uninfected:
         sample       = "JW18DOX-Ctrl",
         fig_dir      = "results/integrated/figures_uninfected",
         out_path     = "results/integrated/integrated_uninfected.h5ad",
-        resolution   = config.get("integrate_resolution", 0.2),
+        resolution   = '1.0',
     log:
         "logs/integrate/integrate_uninfected.log"   
     threads:
@@ -649,7 +649,8 @@ rule integrate_uninfected:
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} 
+            --fig_dir {params.fig_dir} \
+            --resolution {params.resolution} 
             
         echo "Integration of uninfected samples complete"
         """

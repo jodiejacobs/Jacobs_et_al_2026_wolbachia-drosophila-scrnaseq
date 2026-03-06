@@ -523,7 +523,7 @@ def analyze_filtered_adata(adata, output_prefix=""):
 
     # Identify highly variable genes:
     # flavor="cell_ranger" is consistent with Seurat and flavor="seurat" is not consistent with Seurat
-    sc.pp.highly_variable_genes(adata, min_mean=0.01, max_mean=10, min_disp=.1, n_top_genes=1000, n_bins=20, flavor="seurat")
+    sc.pp.highly_variable_genes(adata, min_mean=0.01, max_mean=10, min_disp=.1, n_top_genes=3000, n_bins=20, flavor="seurat")
     sc.pl.highly_variable_genes(adata, show=False)
     # plt.savefig(f"{output_prefix}/highly_variable_genes.pdf", bbox_inches='tight', pad_inches=0.1)
     plt.close()
@@ -532,11 +532,11 @@ def analyze_filtered_adata(adata, output_prefix=""):
     n_hvg = adata.var['highly_variable'].sum()
     print(f"Found {n_hvg} highly variable genes")
     
-    sc.pp.scale(adata, max_value=10)
+    # sc.pp.scale(adata, max_value=10) # Removing scaling for better clustering with more PCs, as it can sometimes obscure biological signal in certain datasets. We can revisit this if needed after seeing the results with more PCs. 
 
     # Cluster the cells using leiden clustering
-    sc.tl.pca(adata, svd_solver='arpack', use_highly_variable=True, n_comps=10)
-    sc.pp.neighbors(adata, n_neighbors=30, n_pcs=10, knn=True)
+    sc.tl.pca(adata, svd_solver='arpack', use_highly_variable=True, n_comps=30) # Changed n_comps to 30 for better clustering with more PCs
+    sc.pp.neighbors(adata, n_neighbors=30, n_pcs=30, knn=True) # Chaned n_neighbors to 30 and n_pcs to 30 for better clustering with more PCs
     sc.tl.leiden(adata)
 
     # PCA projection:
