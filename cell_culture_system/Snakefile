@@ -76,10 +76,10 @@ def get_replicates_for_combo(condition, seq_platform):
 rule all:
     input:
         # Only create outputs for condition-seq_platform combos that exist
-        expand("results/combined/{condition}_{seq_platform}.h5ad",
-               zip,
-               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # expand("results/combined/{condition}_{seq_platform}.h5ad",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
         # Use actual sample IDs for rRNA analysis
         expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
                sample_id=SAMPLE_IDS,
