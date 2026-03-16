@@ -75,7 +75,11 @@ def get_replicates_for_combo(condition, seq_platform):
 # Main rule that defines the final output
 rule all:
     input:
+<<<<<<< HEAD
         # Only create outputs for condition-seq_platform combos that exist
+=======
+        # # Only create outputs for condition-seq_platform combos that exist
+>>>>>>> 8f469c7 (update the snakemake to remove unnessary outputs)
         # expand("results/combined/{condition}_{seq_platform}.h5ad",
         #        zip,
         #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
