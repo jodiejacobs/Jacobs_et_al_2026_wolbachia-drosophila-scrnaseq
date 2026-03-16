@@ -7,7 +7,7 @@ Strategy
 --------
 1. Load all samples, extract metadata from filenames.
 2. Preprocess: filter, HVG, PCA.
-3. Correct for library-prep method ONLY (Harmony) — biological signal preserved.
+3. Correct for library-prep method ONLY (BBKNN) — biological signal preserved.
 4. Cluster ALL cells together (DOX-Ctrl, wMel-Ctrl, D7, D28, D56).
 5. Ask which clusters are enriched at which timepoints/conditions.
 6. Ask how Wolbachia titer varies across clusters.
@@ -32,7 +32,7 @@ python integrate.py \\
     --out_path results/integrated/integrated.h5ad \\
     --fig_dir results/integrated/figures \\
     --optimize_resolution \\
-    --resolutions 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
+    --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
 """
 
 import os
@@ -127,7 +127,7 @@ def add_metadata(adata, batch_key):
 # Preprocessing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=3000):
+def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     """
     Standard scanpy preprocessing pipeline.
 
@@ -137,18 +137,17 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=3000):
       3.  Filter low-quality cells (min_genes, min_counts) and genes (min_cells)
       4.  Convert to dense float64, nan_to_num
       5.  Final zero-count cell/gene removal after dense conversion
-      6.  HVG selection on log-normalized counts (flavor='seurat', batch_key='method')
-          NOTE: seurat is correct here because data is already log-normalized
-                from the filter script (normalize_per_cell + log1p already applied)
-      7.  nan_to_num
-      8.  Store adata.raw (normalized log counts, pre-scale)
-      9.  Subset to HVGs
-      10. scale (zero mean, unit variance) — required for PCA to reflect
-          biological variance rather than expression magnitude
-      11. PCA
+      6.  HVG selection on raw counts (flavor='seurat', batch_key='method')
+          NOTE: seurat flavor operates on raw counts intentionally here
+      7.  normalize_total + log1p
+      8.  nan_to_num after log1p
+      9.  Store adata.raw (normalized log counts, pre-scale)
+      10. Subset to HVGs
+      11. scale (zero mean, unit variance)
+      12. PCA
 
-    Without scale, PCA is dominated by highly expressed genes rather than
-    biological variation, producing a single blob in UMAP.
+    Without normalize + log1p + scale, PCA is driven by library size
+    rather than biological variation, producing 1-2 clusters.
     """
     # Remove bacterial / rRNA genes
     bacteria_genes = ["GQX67_00940", "GQX67_05945"] + [
@@ -173,6 +172,7 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=3000):
     adata.X = np.nan_to_num(adata.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
     # Remove any zero-count cells/genes that appeared after dense conversion
+    # (NaN values become 0.0 via nan_to_num, potentially creating empty rows)
     cell_sums = adata.X.sum(axis=1)
     gene_sums = adata.X.sum(axis=0)
     adata = adata[cell_sums > 0].copy()
@@ -186,16 +186,16 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=3000):
     adata = adata[:, keep].copy()
     print(f"  After removing near-constant genes: {adata.n_vars} genes")
 
-    # HVG selection on log-normalized counts.
-    # flavor="seurat" is correct here — the data is already log-normalized
-    # coming from the filter script (normalize_per_cell + log1p applied there).
-    # seurat uses a variance-stabilizing approach suited for log-normalized data,
-    # whereas flavor="seurat" expects raw counts and will give misleading dispersions.
-    # batch_key="method" selects HVGs variable in BOTH 10X and PIPseq,
-    # preventing platform-specific genes from driving clustering.
+    # HVG selection on raw counts (before normalization).
+    # flavor="seurat" uses mean/dispersion on raw counts — correct here.
+    # batch_key="method" selects HVGs that are variable in BOTH 10X and PIPseq,
+    # preventing method-specific genes from driving clustering.
     sc.pp.highly_variable_genes(adata, flavor="seurat", n_top_genes=n_top_genes,
                                  batch_key="method")
 
+    # Normalize + log1p
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
     if scipy.sparse.issparse(adata.X):
         adata.X = adata.X.toarray()
     adata.X = np.nan_to_num(adata.X, nan=0.0, posinf=0.0, neginf=0.0)
@@ -203,13 +203,10 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=3000):
     # Store normalized log counts before scaling (needed for DE, visualization)
     adata.raw = adata
 
-    # Subset to HVGs, scale, PCA.
-    # scale() is essential — without it, PCA variance is dominated by highly
-    # expressed genes rather than biologically meaningful variation, which
-    # collapses the UMAP into a single blob.
+    # Subset to HVGs, scale, PCA
     adata = adata[:, adata.var["highly_variable"]].copy()
     sc.pp.scale(adata, max_value=10)
-    sc.pp.pca(adata, n_comps=30)
+    sc.pp.pca(adata, n_comps=n_pcs)
 
     return adata
 
@@ -354,8 +351,8 @@ def cluster_all(
     Cluster all cells together after correcting for method only.
 
     Steps:
-      1. Preprocess (filter, HVG, scale, PCA)
-      2. Harmony — correct for 10X vs PIPseq only
+      1. Preprocess (filter, HVG, PCA)
+      2. BBKNN — correct for 10X vs PIPseq only
       3. UMAP
       4. Leiden clustering (optimised or fixed resolution)
 
@@ -384,19 +381,20 @@ def cluster_all(
                title=["Method (pre-correction)", "Bio condition (pre-correction)"])
     del tmp
 
-    # Harmony: correct for method only
-    print("\nRunning Harmony (vars_use=['method']) …")
+    # BBKNN: correct for method only
+    print("\nRunning BBKNN (batch_key='method') …")
+    # Harmony: corrects PCA embedding for both method and replicate simultaneously.
     import harmonypy
     ho = harmonypy.run_harmony(
         adata.obsm["X_pca"][:, :n_pcs],
         adata.obs,
-        vars_use=["method"],
+        vars_use=["method", "replicate"],
         max_iter_harmony=20,
         random_state=42,
     )
     adata.obsm["X_pca_harmony"] = ho.Z_corr.T
-    sc.pp.neighbors(adata, use_rep="X_pca_harmony", n_pcs=30, n_neighbors=10, knn=True)
-    sc.tl.umap(adata, min_dist=0.1, spread=1.5, random_state=42)
+    sc.pp.neighbors(adata, use_rep="X_pca_harmony", n_pcs=n_pcs)
+    sc.tl.umap(adata)
 
     # Post-correction QC
     sc.pl.umap(adata, color=["method", "bio_condition", "cell_line", "timepoint_numeric"],
@@ -409,7 +407,7 @@ def cluster_all(
     # Resolution optimisation
     if optimize_resolution:
         final_resolution, _ = optimize_leiden_resolution(
-            adata, resolutions=resolutions, n_pcs=30,
+            adata, resolutions=resolutions, n_pcs=n_pcs,
             fig_dir=fig_dir, sample=sample)
     else:
         final_resolution = leiden_resolution
@@ -457,15 +455,18 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     colors = _leiden_colors(adata, key="leiden")
     clusters = sorted(adata.obs["leiden"].unique())
 
+    # Define ordered conditions for consistent plotting
     condition_order = []
     for expected in ["JW18DOX-Ctrl", "JW18wMel-D7", "JW18wMel-D28",
                      "JW18wMel-D56", "JW18wMel-Ctrl"]:
         if expected in adata.obs["bio_condition"].values:
             condition_order.append(expected)
+    # Add any remaining conditions not in expected list
     for cond in sorted(adata.obs["bio_condition"].unique()):
         if cond not in condition_order:
             condition_order.append(cond)
 
+    # ── Chi-square ────────────────────────────────────────────────────────────
     contingency = pd.crosstab(adata.obs["leiden"], adata.obs["bio_condition"])
     chi2, p, dof, expected = chi2_contingency(contingency)
     n = contingency.sum().sum()
@@ -473,9 +474,11 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     print(f"\nChi-square: chi2={chi2:.2f}  p={p:.2e}  dof={dof}")
     print(f"Cramer's V: {cramers_v:.3f}")
 
+    # ── Plot 1: % cluster composition per condition (stacked bar) ─────────────
     pct_by_cond = pd.crosstab(adata.obs["leiden"],
                                adata.obs["bio_condition"],
                                normalize="columns") * 100
+    # Reorder columns
     pct_by_cond = pct_by_cond.reindex(
         columns=[c for c in condition_order if c in pct_by_cond.columns])
 
@@ -491,6 +494,7 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"cluster_composition_by_condition_{sample}.pdf"))
 
+    # ── Plot 2: % condition per cluster (stacked bar) ─────────────────────────
     pct_by_cluster = pd.crosstab(adata.obs["bio_condition"],
                                   adata.obs["leiden"],
                                   normalize="columns") * 100
@@ -509,8 +513,10 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"condition_composition_by_cluster_{sample}.pdf"))
 
+    # ── Plot 3: fold-enrichment heatmap ───────────────────────────────────────
+    # Observed / expected (from chi-square) — highlights enrichment above baseline
     obs = contingency.values.astype(float)
-    fold_enrich = np.log2((obs + 1) / (expected + 1))
+    fold_enrich = np.log2((obs + 1) / (expected + 1))  # log2 fold enrichment
     fold_df = pd.DataFrame(fold_enrich,
                            index=contingency.index,
                            columns=contingency.columns)
@@ -530,6 +536,7 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"cluster_enrichment_heatmap_{sample}.pdf"))
 
+    # ── Plot 4: UMAP panels per condition ─────────────────────────────────────
     conditions = [c for c in condition_order
                   if c in adata.obs["bio_condition"].values]
     ncols = min(3, len(conditions))
@@ -556,6 +563,7 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"umap_by_condition_{sample}.pdf"))
 
+    # Save tables
     pct_by_cond.to_csv(os.path.join(fig_dir, f"cluster_pct_by_condition_{sample}.csv"))
     fold_df.to_csv(os.path.join(fig_dir, f"cluster_enrichment_by_condition_{sample}.csv"))
     pd.DataFrame({
@@ -573,6 +581,15 @@ def analyze_condition_enrichment(adata, fig_dir, sample):
 def analyze_titer_by_cluster(adata, fig_dir, sample):
     """
     How does Wolbachia titer vary across clusters?
+
+    Produces:
+      - Boxplot + strip: titer per cluster
+      - Violin: titer per cluster
+      - UMAP: titer as continuous variable
+      - UMAP: titer split by method (QC)
+      - Bar: % infected cells (titer > 0) per cluster
+      - Heatmap: mean titer per cluster × condition
+      - Kruskal-Wallis test
     """
     if "wolbachia_titer" not in adata.obs.columns:
         print("  Skipping titer analysis: no 'wolbachia_titer' column")
@@ -588,17 +605,21 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
                      "method", "timepoint_numeric"]].copy()
     obs_titer = obs.dropna(subset=["wolbachia_titer"])
 
+    # ── Kruskal-Wallis ────────────────────────────────────────────────────────
     groups = [obs_titer[obs_titer["leiden"] == c]["wolbachia_titer"].values
               for c in clusters if (obs_titer["leiden"] == c).sum() > 0]
     h, p_kw = kruskal(*groups)
     print(f"\nKruskal-Wallis: H={h:.2f}  p={p_kw:.2e}")
+    print("Titer {'SIGNIFICANTLY' if p_kw < 0.05 else 'does NOT'} differ across clusters")
 
+    # Summary stats
     stats = obs_titer.groupby("leiden")["wolbachia_titer"].agg(
         ["mean", "median", "std", "count"])
     print("\nTiter summary per cluster:")
     print(stats.to_string())
     stats.to_csv(os.path.join(fig_dir, f"titer_stats_by_cluster_{sample}.csv"))
 
+    # ── Plot 1: boxplot + strip ───────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(max(10, len(clusters) * 0.8), 6))
     sns.stripplot(data=obs_titer, x="leiden", y="wolbachia_titer",
                   order=clusters, color="black", alpha=0.15, size=1.5, ax=ax)
@@ -620,6 +641,7 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_boxplot_by_cluster_{sample}.pdf"))
 
+    # ── Plot 2: violin ────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(max(10, len(clusters) * 0.8), 6))
     sc.pl.violin(adata, "wolbachia_titer", groupby="leiden",
                  ax=ax, show=False, rotation=0)
@@ -628,6 +650,7 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_violin_by_cluster_{sample}.pdf"))
 
+    # ── Plot 3: % infected per cluster ────────────────────────────────────────
     pct_infected = obs_titer.groupby("leiden").apply(
         lambda x: (x["wolbachia_titer"] > 0).sum() / len(x) * 100
     )
@@ -645,9 +668,11 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"infection_pct_by_cluster_{sample}.pdf"))
 
+    # ── Plot 4: mean titer heatmap — cluster × condition ──────────────────────
     mean_titer = obs_titer.pivot_table(
         values="wolbachia_titer", index="leiden",
         columns="bio_condition", aggfunc="mean")
+
     fig, ax = plt.subplots(figsize=(max(10, mean_titer.shape[1] * 1.2),
                                     max(5, mean_titer.shape[0] * 0.5)))
     sns.heatmap(mean_titer, cmap="viridis", ax=ax,
@@ -660,6 +685,7 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_heatmap_cluster_condition_{sample}.pdf"))
 
+    # ── Plot 5: titer by cluster × timepoint (infected cells only) ────────────
     infected = obs_titer[obs_titer["wolbachia_titer"] > 0]
     if len(infected) > 0:
         fig, ax = plt.subplots(figsize=(12, 5))
@@ -684,6 +710,9 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
 def export_sceptic(adata, fig_dir, sample, n_pcs=30):
     """
     Export SCEPTIC inputs from the jointly-clustered object.
+
+    Uses wMel cells only (DOX→D7→D28→D56→wMel-Ctrl axis).
+    DOX cells provide the t=0 anchor as the uninfected reference state.
     """
     print("\n" + "=" * 60)
     print("EXPORTING SCEPTIC INPUTS")
@@ -691,6 +720,8 @@ def export_sceptic(adata, fig_dir, sample, n_pcs=30):
 
     os.makedirs(fig_dir, exist_ok=True)
 
+    # Build the full pseudotime axis:
+    # DOX-Ctrl (t=0) + wMel intermediates (D7/D28/D56) + wMel-Ctrl (t=999)
     sceptic_mask = (
         (adata.obs["cell_line"] == "JW18DOX") & (adata.obs["treatment"] == "Ctrl")
     ) | (
@@ -702,6 +733,7 @@ def export_sceptic(adata, fig_dir, sample, n_pcs=30):
     print("Timepoint breakdown:")
     print(adata_s.obs["timepoint_numeric"].value_counts().sort_index().to_string())
 
+    # Feature matrix: PCA coords
     n_actual = min(n_pcs, adata_s.obsm["X_pca"].shape[1])
     if n_actual < n_pcs:
         print(f"  WARNING: Using {n_actual} PCs (requested {n_pcs})")
@@ -754,6 +786,7 @@ def integrate(
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
 
+    # ── Load and concatenate ──────────────────────────────────────────────────
     print("Loading files …")
     adatas = []
     for fp in files:
@@ -768,6 +801,7 @@ def integrate(
     print("Condition breakdown:")
     print(adata.obs["bio_condition"].value_counts().to_string())
 
+    # ── Joint clustering ──────────────────────────────────────────────────────
     adata, final_resolution = cluster_all(
         adata,
         batch_key=batch_key,
@@ -781,10 +815,16 @@ def integrate(
         leiden_resolution=leiden_resolution,
     )
 
+    # ── Condition enrichment ──────────────────────────────────────────────────
     analyze_condition_enrichment(adata, fig_dir, sample)
+
+    # ── Titer analysis ────────────────────────────────────────────────────────
     analyze_titer_by_cluster(adata, fig_dir, sample)
+
+    # ── SCEPTIC export ────────────────────────────────────────────────────────
     export_sceptic(adata, fig_dir=fig_dir, sample=sample, n_pcs=n_pcs)
 
+    # ── Save ──────────────────────────────────────────────────────────────────
     adata = _sanitize_obs(adata)
     adata.write(out_path)
     print(f"\nSaved: {out_path}")
