@@ -91,14 +91,14 @@ def _extract_timepoint_numeric(row):
     Numeric position on the infection pseudotime axis:
         JW18DOX-Ctrl  -> 0    (uninfected baseline)
         D7/D28/D56    -> 7, 28, 56  (infection intermediates)
-        JW18wMel-Ctrl -> 999  (stable infected endpoint)
+        JW18wMel-Ctrl -> 99  (stable infected endpoint)
     """
     tp = row.get("timepoint", None)
     if tp is not None and pd.notna(tp) and str(tp) not in ("nan", "None", ""):
         m = re.search(r"(\d+)", str(tp))
         return int(m.group(1)) if m else 0
     elif str(row.get("cell_line", "")) == "JW18wMel":
-        return 999
+        return 99
     else:
         return 0
 
