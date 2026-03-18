@@ -5,24 +5,15 @@ Staged scRNA-seq integration pipeline for studying Wolbachia infection dynamics.
 
 Strategy
 --------
-1. Correct for library-prep method (10X vs PIPseq) with BBKNN — preserves biology.
-2. Build a reference embedding from uninfected control cells only.
-3. Map (ingest) new-infection timepoint cells onto that reference.
-4. Cluster on the reference; project cluster labels to query cells.
-5. Export SCEPTIC-ready files for pseudotime inference on infected cells.
+1. Load a pre-built reference (Harmony-corrected, leiden-clustered, UMAP embedded).
+2. Subset the full integrated object to query cells (new-infection timepoints).
+3. Map (ingest) query cells onto the reference.
+4. Project cluster labels and UMAP coordinates to query cells.
 
-SCEPTIC inputs produced
------------------------
-- sceptic_matrix_{sample}.csv    : cells × PCA dims (or HVGs)
-- sceptic_labels_{sample}.csv    : numeric timepoint label per cell (0 = uninfected)
-- sceptic_label_list_{sample}.csv: unique ordered timepoints
-- sceptic_metadata_{sample}.csv  : per-cell cluster, method, timepoint
 """
 
 import os
 import argparse
-import warnings
-import re
 
 import numpy as np
 import pandas as pd
@@ -30,12 +21,12 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
+import scipy.stats
+from scipy.stats import kruskal, spearmanr
+from itertools import combinations
+from statsmodels.stats.multitest import multipletests
 import anndata as ad
 import scanpy as sc
-import bbknn
-from scipy.stats import chi2_contingency, mannwhitneyu
-from sklearn.metrics import silhouette_score, adjusted_rand_score
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -47,371 +38,40 @@ def _leiden_colors(adata, key="leiden"):
     return [cmap(i % 20) for i in range(len(clusters))]
 
 
-def _extract_timepoint_numeric(row):
+# ─────────────────────────────────────────────────────────────────────────────
+# Query: map onto reference via ingest
+# ─────────────────────────────────────────────────────────────────────────────
+
+def map_query_to_reference(adata_query, ref, min_genes, fig_dir, sample):
+    """Project new-infection timepoint cells onto the reference using sc.tl.ingest.
+
+    Parameters
+    ----------
+    adata_query : AnnData
+        Query cells (new-infection timepoints), raw counts in .X.
+    ref : AnnData
+        Pre-built reference: Harmony-corrected, scaled, PCA/UMAP computed,
+        leiden labels in obs["leiden"].
+    min_genes : int
+        Minimum genes per cell for quality filtering.
+    fig_dir : str
+        Directory for output figures.
+    sample : str
+        Sample label used in output file names.
+
+    Returns
+    -------
+    query : AnnData
+        Query object with projected UMAP and transferred leiden_ref labels.
+    combined : AnnData
+        Concatenation of reference and query for joint plotting.
     """
-    Assign a numeric position on the infection pseudotime axis.
-
-        JW18DOX-Ctrl   = uninfected baseline        -> t=0
-        D7 / D28 / D56 = infection intermediates    -> t=7, 28, 56
-        JW18wMel-Ctrl  = stably infected endpoint   -> t=999
-    """
-    tp = row.get("timepoint", None)
-    if tp is not None and pd.notna(tp) and str(tp) not in ("nan", "None", ""):
-        m = re.search(r"(\d+)", str(tp))
-        return int(m.group(1)) if m else 0
-    elif str(row.get("cell_line", "")) == "JW18wMel":
-        return 999
-    else:
-        return 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Preprocessing
-# ─────────────────────────────────────────────────────────────────────────────
-
-def add_metadata(adata, batch_key):
-    """Extract sample metadata from batch names."""
-    adata.obs["cell_line"]  = adata.obs[batch_key].str.extract(r"(JW18DOX|JW18wMel)")[0]
-    adata.obs["treatment"]  = adata.obs[batch_key].str.extract(r"-(Ctrl|SV)")[0]
-    adata.obs["timepoint"]  = adata.obs[batch_key].str.extract(r"-(D\d+)-")[0]
-    adata.obs["replicate"]  = adata.obs[batch_key].str.extract(r"-(\d+)_")[0]
-    adata.obs["method"]     = adata.obs[batch_key].str.extract(r"_(10x|pipseq)$")[0]
-    adata.obs["bio_condition"] = adata.obs.apply(
-        lambda row: (f"{row['cell_line']}-{row['treatment']}-{row['timepoint']}"
-                     if pd.notna(row["timepoint"])
-                     else f"{row['cell_line']}-{row['treatment']}"),
-        axis=1,
-    )
-    adata.obs["timepoint_numeric"] = adata.obs.apply(
-        _extract_timepoint_numeric, axis=1).astype(int)
-    return adata
-
-
-def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
-    """
-    Standard scanpy preprocessing pipeline.
-
-    Steps (order matters):
-      1.  Remove bacterial genes
-      2.  eliminate_zeros() — remove explicitly stored zeros from sparse matrix
-      3.  Filter cells (min_genes, min_counts) and genes (min_cells, min_counts)
-      4.  Convert to dense float64, nan_to_num
-      5.  Final zero-count cell/gene removal after dense conversion
-      6.  HVG selection on raw counts (flavor='seurat', batch_key='method')
-      7.  normalize_total + log1p + nan_to_num
-      8.  Store adata.raw (normalized log counts, pre-scale)
-      9.  Subset to HVGs, scale, PCA
-
-    Without normalize + log1p + scale, PCA is driven by library size
-    rather than biological variation, producing 1-2 clusters.
-    """
-    bacteria_genes = ["GQX67_00940", "GQX67_05945"] + [
-        g for g in adata.var_names if g.startswith("16S_")]
-    adata = adata[:, ~adata.var_names.isin(bacteria_genes)].copy()
-
-    # Remove explicitly stored zeros — these pass min_counts filtering
-    # but cause normalize_total to warn "Some cells have zero counts"
-    if scipy.sparse.issparse(adata.X):
-        adata.X.eliminate_zeros()
-
-    sc.pp.filter_cells(adata, min_genes=min_genes)
-    sc.pp.filter_cells(adata, min_counts=1)
-    sc.pp.filter_genes(adata, min_cells=min_cells)
-    sc.pp.filter_genes(adata, min_counts=1)
-
-    if scipy.sparse.issparse(adata.X):
-        adata.X = adata.X.toarray()
-    adata.X = np.nan_to_num(adata.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Remove zero-count cells/genes created by nan_to_num filling NaN->0
-    cell_sums = adata.X.sum(axis=1)
-    gene_sums = adata.X.sum(axis=0)
-    adata = adata[cell_sums > 0].copy()
-    adata = adata[:, gene_sums > 0].copy()
-    print(f"  After filtering: {adata.n_obs} cells, {adata.n_vars} genes")
-
-    # Remove near-constant genes — genes with very low variance produce
-    # zero or NaN dispersion in HVG selection (log(0) = NaN).
-    # Use a small epsilon threshold rather than exactly zero to catch
-    # genes that are effectively constant in float64 arithmetic.
-    gene_var = adata.X.var(axis=0)
-    gene_mean = adata.X.mean(axis=0)
-    # Keep genes with variance > 1e-6 * mean (relative threshold) or variance > 1e-10 (absolute)
-    keep = (gene_var > np.maximum(gene_mean * 1e-6, 1e-10))
-    adata = adata[:, keep].copy()
-    print(f"  After removing near-constant genes: {adata.n_vars} genes")
-
-    # HVG on raw counts — flavor="seurat" uses mean/dispersion on raw counts.
-    # batch_key="method" selects HVGs variable in BOTH 10X and PIPseq.
-    sc.pp.highly_variable_genes(adata, flavor="seurat", n_top_genes=n_top_genes,
-                                 batch_key="method")
-
-    # Normalize + log1p
-    sc.pp.normalize_total(adata, target_sum=1e4)
-    sc.pp.log1p(adata)
-    if scipy.sparse.issparse(adata.X):
-        adata.X = adata.X.toarray()
-    adata.X = np.nan_to_num(adata.X, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Store normalized log counts before scaling (for DE, visualization)
-    adata.raw = adata
-
-    # Subset to HVGs, then scale
-    adata = adata[:, adata.var["highly_variable"]].copy()
-    sc.pp.scale(adata, max_value=10)
-
-    # 6. PCA on scaled HVGs
-    sc.pp.pca(adata, n_comps=n_pcs)
-
-    return adata
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Resolution optimisation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def optimize_leiden_resolution(
-    adata,
-    resolutions=None,
-    n_pcs=30,
-    silhouette_subsample=5000,
-    ari_n_runs=3,
-    fig_dir="figures",
-    sample="sample",
-    random_state=42,
-):
-    if resolutions is None:
-        resolutions = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0]
-
-    os.makedirs(fig_dir, exist_ok=True)
-    X_pca = adata.obsm.get("X_pca_harmony", adata.obsm["X_pca"])[:, :n_pcs]
-    rng = np.random.default_rng(random_state)
-    sil_idx = rng.choice(adata.n_obs, min(silhouette_subsample, adata.n_obs), replace=False)
-
-    records = []
-    cluster_assignments = {}
-
-    print(f"\nSweeping {len(resolutions)} resolutions …")
-    for res in resolutions:
-        sc.tl.leiden(adata, resolution=res, random_state=random_state,
-                     key_added=f"leiden_res{res}")
-        labels = adata.obs[f"leiden_res{res}"].astype(int).values
-        cluster_assignments[res] = labels
-        n_clusters = len(np.unique(labels))
-        sil = (silhouette_score(X_pca[sil_idx], labels[sil_idx], metric="euclidean")
-               if n_clusters >= 2 else np.nan)
-
-        ari_scores = []
-        for seed in range(1, ari_n_runs + 1):
-            sc.tl.leiden(adata, resolution=res, random_state=seed, key_added="_tmp")
-            ari_scores.append(adjusted_rand_score(labels, adata.obs["_tmp"].astype(int).values))
-        adata.obs.drop(columns=["_tmp"], inplace=True)
-
-        records.append(dict(resolution=res, n_clusters=n_clusters,
-                            silhouette=sil, ari_stability=float(np.mean(ari_scores))))
-        print(f"  res={res:.2f}  n_clusters={n_clusters:3d}  "
-              f"silhouette={sil:.4f}  ari={records[-1]['ari_stability']:.4f}")
-
-    scores_df = pd.DataFrame(records)
-    scores_df.to_csv(os.path.join(fig_dir, f"resolution_scores_{sample}.csv"), index=False)
-
-    def _norm(v):
-        lo, hi = np.nanmin(v), np.nanmax(v)
-        return (v - lo) / (hi - lo + 1e-12)
-
-    scores_df["composite"] = (_norm(scores_df["silhouette"].values.astype(float)) +
-                               _norm(scores_df["ari_stability"].values.astype(float))) / 2
-    best_res = float(scores_df.loc[scores_df["composite"].idxmax(), "resolution"])
-    print(f"\nBest resolution: {best_res}")
-
-    res_vals = scores_df["resolution"].values
-
-    # Metric curves
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    for ax, col, color, title in zip(
-        axes,
-        ["silhouette", "ari_stability", "n_clusters"],
-        ["#2196F3", "#4CAF50", "#FF9800"],
-        ["Silhouette Score", "ARI Stability", "N Clusters"],
-    ):
-        ax.plot(res_vals, scores_df[col].values, "o-", color=color, linewidth=2, markersize=6)
-        ax.axvline(best_res, color="red", linestyle="--", linewidth=1.5, label=f"Best: {best_res}")
-        ax.set_xlabel("Leiden Resolution"); ax.set_title(title)
-        ax.legend(fontsize=9); ax.grid(alpha=0.3)
-    plt.suptitle(f"Resolution Optimisation — {sample}", fontweight="bold", y=1.02)
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"resolution_metrics_{sample}.pdf"), bbox_inches="tight")
-    plt.close()
-
-    # UMAP panel
-    ncols = min(4, len(resolutions))
-    nrows = int(np.ceil(len(resolutions) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 3.5))
-    axes = np.array(axes).flatten()
-    for i, res in enumerate(resolutions):
-        ax = axes[i]
-        umap_xy = adata.obsm["X_umap"]
-        lbls = adata.obs[f"leiden_res{res}"].astype(int).values
-        n_cl = len(np.unique(lbls))
-        ax.scatter(umap_xy[:, 0], umap_xy[:, 1], c=lbls,
-                   cmap=matplotlib.colormaps["tab20"].resampled(n_cl),
-                   s=1, alpha=0.5, rasterized=True)
-        is_best = np.isclose(res, best_res)
-        ax.set_title(f"res={res} (n={n_cl})" + (" *" if is_best else ""),
-                     fontsize=9, fontweight="bold" if is_best else "normal",
-                     color="red" if is_best else "black")
-        ax.set_xticks([]); ax.set_yticks([]); ax.set_aspect("equal")
-    for j in range(i + 1, len(axes)):
-        axes[j].set_visible(False)
-    plt.suptitle(f"UMAP at each resolution — {sample}", fontweight="bold")
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"resolution_umap_panel_{sample}.pdf"),
-                bbox_inches="tight", dpi=150)
-    plt.close()
-
-    # Overlap heatmaps
-    n_pairs = len(resolutions) - 1
-    ncols_h = min(3, n_pairs)
-    nrows_h = int(np.ceil(n_pairs / ncols_h))
-    fig, axes = plt.subplots(nrows_h, ncols_h, figsize=(ncols_h * 4.5, nrows_h * 4))
-    axes = np.array(axes).flatten()
-    for i in range(n_pairs):
-        res_lo, res_hi = resolutions[i], resolutions[i + 1]
-        overlap = pd.crosstab(
-            pd.Series(cluster_assignments[res_lo], name=f"res={res_lo}"),
-            pd.Series(cluster_assignments[res_hi], name=f"res={res_hi}"),
-            normalize="index",
-        )
-        sns.heatmap(overlap, ax=axes[i], cmap="YlOrRd", vmin=0, vmax=1,
-                    linewidths=0.3, cbar_kws={"shrink": 0.7},
-                    annot=(overlap.shape[0] * overlap.shape[1] <= 100), fmt=".2f")
-        axes[i].set_title(f"{res_lo} -> {res_hi}", fontsize=9)
-        axes[i].tick_params(labelsize=7)
-    for j in range(i + 1, len(axes)):
-        axes[j].set_visible(False)
-    plt.suptitle(f"Cluster overlap — {sample}", fontweight="bold")
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"resolution_overlap_heatmaps_{sample}.pdf"), bbox_inches="tight")
-    plt.close()
-
-    # Composite bar
-    fig, ax = plt.subplots(figsize=(10, 4))
-    bar_colors = ["red" if np.isclose(r, best_res) else "#90CAF9" for r in res_vals]
-    ax.bar(res_vals.astype(str), scores_df["composite"].values,
-           color=bar_colors, edgecolor="black", linewidth=0.5)
-    ax.set_xlabel("Leiden Resolution")
-    ax.set_ylabel("Composite Score (normalised silhouette + ARI)")
-    ax.set_title(f"Resolution Composite Score — {sample}\nBest: {best_res} (red)")
-    ax.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"resolution_composite_{sample}.pdf"), bbox_inches="tight")
-    plt.close()
-
-    return best_res, scores_df
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 1 — Reference
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_reference(adata_ref, batch_key, min_genes, min_cells, n_pcs,
-                    fig_dir, sample, optimize_resolution=True,
-                    resolutions=None, leiden_resolution=0.5):
-    """Build reference embedding from uninfected control cells (JW18DOX-Ctrl)."""
-    print("\n" + "=" * 60)
-    print("STAGE 1 — Building reference from uninfected controls")
-    print("=" * 60)
-
-    ref = adata_ref.copy()
-    print(f"Reference cells: {ref.n_obs}")
-    print(f"Methods: {ref.obs['method'].value_counts().to_dict()}")
-
-    ref = preprocess(ref, min_genes, min_cells, n_pcs)
-
-    # Pre-correction UMAP
-    ref_tmp = ref.copy()
-    sc.pp.neighbors(ref_tmp, n_pcs=n_pcs)
-    sc.tl.umap(ref_tmp)
-    sc.pl.umap(ref_tmp, color=["method", "bio_condition"],
-               save=f"_{sample}_ref_before_correction.pdf", ncols=2,
-               title=["Method (pre-correction)", "Bio condition (pre-correction)"])
-    del ref_tmp
-
-    # BBKNN: correct for library-prep method only.
-    # batch_key="batch" (individual samples) is preferred over "method" (2 levels)
-    # because correcting on only 2 batches forces every 10x cell to connect to
-    # every pipseq cell, over-integrating and creating stringy cluster artifacts.
-    # neighbors_within_batch=3 is conservative — default of 5 is too aggressive
-    # when biological variation is subtle relative to batch effect.
-    print("Correcting for library-prep method only (BBKNN key='batch') …")
-    # Harmony: corrects PCA embedding for both method and replicate simultaneously.
-    # Preferred over BBKNN when method separation dominates — Harmony regresses
-    # covariates out of X_pca directly, producing a corrected embedding
-    # (X_pca_harmony) that standard neighbor/UMAP/clustering then uses.
-    import harmonypy
-    ho = harmonypy.run_harmony(
-        ref.obsm["X_pca"][:, :n_pcs],
-        ref.obs,
-        vars_use=["method", "replicate"],  # correct for both simultaneously
-        max_iter_harmony=20,
-        random_state=42,
-    )
-    ref.obsm["X_pca_harmony"] = ho.Z_corr.T
-    sc.pp.neighbors(ref, use_rep="X_pca_harmony", n_pcs=n_pcs)
-    sc.tl.umap(ref)
-
-    sc.pl.umap(ref, color=["method", "bio_condition", "cell_line"],
-               save=f"_{sample}_ref_after_method_correction.pdf", ncols=3,
-               title=["Method (post-correction — should overlap)",
-                      "Bio condition (should still separate)",
-                      "Cell line"])
-
-    if optimize_resolution:
-        final_resolution, _ = optimize_leiden_resolution(
-            ref, resolutions=resolutions, n_pcs=n_pcs,
-            fig_dir=fig_dir, sample=f"{sample}_ref")
-    else:
-        final_resolution = leiden_resolution
-
-    print(f"\nFinal clustering at resolution={final_resolution} …")
-    sc.tl.leiden(ref, resolution=final_resolution, key_added="leiden")
-
-    sc.pl.umap(ref, color=["leiden", "bio_condition", "method"],
-               save=f"_{sample}_ref_final_clusters.pdf", ncols=3,
-               legend_loc="on data",
-               title=["Leiden clusters (reference)", "Bio condition", "Method"])
-
-    print(f"Reference: {ref.n_obs} cells, {ref.obs['leiden'].nunique()} clusters")
-    return ref, final_resolution
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 2 — Query: map onto reference via ingest
-# ─────────────────────────────────────────────────────────────────────────────
-
-def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
-                            fig_dir, sample):
-    """Project new-infection timepoint cells onto the reference using sc.tl.ingest."""
-    print("\n" + "=" * 60)
-    print("STAGE 2 — Mapping query onto reference")
-    print("=" * 60)
-
     query = adata_query.copy()
     print(f"Query cells: {query.n_obs}")
     print(f"Timepoints:  {query.obs['timepoint'].value_counts().to_dict()}")
     print(f"Methods:     {query.obs['method'].value_counts().to_dict()}")
 
-    # Preprocess query to match the reference exactly:
-    #   normalize -> log1p -> subset to ref HVGs -> scale
-    # This ensures query cells are in the same feature space as the reference
-    # before sc.tl.ingest projects them into the reference PCA.
-
-    # Remove bacterial genes
-    bacteria_genes = ["GQX67_00940", "GQX67_05945"] + [
-        g for g in query.var_names if g.startswith("16S_")]
-    query = query[:, ~query.var_names.isin(bacteria_genes)].copy()
-
-    # Subset to the full pre-HVG gene universe (ref.raw has pre-HVG-subset genes)
+    # Subset to the gene universe present in the reference
     ref_all_genes = ref.raw.var_names if ref.raw is not None else ref.var_names
     query = query[:, query.var_names.isin(ref_all_genes)].copy()
 
@@ -433,43 +93,30 @@ def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
     query = query[cell_sums > 0].copy()
     query = query[:, gene_sums > 0].copy()
 
-    # Normalize + log1p to match reference preprocessing
-    sc.pp.normalize_total(query, target_sum=1e4)
-    sc.pp.log1p(query)
-    if scipy.sparse.issparse(query.X):
-        query.X = query.X.toarray()
     query.X = np.nan_to_num(query.X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Store normalized log counts
+    # Store pre-scale counts as .raw
     query.raw = query
 
-    # Subset AND reorder query vars to exactly match reference var_names.
+    # Fill missing reference HVGs with zeros, then reorder vars to match ref exactly.
     # sc.tl.ingest requires identical var_names in the same order.
-    shared_genes = ref.var_names.intersection(query.var_names)
     missing_genes = ref.var_names[~ref.var_names.isin(query.var_names)]
     if len(missing_genes) > 0:
         print(f"  WARNING: {len(missing_genes)} ref HVGs missing from query — filling with zeros")
-        # Add missing genes as zero columns directly in numpy — avoids ad.concat
-        # which drops obs metadata. query.X is already dense at this point.
         zero_cols = np.zeros((query.n_obs, len(missing_genes)), dtype=np.float64)
         combined_X = np.hstack([query.X, zero_cols])
-        combined_var = pd.DataFrame(
-            index=list(query.var_names) + list(missing_genes)
-        )
-        # Preserve all obs metadata
+        combined_var = pd.DataFrame(index=list(query.var_names) + list(missing_genes))
         query = ad.AnnData(X=combined_X, obs=query.obs.copy(), var=combined_var)
-    # Reorder to exactly match reference var_names (same genes, same order)
+
     query = query[:, ref.var_names].copy()
     sc.pp.scale(query, max_value=10)
     query.var["highly_variable"] = True
 
-    # ingest: project into reference PCA + UMAP, transfer leiden labels.
-    # sc.tl.ingest overwrites query.obs with only the transferred column,
-    # so save full obs beforehand and merge back after.
+    # ingest projects query into ref PCA + UMAP and transfers leiden labels.
+    # Save obs beforehand because sc.tl.ingest overwrites it, then merge back.
     obs_backup = query.obs.copy()
     print("Running sc.tl.ingest …")
     sc.tl.ingest(query, ref, obs="leiden", embedding_method="umap")
-    # Restore all original obs columns, keeping the transferred leiden label
     leiden_transferred = query.obs["leiden"].copy()
     query.obs = obs_backup
     query.obs["leiden_ref"] = leiden_transferred.values
@@ -478,7 +125,7 @@ def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
                save=f"_{sample}_query_ingested.pdf", ncols=3,
                title=["Cluster (transferred from ref)", "Timepoint", "Method"])
 
-    # Joint reference + query object for plotting
+    # Build joint reference + query object for plotting
     ref_plot = ref.copy()
     ref_plot.obs["dataset"]    = "uninfected (reference)"
     ref_plot.obs["leiden_ref"] = ref_plot.obs["leiden"]
@@ -500,97 +147,6 @@ def map_query_to_reference(adata_query, ref, batch_key, min_genes, n_pcs,
     _plot_method_validation(ref, query, fig_dir, sample)
 
     return query, combined
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 3 — Export SCEPTIC inputs
-# ─────────────────────────────────────────────────────────────────────────────
-
-def export_sceptic(ref, query, fig_dir, sample, use_pca=True, n_pcs=30):
-    """Export SCEPTIC inputs. Pseudotime axis: DOX(0) -> D7 -> D28 -> D56 -> wMel(999)."""
-    print("\n" + "=" * 60)
-    print("STAGE 3 — Exporting SCEPTIC inputs")
-    print("=" * 60)
-
-    os.makedirs(fig_dir, exist_ok=True)
-
-    ref_sceptic   = ref
-    query_sceptic = query
-
-    print(f"SCEPTIC — DOX reference cells (t=0)  : {ref_sceptic.n_obs}")
-    print(f"SCEPTIC — wMel query cells (all t)   : {query_sceptic.n_obs}")
-    print(query_sceptic.obs["timepoint_numeric"].value_counts().sort_index().to_string())
-
-    if use_pca:
-        # Project query into reference PCA space if it doesn't have X_pca.
-        # sc.tl.ingest transfers UMAP but not PCA — we project manually using
-        # the reference PCA loadings (varm["PCs"]).
-        if "X_pca" not in query_sceptic.obsm:
-            print("  Projecting query into reference PCA space …")
-            if "PCs" not in ref_sceptic.varm:
-                raise ValueError("Reference has no PCA loadings (varm['PCs']). "
-                                 "Run sc.pp.pca on ref before export.")
-            pca_loadings = ref_sceptic.varm["PCs"]          # genes × n_pcs
-            # query.X is scaled to match ref — project: cells × genes @ genes × pcs
-            Q = query_sceptic.X
-            if scipy.sparse.issparse(Q):
-                Q = Q.toarray()
-            query_sceptic.obsm["X_pca"] = Q @ pca_loadings  # cells × n_pcs
-
-        ref_n_pcs   = ref_sceptic.obsm["X_pca"].shape[1]
-        query_n_pcs = query_sceptic.obsm["X_pca"].shape[1]
-        actual_pcs  = min(n_pcs, ref_n_pcs, query_n_pcs)
-        if actual_pcs < n_pcs:
-            print(f"  WARNING: Using {actual_pcs} PCs (ref={ref_n_pcs}, query={query_n_pcs})")
-        ref_mat      = ref_sceptic.obsm.get("X_pca_harmony", ref_sceptic.obsm["X_pca"])[:, :actual_pcs]
-        query_mat    = query_sceptic.obsm.get("X_pca_harmony", query_sceptic.obsm["X_pca"])[:, :actual_pcs]
-        feature_cols = [f"PC{i+1}" for i in range(actual_pcs)]
-    else:
-        hvg = ref_sceptic.var_names[ref_sceptic.var["highly_variable"]]
-        shared_hvg = hvg[hvg.isin(query_sceptic.var_names)]
-        ref_mat   = ref_sceptic[:, shared_hvg].X
-        query_mat = query_sceptic[:, shared_hvg].X
-        if scipy.sparse.issparse(ref_mat):   ref_mat   = ref_mat.toarray()
-        if scipy.sparse.issparse(query_mat): query_mat = query_mat.toarray()
-        feature_cols = list(shared_hvg)
-
-    data_concat = np.vstack([ref_mat, query_mat])
-    ref_labels   = ref_sceptic.obs["timepoint_numeric"].values.astype(int)
-    query_labels = query_sceptic.obs["timepoint_numeric"].values.astype(int)
-    labels       = np.concatenate([ref_labels, query_labels])
-    label_list   = np.sort(np.unique(labels))
-    cell_ids     = np.concatenate([ref_sceptic.obs_names, query_sceptic.obs_names])
-
-    leiden_labels = np.concatenate([
-        ref_sceptic.obs["leiden"].values,
-        query_sceptic.obs["leiden_ref"].values,
-    ])
-    method_labels = np.concatenate([
-        ref_sceptic.obs["method"].values,
-        query_sceptic.obs["method"].values,
-    ])
-
-    mat_path  = os.path.join(fig_dir, f"sceptic_matrix_{sample}.csv")
-    lab_path  = os.path.join(fig_dir, f"sceptic_labels_{sample}.csv")
-    ll_path   = os.path.join(fig_dir, f"sceptic_label_list_{sample}.csv")
-    meta_path = os.path.join(fig_dir, f"sceptic_metadata_{sample}.csv")
-
-    pd.DataFrame(data_concat, index=cell_ids, columns=feature_cols).to_csv(mat_path)
-    pd.Series(labels, index=cell_ids, name="timepoint").to_csv(lab_path)
-    pd.Series(label_list, name="timepoint").to_csv(ll_path, index=False)
-    pd.DataFrame({
-        "cell_id":   cell_ids,
-        "timepoint": labels,
-        "leiden":    leiden_labels,
-        "method":    method_labels,
-    }).to_csv(meta_path, index=False)
-
-    print(f"SCEPTIC matrix     -> {mat_path}  shape={data_concat.shape}")
-    print(f"SCEPTIC labels     -> {lab_path}")
-    print(f"SCEPTIC label_list -> {ll_path}  values={label_list}")
-    print(f"SCEPTIC metadata   -> {meta_path}")
-
-    return data_concat, labels, label_list
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -697,8 +253,487 @@ def _plot_method_validation(ref, query, fig_dir, sample):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Titer vs cell-cycle cluster analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+def analyze_titer_vs_clusters(query, fig_dir, sample, titer_col="wolbachia_titer",
+                               cluster_col="leiden_ref", n_titer_bins=4):
+    """Test whether wMel titer differs across cell-cycle clusters (query cells only).
+
+    Statistical approach
+    --------------------
+    1. Kruskal-Wallis (omnibus): does titer distribution differ across clusters?
+    2. Dunn's post-hoc pairwise test with Benjamini-Hochberg FDR correction.
+    3. Spearman correlation between titer and cluster identity encoded as
+       median titer rank — summarises the monotonic titer-vs-cluster relationship.
+
+    Outputs
+    -------
+    CSV  : titer_vs_clusters_{sample}_kruskal.csv
+           titer_vs_clusters_{sample}_dunn_posthoc.csv
+    PDF  : titer_vs_clusters_{sample}_violin.pdf
+           titer_vs_clusters_{sample}_umap_titer.pdf
+           titer_vs_clusters_{sample}_titer_bin_composition.pdf
+
+    Parameters
+    ----------
+    query : AnnData
+        Query AnnData with obs[titer_col] and obs[cluster_col].
+    fig_dir : str
+        Output directory for figures and CSV files.
+    sample : str
+        Label used in output file names.
+    titer_col : str
+        obs column containing numeric wMel titer values.
+    cluster_col : str
+        obs column containing cluster labels (leiden_ref by default).
+    n_titer_bins : int
+        Number of quantile bins for the titer-bin composition plot.
+    """
+    obs = query.obs.copy()
+
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if titer_col not in obs.columns:
+        print(f"  WARNING: '{titer_col}' not found in query.obs — skipping titer analysis.")
+        return
+    if cluster_col not in obs.columns:
+        print(f"  WARNING: '{cluster_col}' not found in query.obs — skipping titer analysis.")
+        return
+
+    obs[titer_col]   = pd.to_numeric(obs[titer_col], errors="coerce")
+    obs[cluster_col] = obs[cluster_col].astype(str)
+    obs = obs.dropna(subset=[titer_col, cluster_col])
+
+    n_cells = len(obs)
+    clusters = sorted(obs[cluster_col].unique(), key=lambda x: int(x) if x.isdigit() else x)
+    n_clusters = len(clusters)
+    print(f"\nTiter vs clusters: {n_cells} cells, {n_clusters} clusters")
+
+    # ── 1. Kruskal-Wallis omnibus test ────────────────────────────────────────
+    groups = [obs.loc[obs[cluster_col] == cl, titer_col].values for cl in clusters]
+    kw_stat, kw_p = kruskal(*groups)
+    print(f"  Kruskal-Wallis: H={kw_stat:.3f}, p={kw_p:.3e}")
+
+    kw_df = pd.DataFrame({
+        "test":      ["Kruskal-Wallis"],
+        "statistic": [kw_stat],
+        "p_value":   [kw_p],
+        "n_clusters":[n_clusters],
+        "n_cells":   [n_cells],
+    })
+    kw_df.to_csv(os.path.join(fig_dir, f"titer_vs_clusters_{sample}_kruskal.csv"), index=False)
+
+    # ── 2. Dunn's post-hoc pairwise tests (BH FDR) ───────────────────────────
+    # Dunn's uses the pooled rank sum from the KW test statistic.
+    # We compute it manually to avoid adding scikit-posthocs as a dependency.
+    all_vals   = obs[titer_col].values
+    all_ranks  = scipy.stats.rankdata(all_vals)
+    n_total    = len(all_ranks)
+
+    # Tie correction factor
+    _, counts  = np.unique(all_vals, return_counts=True)
+    tie_factor = np.sum(counts ** 3 - counts) / (12 * (n_total - 1)) if n_total > 1 else 0
+
+    rank_lookup = dict(zip(obs.index, all_ranks))
+    obs["_rank"] = obs.index.map(rank_lookup)
+
+    rows = []
+    for cl_a, cl_b in combinations(clusters, 2):
+        grp_a = obs.loc[obs[cluster_col] == cl_a, "_rank"].values
+        grp_b = obs.loc[obs[cluster_col] == cl_b, "_rank"].values
+        na, nb = len(grp_a), len(grp_b)
+        if na < 2 or nb < 2:
+            continue
+        mean_rank_a = grp_a.mean()
+        mean_rank_b = grp_b.mean()
+        se = np.sqrt(
+            (n_total * (n_total + 1) / 12 - tie_factor) * (1 / na + 1 / nb)
+        )
+        if se == 0:
+            continue
+        z = (mean_rank_a - mean_rank_b) / se
+        p = 2 * scipy.stats.norm.sf(abs(z))
+        rows.append({
+            "cluster_A":     cl_a,
+            "cluster_B":     cl_b,
+            "mean_rank_A":   mean_rank_a,
+            "mean_rank_B":   mean_rank_b,
+            "z_stat":        z,
+            "p_value_raw":   p,
+            "n_A":           na,
+            "n_B":           nb,
+        })
+
+    dunn_df = pd.DataFrame(rows)
+    if len(dunn_df) > 0:
+        _, p_adj, _, _ = multipletests(dunn_df["p_value_raw"], method="fdr_bh")
+        dunn_df["p_adj_BH"] = p_adj
+        dunn_df["significant"] = dunn_df["p_adj_BH"] < 0.05
+        dunn_df = dunn_df.sort_values("p_adj_BH")
+        dunn_df.to_csv(
+            os.path.join(fig_dir, f"titer_vs_clusters_{sample}_dunn_posthoc.csv"), index=False
+        )
+        n_sig = dunn_df["significant"].sum()
+        print(f"  Dunn post-hoc: {n_sig}/{len(dunn_df)} pairs significant (BH FDR < 0.05)")
+
+    # ── 3. Spearman: titer vs median-rank of cluster ──────────────────────────
+    # Each cell is assigned the median titer of its cluster; this gives a
+    # cluster-level ordering for the correlation.
+    cluster_median = obs.groupby(cluster_col)[titer_col].median().to_dict()
+    obs["_cluster_median_titer"] = obs[cluster_col].map(cluster_median)
+    rho, spear_p = spearmanr(obs[titer_col], obs["_cluster_median_titer"])
+    print(f"  Spearman (titer vs cluster median titer rank): rho={rho:.3f}, p={spear_p:.3e}")
+
+    spear_row = pd.DataFrame({
+        "rho":     [rho],
+        "p_value": [spear_p],
+        "n_cells": [n_cells],
+    })
+    spear_row.to_csv(
+        os.path.join(fig_dir, f"titer_vs_clusters_{sample}_spearman.csv"), index=False
+    )
+
+    # ── Cluster summary table (appended to KW CSV as a second sheet is not
+    #    straightforward in plain CSV; write separately instead) ───────────────
+    summary = (
+        obs.groupby(cluster_col)[titer_col]
+        .agg(n_cells="count", median="median", mean="mean", std="std",
+             q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
+        .reset_index()
+        .rename(columns={cluster_col: "cluster"})
+    )
+    summary.to_csv(
+        os.path.join(fig_dir, f"titer_vs_clusters_{sample}_cluster_summary.csv"), index=False
+    )
+
+    # ── Plots ─────────────────────────────────────────────────────────────────
+    leiden_cmap = matplotlib.colormaps["tab20"]
+    cluster_colors = {cl: leiden_cmap(i % 20) for i, cl in enumerate(clusters)}
+
+    # --- Plot 1: Violin + strip per cluster -----------------------------------
+    fig, ax = plt.subplots(figsize=(max(8, n_clusters * 0.9), 5))
+    palette = {cl: cluster_colors[cl] for cl in clusters}
+    sns.violinplot(data=obs, x=cluster_col, y=titer_col, order=clusters,
+                   palette=palette, inner=None, linewidth=0.8, ax=ax, cut=0)
+    sns.stripplot(data=obs, x=cluster_col, y=titer_col, order=clusters,
+                  palette=palette, size=1.5, alpha=0.4, jitter=True, ax=ax)
+    # Annotate median
+    for i, cl in enumerate(clusters):
+        med = cluster_median[cl]
+        ax.scatter(i, med, color="white", s=30, zorder=5, edgecolors="black", linewidths=0.8)
+    ax.set_xlabel("Cluster (cell-cycle phase proxy)")
+    ax.set_ylabel("wMel titer")
+    ax.set_title(
+        f"wMel titer per cell-cycle cluster  |  "
+        f"KW p={kw_p:.2e}  |  Spearman rho={rho:.2f}"
+    )
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f"titer_vs_clusters_{sample}_violin.pdf"),
+                bbox_inches="tight")
+    plt.close()
+
+    # --- Plot 2: UMAP colored by titer ----------------------------------------
+    if "X_umap" in query.obsm:
+        # Re-index obs to align with query cell order
+        obs_aligned = obs.reindex(query.obs.index)
+        titer_vals  = obs_aligned[titer_col].values.astype(float)
+        umap_xy     = query.obsm["X_umap"]
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Left: titer continuous
+        valid = ~np.isnan(titer_vals)
+        sc_ = axes[0].scatter(
+            umap_xy[valid, 0], umap_xy[valid, 1],
+            c=titer_vals[valid], cmap="viridis", s=2, alpha=0.7, rasterized=True,
+        )
+        axes[0].scatter(
+            umap_xy[~valid, 0], umap_xy[~valid, 1],
+            c="lightgrey", s=1, alpha=0.3, rasterized=True,
+        )
+        plt.colorbar(sc_, ax=axes[0], label="wMel titer")
+        axes[0].set_title("wMel titer (continuous)")
+        axes[0].set_xticks([]); axes[0].set_yticks([])
+
+        # Right: cluster labels
+        cluster_vals = obs_aligned[cluster_col].values
+        int_labels   = np.array([
+            clusters.index(str(c)) if str(c) in clusters else -1
+            for c in cluster_vals
+        ])
+        sc2 = axes[1].scatter(
+            umap_xy[:, 0], umap_xy[:, 1],
+            c=int_labels, cmap=matplotlib.colormaps["tab20"].resampled(n_clusters),
+            s=2, alpha=0.7, rasterized=True,
+        )
+        axes[1].set_title("Cell-cycle clusters (transferred from ref)")
+        axes[1].set_xticks([]); axes[1].set_yticks([])
+        for i, cl in enumerate(clusters):
+            axes[1].scatter([], [], color=leiden_cmap(i % 20), label=f"Cluster {cl}", s=10)
+        axes[1].legend(fontsize=6, markerscale=2, bbox_to_anchor=(1.05, 1), loc="upper left")
+
+        plt.suptitle("Query cells: wMel titer on UMAP", fontweight="bold")
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f"titer_vs_clusters_{sample}_umap_titer.pdf"),
+                    bbox_inches="tight", dpi=150)
+        plt.close()
+
+    # --- Plot 3: Titer-bin stacked bar of cluster composition -----------------
+    valid_obs = obs.dropna(subset=[titer_col])
+    if len(valid_obs) > n_titer_bins * 10:
+        bin_labels = [f"Q{i+1}" for i in range(n_titer_bins)]
+        valid_obs = valid_obs.copy()
+        valid_obs["titer_bin"] = pd.qcut(
+            valid_obs[titer_col], q=n_titer_bins, labels=bin_labels, duplicates="drop"
+        )
+        comp = pd.crosstab(valid_obs["titer_bin"], valid_obs[cluster_col], normalize="index") * 100
+        comp = comp.reindex(columns=clusters, fill_value=0)
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        bottom = np.zeros(len(comp))
+        for cl in clusters:
+            vals = comp[cl].values
+            ax.bar(comp.index.astype(str), vals, bottom=bottom,
+                   color=cluster_colors[cl], label=f"Cluster {cl}", width=0.7)
+            bottom += vals
+        ax.set_xlabel(f"wMel titer quantile bin  (Q1=lowest, Q{n_titer_bins}=highest)")
+        ax.set_ylabel("% of cells")
+        ax.set_title("Cell-cycle cluster composition across titer bins")
+        ax.legend(title="Cluster", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f"titer_vs_clusters_{sample}_titer_bin_composition.pdf"),
+                    bbox_inches="tight")
+        plt.close()
+
+    print(f"  Titer analysis outputs written to {fig_dir}/")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Titer vs Cyclum pseudotime analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+def analyze_titer_vs_pseudotime(adata, fig_dir, sample, dataset_label,
+                                 titer_col="wolbachia_titer",
+                                 pseudotime_col="cyclum_pseudotime",
+                                 cluster_col="leiden_ref",
+                                 n_pseudotime_bins=8):
+    """Plot and test the relationship between wMel titer and Cyclum cell-cycle pseudotime.
+
+    Cyclum pseudotime is circular (0–2π), representing position in the cell cycle.
+    Titer is treated as a continuous variable. The analysis tests whether titer
+    varies systematically across the cell cycle using a circular-aware approach:
+    pseudotime is binned into equal-width windows and titer is summarised per bin.
+
+    Statistical approach
+    --------------------
+    Spearman correlation between titer and pseudotime (linear approximation;
+    interpret with caution given circularity — flagged in output).
+
+    Outputs (per dataset_label)
+    ---------------------------
+    PDF : titer_vs_pseudotime_{sample}_{dataset_label}_scatter.pdf
+          titer_vs_pseudotime_{sample}_{dataset_label}_pseudotime_bins.pdf
+    CSV : titer_vs_pseudotime_{sample}_{dataset_label}_spearman.csv
+          titer_vs_pseudotime_{sample}_{dataset_label}_bin_summary.csv
+
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object (ref or query) with obs[titer_col] and obs[pseudotime_col].
+    fig_dir : str
+        Output directory.
+    sample : str
+        Sample label for file names.
+    dataset_label : str
+        Short label distinguishing ref vs query (e.g. "reference", "query").
+    titer_col : str
+        obs column for wMel titer.
+    pseudotime_col : str
+        obs column for Cyclum pseudotime (expected range 0–2π).
+    cluster_col : str
+        obs column for cluster labels; used to color scatter points.
+    n_pseudotime_bins : int
+        Number of equal-width bins across the pseudotime range.
+    """
+    obs = adata.obs.copy()
+    tag = f"{sample}_{dataset_label}"
+
+    # ── Validate ──────────────────────────────────────────────────────────────
+    missing = [c for c in [titer_col, pseudotime_col] if c not in obs.columns]
+    if missing:
+        print(f"  WARNING: {missing} not found in {dataset_label}.obs — skipping pseudotime analysis.")
+        return
+
+    obs[titer_col]       = pd.to_numeric(obs[titer_col],       errors="coerce")
+    obs[pseudotime_col]  = pd.to_numeric(obs[pseudotime_col],  errors="coerce")
+    obs = obs.dropna(subset=[titer_col, pseudotime_col])
+
+    if len(obs) < 20:
+        print(f"  WARNING: fewer than 20 cells with both titer and pseudotime in {dataset_label} — skipping.")
+        return
+
+    print(f"\nTiter vs pseudotime ({dataset_label}): {len(obs)} cells")
+
+    has_clusters = cluster_col in obs.columns
+    if has_clusters:
+        obs[cluster_col] = obs[cluster_col].astype(str)
+        clusters = sorted(obs[cluster_col].unique(), key=lambda x: int(x) if x.isdigit() else x)
+        leiden_cmap = matplotlib.colormaps["tab20"]
+        cluster_color_map = {cl: leiden_cmap(i % 20) for i, cl in enumerate(clusters)}
+        point_colors = [cluster_color_map.get(c, "grey") for c in obs[cluster_col]]
+    else:
+        point_colors = obs[titer_col].values  # fallback: color by titer
+
+    pt  = obs[pseudotime_col].values
+    tit = obs[titer_col].values
+
+    # ── Spearman (linear approximation — circularity caveat noted) ────────────
+    rho, p_val = spearmanr(pt, tit)
+    print(f"  Spearman rho={rho:.3f}, p={p_val:.3e}  "
+          f"(NOTE: pseudotime is circular; interpret linear correlation with caution)")
+
+    spear_df = pd.DataFrame({
+        "dataset":          [dataset_label],
+        "spearman_rho":     [rho],
+        "p_value":          [p_val],
+        "n_cells":          [len(obs)],
+        "note":             ["pseudotime is circular (0-2pi); linear Spearman is approximate"],
+    })
+    spear_df.to_csv(
+        os.path.join(fig_dir, f"titer_vs_pseudotime_{tag}_spearman.csv"), index=False
+    )
+
+    # ── Plot 1: Scatter — pseudotime vs titer, colored by cluster ─────────────
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: raw scatter
+    if has_clusters:
+        for cl in clusters:
+            mask = obs[cluster_col] == cl
+            axes[0].scatter(
+                pt[mask.values], tit[mask.values],
+                c=[cluster_color_map[cl]], s=3, alpha=0.5, label=f"Cluster {cl}",
+                rasterized=True,
+            )
+        axes[0].legend(fontsize=6, markerscale=2, bbox_to_anchor=(1.01, 1),
+                       loc="upper left", title="Cluster")
+    else:
+        sc_ = axes[0].scatter(pt, tit, c=tit, cmap="viridis", s=3, alpha=0.5, rasterized=True)
+        plt.colorbar(sc_, ax=axes[0], label="wMel titer")
+
+    axes[0].set_xlabel("Cyclum pseudotime (radians, 0–2π)")
+    axes[0].set_ylabel("wMel titer")
+    axes[0].set_title(f"{dataset_label}: titer vs pseudotime\nSpearman rho={rho:.3f}, p={p_val:.2e}")
+
+    # Right: LOWESS smoothed trend + scatter (grey)
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    order     = np.argsort(pt)
+    pt_sort   = pt[order]
+    tit_sort  = tit[order]
+    smoothed  = lowess(tit_sort, pt_sort, frac=0.2, return_sorted=True)
+
+    axes[1].scatter(pt, tit, c="lightgrey", s=2, alpha=0.3, rasterized=True)
+    axes[1].plot(smoothed[:, 0], smoothed[:, 1], color="#d62728", linewidth=2,
+                 label="LOWESS (frac=0.2)")
+    axes[1].set_xlabel("Cyclum pseudotime (radians, 0–2π)")
+    axes[1].set_ylabel("wMel titer")
+    axes[1].set_title(f"{dataset_label}: LOWESS trend")
+    axes[1].legend()
+
+    # Add π tick labels on x-axis for both panels
+    for ax in axes[:2]:
+        ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+        ax.set_xticklabels(["0", "π/2", "π", "3π/2", "2π"])
+
+    plt.suptitle(f"wMel titer vs Cyclum cell-cycle pseudotime  [{dataset_label}]",
+                 fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f"titer_vs_pseudotime_{tag}_scatter.pdf"),
+                bbox_inches="tight", dpi=150)
+    plt.close()
+
+    # ── Plot 2: Titer distribution binned by pseudotime windows ───────────────
+    pt_min = obs[pseudotime_col].min()
+    pt_max = obs[pseudotime_col].max()
+    bin_edges  = np.linspace(pt_min, pt_max, n_pseudotime_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    bin_labels  = [f"{e:.2f}" for e in bin_edges[:-1]]
+
+    obs["_pt_bin"] = pd.cut(
+        obs[pseudotime_col], bins=bin_edges, labels=bin_labels, include_lowest=True
+    )
+    obs_binned = obs.dropna(subset=["_pt_bin"])
+
+    # Per-bin summary for CSV
+    bin_summary = (
+        obs_binned.groupby("_pt_bin", observed=True)[titer_col]
+        .agg(n_cells="count", median="median", mean="mean", std="std",
+             q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
+        .reset_index()
+        .rename(columns={"_pt_bin": "pseudotime_bin_start"})
+    )
+    bin_summary["bin_center_radians"] = bin_centers
+    bin_summary.to_csv(
+        os.path.join(fig_dir, f"titer_vs_pseudotime_{tag}_bin_summary.csv"), index=False
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+    # Left: violin per bin
+    bin_order = [str(b) for b in bin_labels]
+    palette   = sns.color_palette("coolwarm", n_colors=n_pseudotime_bins)
+    sns.violinplot(data=obs_binned, x="_pt_bin", y=titer_col, order=bin_order,
+                   palette=palette, inner=None, linewidth=0.8, ax=axes[0], cut=0)
+    sns.stripplot(data=obs_binned, x="_pt_bin", y=titer_col, order=bin_order,
+                  color="black", size=1, alpha=0.3, jitter=True, ax=axes[0])
+    # Median dots
+    for i, bl in enumerate(bin_labels):
+        med = obs_binned.loc[obs_binned["_pt_bin"] == bl, titer_col].median()
+        axes[0].scatter(i, med, color="white", s=25, zorder=5,
+                        edgecolors="black", linewidths=0.8)
+    axes[0].set_xlabel("Pseudotime bin (start, radians)")
+    axes[0].set_ylabel("wMel titer")
+    axes[0].set_title(f"{dataset_label}: titer per pseudotime bin")
+    axes[0].tick_params(axis="x", rotation=45)
+
+    # Right: median titer across pseudotime bins (line plot with IQR ribbon)
+    medians = bin_summary["median"].values
+    q25_    = bin_summary["q25"].values
+    q75_    = bin_summary["q75"].values
+    x_      = bin_summary["bin_center_radians"].values
+
+    axes[1].plot(x_, medians, "o-", color="#d62728", linewidth=2, markersize=5,
+                 label="Median titer")
+    axes[1].fill_between(x_, q25_, q75_, alpha=0.25, color="#d62728", label="IQR")
+    axes[1].set_xlabel("Pseudotime bin center (radians)")
+    axes[1].set_ylabel("wMel titer")
+    axes[1].set_title(f"{dataset_label}: median titer ± IQR across pseudotime")
+    axes[1].set_xticks(x_)
+    axes[1].set_xticklabels([f"{v:.2f}" for v in x_], rotation=45)
+    axes[1].legend()
+
+    plt.suptitle(f"wMel titer across cell-cycle pseudotime bins  [{dataset_label}]",
+                 fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(os.path.join(fig_dir, f"titer_vs_pseudotime_{tag}_pseudotime_bins.pdf"),
+                bbox_inches="tight", dpi=150)
+    plt.close()
+
+    print(f"  Pseudotime analysis outputs written to {fig_dir}/ (tag: {tag})")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _sanitize_obs(adata):
+    """Cast object/category obs columns to str and replace 'nan' with 'NA'."""
+    for col in adata.obs.columns:
+        if adata.obs[col].dtype == object or str(adata.obs[col].dtype) == "category":
+            adata.obs[col] = adata.obs[col].astype(str).replace("nan", "NA")
+    return adata
+
 
 def integrate(
     files,
@@ -709,126 +744,108 @@ def integrate(
     min_cells,
     min_genes,
     n_pcs=30,
-    optimize_resolution=True,
-    resolutions=None,
     leiden_resolution=0.5,
-    sceptic_use_pca=True,
-    ref_condition=None,  # str or list of str
+    ref_condition=None,
 ):
+    """Run staged integration: subset query cells, ingest onto reference, save outputs.
+
+    Parameters
+    ----------
+    files : list[str]
+        [0] Full integrated h5ad (all timepoints, Harmony-corrected).
+        [1] Reference h5ad (pre-built: Harmony-corrected, scaled, PCA/UMAP/leiden).
+    out_path : str
+        Base path for output h5ad files (_reference, _query, _combined suffixes added).
+    fig_dir : str
+        Directory for output figures.
+    sample : str
+        Sample label for figure file names.
+    batch_key : str
+        Obs column used for batch correction (passed through, not re-run here).
+    min_cells : int
+        Minimum cells per gene (informational; filtering handled upstream).
+    min_genes : int
+        Minimum genes per cell for query QC filtering.
+    n_pcs : int
+        Number of PCs (informational; PCA already computed in reference).
+    leiden_resolution : float
+        Resolution used when building the reference (used in summary output only).
+    ref_condition : str or list[str] or None
+        cell_line value(s) that define the reference (default: ["JW18DOX"]).
+        Used only to define the query mask on files[0]; files[1] IS the reference.
+    """
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
 
-    adatas_all = []
-    for fp in files:
-        adata = sc.read_h5ad(fp)
-        adata.obs[batch_key] = os.path.splitext(os.path.basename(fp))[0]
-        adatas_all.append(adata)
+    # files[0]: full integrated object — used only to identify query cells
+    # files[1]: pre-built reference — passed directly to sc.tl.ingest
+    adata_full = sc.read_h5ad(files[0])
+    ref        = sc.read_h5ad(files[1])
 
-    combined_tmp = ad.concat(adatas_all, join="inner", merge="same", index_unique="-")
-    combined_tmp = add_metadata(combined_tmp, batch_key)
+    print(f"Loaded full object : {adata_full.n_obs} cells")
+    print(f"Loaded reference   : {ref.n_obs} cells, "
+          f"{ref.obs['leiden'].nunique()} clusters")
 
-    available_cell_lines = combined_tmp.obs["cell_line"].dropna().unique().tolist()
-
-    # --ref_conditions accepts one or more cell_line values.
-    # Default: JW18DOX only. Pass "JW18DOX JW18wMel" to use both controls.
-    # In all cases only treatment=="Ctrl" rows are included in the reference;
-    # SV timepoint rows (e.g. JW18DOX-SV-D1) are always excluded.
+    # Resolve reference conditions for query masking
     if ref_condition is None:
         ref_conditions = ["JW18DOX"]
         print(f"No --ref_condition specified. Defaulting to: {ref_conditions}")
     else:
-        # ref_condition may be a single string or list depending on nargs
         ref_conditions = ref_condition if isinstance(ref_condition, list) else [ref_condition]
 
-    invalid = [c for c in ref_conditions if c not in available_cell_lines]
-    if invalid:
-        raise ValueError(
-            f"--ref_condition {invalid} not found in data. "
-            f"Available cell lines: {available_cell_lines}"
-        )
-
-    # Reference = specified cell lines AND treatment == Ctrl only
-    ref_mask = (
-        combined_tmp.obs["cell_line"].isin(ref_conditions) &
-        (combined_tmp.obs["treatment"] == "Ctrl")
-    )
-    # Query = any cell line NOT in ref_conditions AND treatment != Ctrl
+    # Query = cells NOT in ref_conditions OR treatment != Ctrl
     # (i.e. the intermediate SV timepoints)
     query_mask = (
-        ~combined_tmp.obs["cell_line"].isin(ref_conditions) |
-        (combined_tmp.obs["cell_line"].isin(ref_conditions) &
-         (combined_tmp.obs["treatment"] != "Ctrl"))
+        ~adata_full.obs["cell_line"].isin(ref_conditions) |
+        (adata_full.obs["treatment"] != "Ctrl")
     )
-    # But exclude non-ref cell lines that are stable controls from the query too —
-    # only include SV timepoint rows as query
-    query_mask = combined_tmp.obs["treatment"] == "SV"
-
-    # Report what's excluded
-    excluded = (
-        combined_tmp.obs["cell_line"].isin(ref_conditions) &
-        (combined_tmp.obs["treatment"] != "Ctrl")
-    )
-    if excluded.sum() > 0:
-        print(f"  NOTE: Excluded {excluded.sum()} ref cell_line cells with treatment != Ctrl:")
-        print(combined_tmp.obs.loc[excluded, "bio_condition"].value_counts().to_string())
 
     print(f"Reference conditions : {ref_conditions} (treatment=Ctrl only)")
-    print(f"Reference breakdown  :")
-    print(combined_tmp.obs.loc[ref_mask, "bio_condition"].value_counts().to_string())
-    print(f"Reference cells      : {ref_mask.sum()}")
     print(f"Query (SV timepoints):")
-    print(combined_tmp.obs.loc[query_mask, "bio_condition"].value_counts().to_string())
+    print(adata_full.obs.loc[query_mask, "bio_condition"].value_counts().to_string())
     print(f"Query cells          : {query_mask.sum()}")
 
     if query_mask.sum() == 0:
         raise ValueError("No query cells found (expected treatment=SV timepoint rows).")
-    if ref_mask.sum() == 0:
-        raise ValueError(f"No reference cells found for conditions: {ref_conditions}.")
 
-    adata_ref   = combined_tmp[ref_mask].copy()
-    adata_query = combined_tmp[query_mask].copy()
-
-    ref, final_resolution = build_reference(
-        adata_ref, batch_key=batch_key,
-        min_genes=min_genes, min_cells=min_cells, n_pcs=n_pcs,
-        fig_dir=fig_dir, sample=sample,
-        optimize_resolution=optimize_resolution,
-        resolutions=resolutions,
-        leiden_resolution=leiden_resolution,
-    )
+    adata_query = adata_full[query_mask].copy()
 
     query, combined = map_query_to_reference(
-        adata_query, ref=ref, batch_key=batch_key,
-        min_genes=min_genes, n_pcs=n_pcs,
+        adata_query, ref=ref,
+        min_genes=min_genes,
         fig_dir=fig_dir, sample=sample,
     )
 
-    export_sceptic(ref, query, fig_dir=fig_dir, sample=sample,
-                   use_pca=sceptic_use_pca, n_pcs=n_pcs)
+    analyze_titer_vs_clusters(query, fig_dir=fig_dir, sample=sample)
 
-    def _sanitize_obs(adata):
-        for col in adata.obs.columns:
-            if adata.obs[col].dtype == object or str(adata.obs[col].dtype) == "category":
-                adata.obs[col] = adata.obs[col].astype(str).replace("nan", "NA")
-        return adata
+    analyze_titer_vs_pseudotime(ref,   fig_dir=fig_dir, sample=sample,
+                                 dataset_label="reference",
+                                 cluster_col="leiden")
+    analyze_titer_vs_pseudotime(query, fig_dir=fig_dir, sample=sample,
+                                 dataset_label="query",
+                                 cluster_col="leiden_ref")
 
     ref      = _sanitize_obs(ref)
     query    = _sanitize_obs(query)
     combined = _sanitize_obs(combined)
 
-    ref.write(out_path.replace(".h5ad", "_reference.h5ad"))
-    query.write(out_path.replace(".h5ad", "_query.h5ad"))
-    combined.write(out_path.replace(".h5ad", "_combined.h5ad"))
+    ref_out      = out_path.replace(".h5ad", "_reference.h5ad")
+    query_out    = out_path.replace(".h5ad", "_query.h5ad")
+    combined_out = out_path.replace(".h5ad", "_combined.h5ad")
+
+    ref.write(ref_out)
+    query.write(query_out)
+    combined.write(combined_out)
 
     print("\n" + "=" * 60)
     print("COMPLETE")
     print("=" * 60)
-    print(f"Reference  -> {out_path.replace('.h5ad','_reference.h5ad')}")
-    print(f"Query      -> {out_path.replace('.h5ad','_query.h5ad')}")
-    print(f"Combined   -> {out_path.replace('.h5ad','_combined.h5ad')}")
+    print(f"Reference  -> {ref_out}")
+    print(f"Query      -> {query_out}")
+    print(f"Combined   -> {combined_out}")
     print(f"Figures    -> {fig_dir}/")
     print(f"Reference: {ref.n_obs} cells, {ref.obs['leiden'].nunique()} clusters "
-          f"at resolution={final_resolution}")
+          f"at resolution={leiden_resolution}")
     print(f"Query:     {query.n_obs} cells across "
           f"{query.obs['timepoint'].nunique()} timepoints")
 
@@ -839,25 +856,21 @@ def integrate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Staged scRNA-seq integration: method-only correction -> ingest -> SCEPTIC export"
+        description="Staged scRNA-seq integration: ingest query cells onto pre-built reference"
     )
-    parser.add_argument("--files",      required=True, nargs="+")
-    parser.add_argument("--sample",     default="wolbachia_infection")
-    parser.add_argument("--batch_key",  default="batch")
-    parser.add_argument("--min_cells",  type=int, default=3)
-    parser.add_argument("--min_genes",  type=int, default=200)
-    parser.add_argument("--out_path",   default="integrated.h5ad")
-    parser.add_argument("--fig_dir",    default="figures")
-    parser.add_argument("--n_pcs",      type=int, default=30)
-    parser.add_argument("--resolution", type=float, default=0.5)
-    parser.add_argument("--optimize_resolution", action="store_true", default=True)
-    parser.add_argument("--no_optimize_resolution", dest="optimize_resolution",
-                        action="store_false")
-    parser.add_argument("--resolutions", type=float, nargs="+", default=None)
-    parser.add_argument("--sceptic_raw_counts", action="store_true", default=False)
-    parser.add_argument("--ref_condition", type=str, nargs="+", default=None,
-                        help="One or more cell_line values to use as reference "
-                             "(default: JW18DOX). Example: --ref_condition JW18DOX JW18wMel")
+    parser.add_argument("--files", required=True, nargs="+",
+                        help="[0] Full integrated h5ad  [1] Pre-built reference h5ad")
+    parser.add_argument("--sample",        default="wolbachia_infection")
+    parser.add_argument("--batch_key",     default="batch")
+    parser.add_argument("--min_cells",     type=int,   default=3)
+    parser.add_argument("--min_genes",     type=int,   default=200)
+    parser.add_argument("--out_path",      default="integrated.h5ad")
+    parser.add_argument("--fig_dir",       default="figures")
+    parser.add_argument("--n_pcs",         type=int,   default=30)
+    parser.add_argument("--resolution",    type=float, default=0.5)
+    parser.add_argument("--ref_condition", type=str,   nargs="+", default=None,
+                        help="cell_line value(s) used to define query mask on files[0] "
+                             "(default: JW18DOX). files[1] is always used as the reference.")
 
     args = parser.parse_args()
 
@@ -870,10 +883,7 @@ def main():
         min_cells=args.min_cells,
         min_genes=args.min_genes,
         n_pcs=args.n_pcs,
-        optimize_resolution=args.optimize_resolution,
-        resolutions=args.resolutions,
         leiden_resolution=args.resolution,
-        sceptic_use_pca=not args.sceptic_raw_counts,
         ref_condition=args.ref_condition,
     )
 
