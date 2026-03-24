@@ -15,6 +15,7 @@ filter_script: "../snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata.
 cell_cycle_script: "../snakemake_scripts/analysis/cyclum_cell_cycle.py"
 cyclum_analysis_script: "../snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"
 transcripts_to_genes: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
+project_cell_cycle_script: "scripts/method_comparison/integrate_by_ref.py"
 
 # Compute resources for cellranger 
 cellranger_threads: 16
