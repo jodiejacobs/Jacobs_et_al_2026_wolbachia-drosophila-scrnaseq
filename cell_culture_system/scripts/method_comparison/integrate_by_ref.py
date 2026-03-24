@@ -10,6 +10,14 @@ Strategy
 3. Map (ingest) query cells onto the reference.
 4. Project cluster labels and UMAP coordinates to query cells.
 
+Run with:
+mamba activate scanpy 
+python scripts/method_comparison/integrate_by_ref.py \
+    --ref results/integrated/integrated_uninfected_with_cellcycle.h5ad \
+    --query results/integrated/integrated_uninfected.h5ad \
+    --out_path results/integrated/integrated_by_cellcycle.h5ad 
+    
+
 """
 
 import os
@@ -736,7 +744,8 @@ def _sanitize_obs(adata):
 
 
 def integrate(
-    files,
+    ref,
+    query,
     out_path,
     fig_dir,
     sample,
@@ -751,9 +760,10 @@ def integrate(
 
     Parameters
     ----------
-    files : list[str]
-        [0] Full integrated h5ad (all timepoints, Harmony-corrected).
-        [1] Reference h5ad (pre-built: Harmony-corrected, scaled, PCA/UMAP/leiden).
+    ref : str
+        Reference h5ad (pre-built: Harmony-corrected, scaled, PCA/UMAP/leiden).
+    query : str
+        Query h5ad (to be ingested onto reference).
     out_path : str
         Base path for output h5ad files (_reference, _query, _combined suffixes added).
     fig_dir : str
@@ -779,8 +789,8 @@ def integrate(
 
     # files[0]: full integrated object — used only to identify query cells
     # files[1]: pre-built reference — passed directly to sc.tl.ingest
-    adata_full = sc.read_h5ad(files[0])
-    ref        = sc.read_h5ad(files[1])
+    adata_full = sc.read_h5ad(query)
+    ref        = sc.read_h5ad(ref)
 
     print(f"Loaded full object : {adata_full.n_obs} cells")
     print(f"Loaded reference   : {ref.n_obs} cells, "
@@ -858,13 +868,15 @@ def main():
     parser = argparse.ArgumentParser(
         description="Staged scRNA-seq integration: ingest query cells onto pre-built reference"
     )
-    parser.add_argument("--files", required=True, nargs="+",
-                        help="[0] Full integrated h5ad  [1] Pre-built reference h5ad")
+    parser.add_argument("--ref", required=True, nargs="+",
+                        help="Pre-built reference h5ad") 
+    parser.add_argument("--query", required=True, nargs="+",
+                        help="Query h5ad (to be ingested onto reference)")
     parser.add_argument("--sample",        default="wolbachia_infection")
     parser.add_argument("--batch_key",     default="batch")
     parser.add_argument("--min_cells",     type=int,   default=3)
     parser.add_argument("--min_genes",     type=int,   default=200)
-    parser.add_argument("--out_path",      default="integrated.h5ad")
+    parser.add_argument("--out_path",      default="all_integrated_by_cellcycle.h5ad")
     parser.add_argument("--fig_dir",       default="figures")
     parser.add_argument("--n_pcs",         type=int,   default=30)
     parser.add_argument("--resolution",    type=float, default=0.5)
@@ -875,7 +887,8 @@ def main():
     args = parser.parse_args()
 
     integrate(
-        files=args.files,
+        ref=args.ref,
+        query=args.query,
         out_path=args.out_path,
         fig_dir=args.fig_dir,
         sample=args.sample,

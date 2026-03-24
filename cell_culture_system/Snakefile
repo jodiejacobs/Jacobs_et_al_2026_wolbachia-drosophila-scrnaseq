@@ -105,6 +105,7 @@ rule all:
         "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
         # Cell cycle
         "results/cellcycle/.done",
+        "results/integrated/integrated_by_cellcycle.h5ad",
         # Cluster marker + pathway analysis
         expand("results/cluster_marker_pathway/{sample}/.done",
                sample=["wolbachia_infection"]),
@@ -802,6 +803,36 @@ rule cell_cycle_analysis:
             --save-output
 
         echo "Cell cycle analysis complete"
+        """
+
+rule project_to_cell_cycle:
+    input:
+        query_h5ad = "results/integrated/integrated_with_cellcycle.h5ad",
+        ref_h5ad   = "results/integrated/integrated_uninfected_with_cellcycle.h5ad"
+    output:
+        projected_h5ad = "results/integrated/integrated_by_cellcycle.h5ad",
+        flag           = touch("results/cellcycle_projection/.done")
+    params:
+        script = config["project_cell_cycle_script"]
+    log:
+       "logs/cellcycle/projection.log"
+    threads:
+        config.get("cellcycle_projection_threads", 4)
+    resources:
+        slurm_partition = config.get("cellcycle_projection_partition", "medium"),
+        mem_mb          = config.get("cellcycle_projection_mem", 32000),
+        slurm_time      = config.get("cellcycle_projection_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cell cycle projection"   
+
+        mamba activate scanpy 
+
+        python {params.script} \
+            --query {input.query_h5ad} \
+            --reference {input.ref_h5ad} \
+            --output {output.projected_h5ad}
         """
 
 rule cluster_marker_pathway:
