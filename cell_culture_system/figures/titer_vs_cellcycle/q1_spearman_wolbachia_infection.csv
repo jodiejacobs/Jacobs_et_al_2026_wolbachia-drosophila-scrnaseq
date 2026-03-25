@@ -1,0 +1,2 @@
+spearman_rho,p_value,n_cells,note
+-0.011541007082160592,0.07807560720048361,23309,cc_pseudotime is cluster-median from reference; Spearman is approximate and at cluster resolution

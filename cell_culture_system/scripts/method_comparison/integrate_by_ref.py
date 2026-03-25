@@ -1,29 +1,27 @@
 """
 titer_vs_cellcycle.py
 =====================
-Tests the relationship between wMel titer and cell cycle phase in Drosophila JW18 cells.
+Tests the relationship between wMel titer and cell cycle in infected Drosophila JW18 cells.
 
 Strategy
 --------
-1. Load pre-built reference (uninfected, Harmony-corrected, Leiden-clustered, UMAP embedded).
-   Leiden clusters serve as cell-cycle phase proxies (validated by Cyclum pseudotime).
-2. Load query (infected/SV timepoint cells with wolbachia_titer in obs).
-3. Ingest query onto reference → transfer Leiden cluster labels as cell-cycle phase proxy.
-4. Test three biological questions:
-   Q1. Is wMel titer correlated with cell-cycle pseudotime? (linear + LOWESS scatter)
-   Q2. Does cell-cycle phase distribution shift with titer? (titer-binned cluster composition)
-   Q3. Do cells in different cell-cycle phases carry different titers? (KW + Dunn post-hoc)
+1. Load pre-built reference (uninfected, Harmony-corrected, Leiden-clustered, Cyclum-annotated).
+2. Subset full integrated object to infected cells (treatment != Ctrl).
+3. Ingest query onto reference → transfer Leiden cluster labels.
+4. Map Leiden → cyclum_stage using the reference's per-cluster majority vote.
+5. Optionally assign pseudotime as per-cluster median from reference.
+6. Run three biological questions:
+   Q1. wMel titer vs cell-cycle pseudotime (scatter + LOWESS + binned ribbon)
+   Q2. Cell-cycle phase distribution across titer bins (chi-squared + stacked bar + heatmap)
+   Q3. Titer differs by CC phase (KW + Dunn post-hoc + violin + polar cyclicity)
 
 Run with:
     mamba activate scanpy
     python scripts/method_comparison/titer_vs_cellcycle.py \
-        --ref   results/integrated_by_refintegrated_uninfected_with_cellcycle.h5ad \
-        --query results/integrated_by_refintegrated_all_timepoints.h5ad \
-        --out_path results/integrated_by_reftiter_cellcycle.h5ad \
-        --fig_dir  results/integrated_by_ref/figures/titer_vs_cellcycle \
-        --titer_col wolbachia_titer \
-        --pseudotime_col cyclum_pseudotime \
-        --ref_condition JW18DOX
+        --ref     results/integrated/integrated_uninfected_with_cellcycle.h5ad \
+        --query   results/integrated/integrated.h5ad \
+        --out_path results/integrated/titer_cellcycle.h5ad \
+        --fig_dir  figures/titer_vs_cellcycle
 """
 
 import os
@@ -33,11 +31,10 @@ import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import seaborn as sns
 import scipy.sparse
 import scipy.stats
-from scipy.stats import kruskal, spearmanr
+from scipy.stats import kruskal, spearmanr, chi2_contingency
 from itertools import combinations
 from statsmodels.stats.multitest import multipletests
 from statsmodels.nonparametric.smoothers_lowess import lowess
@@ -46,13 +43,15 @@ import scanpy as sc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Colour helpers
+# Colours
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _cluster_palette(clusters):
-    """Return a dict {cluster_label: RGBA} using tab20."""
-    cmap = matplotlib.colormaps["tab20"]
-    return {cl: cmap(i % 20) for i, cl in enumerate(clusters)}
+CC_ORDER  = ["g0/g1", "s", "g2/m"]
+CC_COLORS = {"g0/g1": "#4C72B0", "s": "#DD8452", "g2/m": "#55A868"}
+
+def _cc_palette(stages):
+    cmap = matplotlib.colormaps["tab10"]
+    return {s: CC_COLORS.get(s, cmap(i % 10)) for i, s in enumerate(stages)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,45 +59,34 @@ def _cluster_palette(clusters):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ingest_query(adata_query, ref, min_genes, fig_dir, sample):
-    """Project infected-timepoint cells onto the uninfected cell-cycle reference.
+    """Project infected cells onto uninfected CC reference via sc.tl.ingest.
 
-    Parameters
-    ----------
-    adata_query : AnnData
-        Raw-count query cells (infected / SV timepoints) with wolbachia_titer in obs.
-    ref : AnnData
-        Pre-built reference: HVGs in var, scaled X, PCA + UMAP in obsm,
-        Leiden cluster labels in obs["leiden"].
-    min_genes : int
-        Minimum genes per cell (QC filter applied to query only).
-    fig_dir : str
-        Figure output directory.
-    sample : str
-        Label used in output filenames.
+    Transfers leiden cluster label from reference. CC stage and pseudotime are
+    then assigned from the reference cluster→stage/pseudotime mapping in the
+    calling function.
 
     Returns
     -------
     query : AnnData
-        Query with X_umap projected from reference and obs["cc_cluster"] = transferred
-        Leiden label (cell-cycle phase proxy).
+        Query with X_umap projected from reference and obs["leiden_ref"].
     """
     query = adata_query.copy()
     print(f"\n── Ingest: {query.n_obs} query cells ──")
-    print(f"   Timepoints : {query.obs['timepoint'].value_counts().to_dict()}")
-    print(f"   Methods    : {query.obs['method'].value_counts().to_dict()}")
+    print(f"   bio_condition : {query.obs['bio_condition'].value_counts().to_dict()}")
+    print(f"   methods       : {query.obs['method'].value_counts().to_dict()}")
 
-    # ── Gene universe: subset query to HVGs present in reference ──────────────
+    # ── Restrict to reference gene universe ───────────────────────────────────
     ref_genes = ref.raw.var_names if ref.raw is not None else ref.var_names
     query = query[:, query.var_names.isin(ref_genes)].copy()
 
-    # ── QC filtering ──────────────────────────────────────────────────────────
+    # ── QC ────────────────────────────────────────────────────────────────────
     if scipy.sparse.issparse(query.X):
         query.X.eliminate_zeros()
     sc.pp.filter_cells(query, min_genes=min_genes)
     sc.pp.filter_cells(query, min_counts=1)
     sc.pp.filter_genes(query, min_counts=1)
 
-    # ── Densify and sanitise ──────────────────────────────────────────────────
+    # ── Densify + sanitise ────────────────────────────────────────────────────
     if scipy.sparse.issparse(query.X):
         query.X = query.X.toarray()
     query.X = np.nan_to_num(query.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
@@ -108,7 +96,7 @@ def ingest_query(adata_query, ref, min_genes, fig_dir, sample):
     # ── Store raw counts before scaling ───────────────────────────────────────
     query.raw = query
 
-    # ── Pad missing reference HVGs with zeros ─────────────────────────────────
+    # ── Pad missing HVGs with zeros + reorder to match reference ──────────────
     missing = ref.var_names[~ref.var_names.isin(query.var_names)]
     if len(missing):
         print(f"   WARNING: {len(missing)} ref HVGs absent from query — zero-padding")
@@ -118,333 +106,411 @@ def ingest_query(adata_query, ref, min_genes, fig_dir, sample):
             obs=query.obs.copy(),
             var=pd.DataFrame(index=list(query.var_names) + list(missing)),
         )
-
-    # Reorder to match reference exactly (required by sc.tl.ingest)
     query = query[:, ref.var_names].copy()
     sc.pp.scale(query, max_value=10)
     query.var["highly_variable"] = True
 
-    # ── sc.tl.ingest: project UMAP + transfer Leiden ──────────────────────────
+    # ── sc.tl.ingest ──────────────────────────────────────────────────────────
     obs_backup = query.obs.copy()
     print("   Running sc.tl.ingest …")
     sc.tl.ingest(query, ref, obs="leiden", embedding_method="umap")
     leiden_xfer = query.obs["leiden"].copy()
     query.obs = obs_backup
-    query.obs["cc_cluster"] = leiden_xfer.values  # cell-cycle cluster proxy
+    query.obs["leiden_ref"] = leiden_xfer.values
 
-    print(f"   Cell-cycle cluster distribution (query):")
-    print(query.obs["cc_cluster"].value_counts().sort_index().to_string())
-
-    # ── Quick sanity-check UMAP ───────────────────────────────────────────────
-    sc.pl.umap(query, color=["cc_cluster", "timepoint", "method"],
-               save=f"_{sample}_query_ingested.pdf", ncols=3,
-               title=["CC cluster (from ref)", "Timepoint", "Method"])
-
-    # Joint ref + query UMAP
-    ref_plot = ref.copy()
-    ref_plot.obs["dataset"]    = "uninfected (ref)"
-    ref_plot.obs["cc_cluster"] = ref_plot.obs["leiden"]
-    ref_plot.obs["timepoint"]  = ref_plot.obs["timepoint"].astype(str).fillna("uninfected")
-    query.obs["dataset"]       = "infected (" + query.obs["timepoint"].astype(str).fillna("?") + ")"
-
-    common = ref_plot.var_names.intersection(query.var_names)
-    combined_umap = ad.concat(
-        [ref_plot[:, common], query[:, common]], join="inner", index_unique="-"
-    )
-    sc.pl.umap(combined_umap, color=["dataset", "cc_cluster", "timepoint"],
-               save=f"_{sample}_combined_ref_query.pdf", ncols=3,
-               title=["Dataset", "CC cluster", "Timepoint"])
+    print(f"   Transferred leiden_ref distribution:")
+    print(query.obs["leiden_ref"].value_counts().sort_index().to_string())
 
     return query
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q1 — titer vs cell-cycle pseudotime (linear scatter + LOWESS)
+# Step 2 — Map leiden_ref → CC stage + pseudotime from reference
 # ─────────────────────────────────────────────────────────────────────────────
 
-def q1_titer_vs_pseudotime(query, fig_dir, sample,
-                            titer_col="wolbachia_titer",
-                            pseudotime_col="cyclum_pseudotime",
-                            cluster_col="cc_cluster",
-                            n_bins=8):
-    """Q1: Is wMel titer correlated with position in the cell cycle?
+def assign_cc_from_reference(query, ref,
+                              stage_col="cyclum_stage",
+                              pseudotime_col="cyclum_pseudotime",
+                              leiden_col="leiden"):
+    """Assign CC stage and pseudotime to query cells using reference cluster mappings.
 
-    Cyclum pseudotime is circular (0–2π). Linear Spearman is an approximation;
-    this is flagged explicitly in the output CSV.
+    For each leiden cluster in the reference:
+      - CC stage   : majority vote of cyclum_stage within that cluster
+      - Pseudotime : median cyclum_pseudotime within that cluster
 
-    Outputs
+    These are cluster-level summaries, not single-cell projections — appropriate
+    for downstream group comparisons but not for fine-grained pseudotime analysis.
+    Both assignments are flagged in the query obs with '_source' columns.
+
+    Parameters
+    ----------
+    query : AnnData
+        Query with obs["leiden_ref"] from ingest.
+    ref : AnnData
+        Reference with obs[stage_col] and obs[pseudotime_col].
+
+    Returns
     -------
-    PDF : q1_titer_vs_pseudotime_{sample}.pdf   (scatter + LOWESS + binned ribbon)
-    CSV : q1_titer_vs_pseudotime_{sample}_spearman.csv
-          q1_titer_vs_pseudotime_{sample}_bin_summary.csv
+    query : AnnData
+        Query with obs["cc_stage"] and obs["cc_pseudotime"] added.
+    cluster_map : pd.DataFrame
+        Per-cluster mapping table (leiden → cc_stage, median_pseudotime, n_cells, purity).
     """
-    tag = f"q1_titer_vs_pseudotime_{sample}"
-    obs = query.obs.copy()
+    if stage_col not in ref.obs.columns:
+        raise ValueError(f"'{stage_col}' not in reference obs. "
+                         f"Available: {list(ref.obs.columns)}")
+
+    ref_obs = ref.obs[[leiden_col, stage_col]].copy()
+    ref_obs[leiden_col] = ref_obs[leiden_col].astype(str)
+
+    # Majority-vote CC stage per cluster
+    def majority(x):
+        return x.value_counts().idxmax()
+
+    def purity(x):
+        vc = x.value_counts()
+        return vc.iloc[0] / vc.sum()
+
+    stage_map = (ref_obs.groupby(leiden_col)[stage_col]
+                         .agg(cc_stage=majority, purity=purity)
+                         .reset_index()
+                         .rename(columns={leiden_col: "cluster"}))
+
+    # Median pseudotime per cluster (if available)
+    if pseudotime_col in ref.obs.columns:
+        pt_map = (ref.obs[[leiden_col, pseudotime_col]]
+                     .copy()
+                     .assign(**{leiden_col: ref.obs[leiden_col].astype(str)})
+                     .groupby(leiden_col)[pseudotime_col]
+                     .median()
+                     .reset_index()
+                     .rename(columns={leiden_col: "cluster",
+                                      pseudotime_col: "median_pseudotime"}))
+        stage_map = stage_map.merge(pt_map, on="cluster", how="left")
+    else:
+        stage_map["median_pseudotime"] = np.nan
+
+    # Count reference cells per cluster
+    n_ref = ref_obs[leiden_col].value_counts().rename("n_ref_cells").reset_index()
+    n_ref.columns = ["cluster", "n_ref_cells"]
+    stage_map = stage_map.merge(n_ref, on="cluster", how="left")
+
+    print("\n── Cluster → CC stage mapping (from reference) ──")
+    print(stage_map.sort_values("cluster").to_string(index=False))
+
+    # Warn about low-purity clusters
+    low_purity = stage_map[stage_map["purity"] < 0.6]
+    if len(low_purity):
+        print(f"\n   WARNING: {len(low_purity)} clusters have CC stage purity < 60%:")
+        print(low_purity[["cluster", "cc_stage", "purity"]].to_string(index=False))
+
+    # Apply to query
+    cluster_to_stage = dict(zip(stage_map["cluster"], stage_map["cc_stage"]))
+    cluster_to_pt    = dict(zip(stage_map["cluster"], stage_map["median_pseudotime"]))
+
+    query.obs["leiden_ref"]   = query.obs["leiden_ref"].astype(str)
+    query.obs["cc_stage"]     = query.obs["leiden_ref"].map(cluster_to_stage)
+    query.obs["cc_pseudotime"] = query.obs["leiden_ref"].map(cluster_to_pt).astype(float)
+
+    n_unmapped = query.obs["cc_stage"].isna().sum()
+    if n_unmapped:
+        print(f"\n   WARNING: {n_unmapped} query cells did not map to a known cluster")
+
+    print(f"\n   Query CC stage distribution (transferred):")
+    print(query.obs["cc_stage"].value_counts().to_string())
+
+    return query, stage_map
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q1 — titer vs cell-cycle pseudotime
+# ─────────────────────────────────────────────────────────────────────────────
+
+def q1_titer_vs_pseudotime(obs, fig_dir, sample,
+                            titer_col="wolbachia_titer",
+                            pseudotime_col="cc_pseudotime",
+                            stage_col="cc_stage",
+                            n_bins=8):
+    print(f"\n── Q1: titer vs CC pseudotime ──")
 
     missing = [c for c in [titer_col, pseudotime_col] if c not in obs.columns]
     if missing:
-        print(f"  Q1 SKIP: {missing} not in query.obs")
+        print(f"   SKIP: {missing} not in obs")
         return
 
-    obs[titer_col]      = pd.to_numeric(obs[titer_col],      errors="coerce")
-    obs[pseudotime_col] = pd.to_numeric(obs[pseudotime_col], errors="coerce")
-    obs = obs.dropna(subset=[titer_col, pseudotime_col])
+    df = obs[[titer_col, pseudotime_col, stage_col]].copy()
+    df[titer_col]      = pd.to_numeric(df[titer_col],      errors="coerce")
+    df[pseudotime_col] = pd.to_numeric(df[pseudotime_col], errors="coerce")
+    df = df.dropna()
+    print(f"   {len(df)} cells with titer + pseudotime")
 
-    if len(obs) < 20:
-        print("  Q1 SKIP: fewer than 20 cells with both titer and pseudotime")
+    # Check how many distinct pseudotime values exist (cluster-median = few unique values)
+    n_unique_pt = df[pseudotime_col].nunique()
+    print(f"   Unique pseudotime values: {n_unique_pt} (cluster-median resolution)")
+
+    if len(df) < 20:
+        print("   SKIP: fewer than 20 cells")
         return
 
-    print(f"\n── Q1: titer vs pseudotime  ({len(obs)} cells) ──")
+    pt  = df[pseudotime_col].values
+    tit = df[titer_col].values
 
-    pt  = obs[pseudotime_col].values
-    tit = obs[titer_col].values
+    stages = [s for s in CC_ORDER if s in df[stage_col].unique()]
+    stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
+    pal    = _cc_palette(stages)
 
     # Spearman
     rho, p_val = spearmanr(pt, tit)
-    print(f"   Spearman rho={rho:.3f}, p={p_val:.3e}  (circular pseudotime; interpret with caution)")
+    print(f"   Spearman rho={rho:.3f}, p={p_val:.3e}")
 
     pd.DataFrame({
-        "spearman_rho": [rho], "p_value": [p_val], "n_cells": [len(obs)],
-        "note": ["cyclum pseudotime is circular (0-2pi); linear Spearman is approximate"],
-    }).to_csv(os.path.join(fig_dir, f"{tag}_spearman.csv"), index=False)
+        "spearman_rho": [rho], "p_value": [p_val], "n_cells": [len(df)],
+        "note": ["cc_pseudotime is cluster-median from reference; "
+                 "Spearman is approximate and at cluster resolution"],
+    }).to_csv(os.path.join(fig_dir, f"q1_spearman_{sample}.csv"), index=False)
 
-    # LOWESS
-    order    = np.argsort(pt)
-    smoothed = lowess(tit[order], pt[order], frac=0.2, return_sorted=True)
+    # LOWESS — only if enough unique x values
+    do_lowess = n_unique_pt >= 5
+    if do_lowess:
+        order    = np.argsort(pt)
+        smoothed = lowess(tit[order], pt[order], frac=0.3, return_sorted=True)
 
-    # Binned summary
-    edges   = np.linspace(pt.min(), pt.max(), n_bins + 1)
-    centers = (edges[:-1] + edges[1:]) / 2
-    labels  = [f"{e:.2f}" for e in edges[:-1]]
-    obs["_pt_bin"] = pd.cut(obs[pseudotime_col], bins=edges, labels=labels, include_lowest=True)
-    obs_b = obs.dropna(subset=["_pt_bin"])
-    bsum = (obs_b.groupby("_pt_bin", observed=True)[titer_col]
-            .agg(n_cells="count", median="median", mean="mean",
-                 q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
-            .reset_index())
-    bsum["bin_center"] = centers
-    bsum.to_csv(os.path.join(fig_dir, f"{tag}_bin_summary.csv"), index=False)
+    # Binned summary — cap n_bins to number of unique pseudotime values
+    # to avoid empty bins that break the centers alignment
+    n_bins_actual = min(n_bins, n_unique_pt)
+    if n_bins_actual < 2:
+        print("   WARNING: fewer than 2 unique pseudotime values — skipping binned plot")
+        do_bins = False
+    else:
+        do_bins = True
+        edges   = np.linspace(pt.min(), pt.max(), n_bins_actual + 1)
+        centers = (edges[:-1] + edges[1:]) / 2
+        bin_lbl = [f"{e:.2f}" for e in edges[:-1]]
+        df["_pt_bin"] = pd.cut(df[pseudotime_col], bins=edges,
+                                labels=bin_lbl, include_lowest=True)
+        bsum = (df.dropna(subset=["_pt_bin"])
+                  .groupby("_pt_bin", observed=True)[titer_col]
+                  .agg(n_cells="count", median="median", mean="mean",
+                       q25=lambda x: x.quantile(0.25),
+                       q75=lambda x: x.quantile(0.75))
+                  .reset_index())
+        # Align centers to actual non-empty bins
+        occupied_labels = bsum["_pt_bin"].astype(str).values
+        centers_aligned = np.array([
+            centers[bin_lbl.index(b)] for b in occupied_labels if b in bin_lbl
+        ])
+        bsum["bin_center"] = centers_aligned
+        bsum.to_csv(os.path.join(fig_dir, f"q1_bin_summary_{sample}.csv"), index=False)
 
-    # ── Figure: 3-panel ───────────────────────────────────────────────────────
-    # Panel A: scatter coloured by cc_cluster
-    # Panel B: LOWESS trend line
-    # Panel C: binned median ± IQR ribbon
-    has_clusters = cluster_col in obs.columns
-    clusters, pal = [], {}
-    if has_clusters:
-        obs[cluster_col] = obs[cluster_col].astype(str)
-        clusters = sorted(obs[cluster_col].unique(), key=lambda x: int(x) if x.isdigit() else x)
-        pal = _cluster_palette(clusters)
-
-    pi_ticks = [0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi]
+    pi_ticks  = [0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi]
     pi_labels = ["0", "π/2", "π", "3π/2", "2π"]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # Panel A — scatter coloured by cell-cycle cluster
-    if has_clusters:
-        for cl in clusters:
-            m = obs[cluster_col] == cl
-            axes[0].scatter(pt[m.values], tit[m.values],
-                            c=[pal[cl]], s=3, alpha=0.4, label=f"C{cl}", rasterized=True)
-        axes[0].legend(fontsize=6, markerscale=2,
-                       bbox_to_anchor=(1.01, 1), loc="upper left", title="CC cluster")
-    else:
-        axes[0].scatter(pt, tit, s=3, alpha=0.4, rasterized=True)
-    axes[0].set_xlabel("Cyclum pseudotime (radians)")
-    axes[0].set_ylabel(f"wMel titer")
-    axes[0].set_title(f"A  Titer vs pseudotime\nSpearman ρ={rho:.3f}, p={p_val:.2e}")
+    # A: scatter coloured by CC stage
+    for stage in stages:
+        m = df[stage_col] == stage
+        axes[0].scatter(df.loc[m, pseudotime_col], df.loc[m, titer_col],
+                        c=[pal[stage]], s=3, alpha=0.4, label=stage, rasterized=True)
+    axes[0].set_xlabel("CC pseudotime (cluster-median, radians)")
+    axes[0].set_ylabel("wMel titer")
+    axes[0].set_title(f"A  Titer vs pseudotime\nSpearman ρ={rho:.3f}, p={p_val:.2e}\n"
+                      f"({n_unique_pt} unique pseudotime values — cluster resolution)")
     axes[0].set_xticks(pi_ticks); axes[0].set_xticklabels(pi_labels)
+    axes[0].legend(title="CC stage", fontsize=8, markerscale=3)
 
-    # Panel B — LOWESS
-    axes[1].scatter(pt, tit, c="lightgrey", s=2, alpha=0.25, rasterized=True)
-    axes[1].plot(smoothed[:, 0], smoothed[:, 1], color="#d62728", lw=2, label="LOWESS (frac=0.2)")
-    axes[1].set_xlabel("Cyclum pseudotime (radians)")
-    axes[1].set_ylabel(f"wMel titer")
-    axes[1].set_title("B  LOWESS trend")
-    axes[1].set_xticks(pi_ticks); axes[1].set_xticklabels(pi_labels)
-    axes[1].legend()
+    # B: LOWESS or message
+    if do_lowess:
+        axes[1].scatter(pt, tit, c="lightgrey", s=2, alpha=0.25, rasterized=True)
+        axes[1].plot(smoothed[:, 0], smoothed[:, 1],
+                     color="#d62728", lw=2, label="LOWESS (frac=0.3)")
+        axes[1].set_xticks(pi_ticks); axes[1].set_xticklabels(pi_labels)
+        axes[1].legend()
+    else:
+        axes[1].text(0.5, 0.5, f"Too few unique pseudotime\nvalues for LOWESS\n(n={n_unique_pt})",
+                     ha="center", va="center", transform=axes[1].transAxes, fontsize=10)
+    axes[1].set_xlabel("CC pseudotime (cluster-median, radians)")
+    axes[1].set_ylabel("wMel titer")
+    axes[1].set_title("B  LOWESS smoothed trend")
 
-    # Panel C — binned median ± IQR
-    x_ = bsum["bin_center"].values
-    axes[2].plot(x_, bsum["median"].values, "o-", color="#d62728", lw=2, ms=5, label="Median")
-    axes[2].fill_between(x_, bsum["q25"].values, bsum["q75"].values,
-                         alpha=0.25, color="#d62728", label="IQR")
+    # C: binned median ± IQR
+    if do_bins and len(bsum) >= 2:
+        x_ = bsum["bin_center"].values
+        axes[2].plot(x_, bsum["median"].values, "o-", color="#d62728",
+                     lw=2, ms=5, label="Median")
+        axes[2].fill_between(x_, bsum["q25"].values, bsum["q75"].values,
+                             alpha=0.25, color="#d62728", label="IQR")
+        axes[2].set_xticks(x_)
+        axes[2].set_xticklabels([f"{v:.2f}" for v in x_], rotation=45)
+        axes[2].legend()
+    else:
+        axes[2].text(0.5, 0.5, "Insufficient pseudotime\nresolution for binning",
+                     ha="center", va="center", transform=axes[2].transAxes, fontsize=10)
     axes[2].set_xlabel("Pseudotime bin center (radians)")
-    axes[2].set_ylabel(f"wMel titer")
-    axes[2].set_title(f"C  Median titer ± IQR across {n_bins} pseudotime bins")
-    axes[2].set_xticks(x_)
-    axes[2].set_xticklabels([f"{v:.2f}" for v in x_], rotation=45)
-    axes[2].legend()
+    axes[2].set_ylabel("wMel titer")
+    axes[2].set_title(f"C  Median titer ± IQR  ({n_bins_actual} bins)")
 
-    plt.suptitle("Q1 — wMel titer vs cell-cycle pseudotime", fontweight="bold")
+    plt.suptitle("Q1 — wMel titer vs cell-cycle pseudotime (cluster-median)",
+                 fontweight="bold")
     plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"{tag}.pdf"), bbox_inches="tight", dpi=150)
+    out = os.path.join(fig_dir, f"q1_titer_vs_pseudotime_{sample}.pdf")
+    plt.savefig(out, bbox_inches="tight", dpi=150)
     plt.close()
-    print(f"   → {tag}.pdf")
+    print(f"   → {out}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q2 — Cell-cycle phase distribution vs titer (does titer shift phase?)
+# Q2 — CC phase distribution across titer bins
 # ─────────────────────────────────────────────────────────────────────────────
 
-def q2_phase_distribution_vs_titer(query, fig_dir, sample,
+def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
                                     titer_col="wolbachia_titer",
-                                    cluster_col="cc_cluster",
+                                    stage_col="cc_stage",
                                     n_titer_bins=5):
-    """Q2: Does the cell-cycle phase distribution change across titer levels?
-
-    Cells are binned by titer quantile. For each bin, the proportion of cells
-    in each cell-cycle cluster is computed (stacked bar). A chi-squared test
-    of independence tests whether phase composition is titer-dependent.
+    """Q2: Does cell-cycle phase composition shift with wMel titer?
 
     Outputs
     -------
     PDF : q2_phase_dist_vs_titer_{sample}.pdf
-    CSV : q2_phase_dist_vs_titer_{sample}_composition.csv
-          q2_phase_dist_vs_titer_{sample}_chisq.csv
+    CSV : q2_composition_{sample}.csv
+          q2_chisq_{sample}.csv
     """
-    tag = f"q2_phase_dist_vs_titer_{sample}"
-    obs = query.obs.copy()
+    print(f"\n── Q2: phase distribution vs titer ──")
 
-    for col in [titer_col, cluster_col]:
-        if col not in obs.columns:
-            print(f"  Q2 SKIP: '{col}' not in query.obs")
-            return
+    df = obs[[titer_col, stage_col]].copy()
+    df[titer_col] = pd.to_numeric(df[titer_col], errors="coerce")
+    df[stage_col] = df[stage_col].astype(str).str.strip().str.lower()
+    df = df.dropna()
+    print(f"   {len(df)} cells")
 
-    obs[titer_col]  = pd.to_numeric(obs[titer_col], errors="coerce")
-    obs[cluster_col] = obs[cluster_col].astype(str)
-    obs = obs.dropna(subset=[titer_col, cluster_col])
-
-    print(f"\n── Q2: phase distribution vs titer  ({len(obs)} cells) ──")
-
-    clusters = sorted(obs[cluster_col].unique(), key=lambda x: int(x) if x.isdigit() else x)
-    pal = _cluster_palette(clusters)
+    stages = [s for s in CC_ORDER if s in df[stage_col].unique()]
+    stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
+    pal    = _cc_palette(stages)
 
     # Quantile-bin titer
     bin_labels = [f"Q{i+1}" for i in range(n_titer_bins)]
-    obs["titer_bin"] = pd.qcut(obs[titer_col], q=n_titer_bins,
-                                labels=bin_labels, duplicates="drop")
-    obs = obs.dropna(subset=["titer_bin"])
+    df = df.copy()
+    df["titer_bin"] = pd.qcut(df[titer_col], q=n_titer_bins,
+                               labels=bin_labels, duplicates="drop")
+    df = df.dropna(subset=["titer_bin"])
+    actual_bins = df["titer_bin"].cat.categories.tolist()
 
-    # Contingency table: rows = titer bins, cols = cc clusters
-    ct = pd.crosstab(obs["titer_bin"], obs[cluster_col])
-    ct = ct.reindex(columns=clusters, fill_value=0)
-
-    # Proportions (row-normalised)
+    ct   = pd.crosstab(df["titer_bin"], df[stage_col]).reindex(columns=stages, fill_value=0)
     prop = ct.div(ct.sum(axis=1), axis=0) * 100
 
-    prop.to_csv(os.path.join(fig_dir, f"{tag}_composition.csv"))
+    prop.to_csv(os.path.join(fig_dir, f"q2_composition_{sample}.csv"))
 
-    # Chi-squared test of independence
-    from scipy.stats import chi2_contingency
-    chi2, p_chi, dof, expected = chi2_contingency(ct.values)
+    chi2, p_chi, dof, _ = chi2_contingency(ct.values)
     print(f"   Chi-squared: χ²={chi2:.3f}, df={dof}, p={p_chi:.3e}")
-    pd.DataFrame({
-        "chi2": [chi2], "dof": [dof], "p_value": [p_chi], "n_cells": [len(obs)],
-        "note": [f"contingency: {n_titer_bins} titer bins × {len(clusters)} CC clusters"],
-    }).to_csv(os.path.join(fig_dir, f"{tag}_chisq.csv"), index=False)
 
-    # ── Figure: 2-panel ───────────────────────────────────────────────────────
-    # Panel A: stacked bar — % phase per titer bin
-    # Panel B: heatmap of proportions
+    pd.DataFrame({
+        "chi2": [chi2], "dof": [dof], "p_value": [p_chi],
+        "n_cells": [len(df)], "n_titer_bins": [len(actual_bins)],
+    }).to_csv(os.path.join(fig_dir, f"q2_chisq_{sample}.csv"), index=False)
+
+    # Titer ranges per bin for x-axis annotation
+    bin_ranges = (df.groupby("titer_bin", observed=True)[titer_col]
+                    .agg(lo="min", hi="max").reset_index())
+    bin_annot  = {row["titer_bin"]: f"{row['lo']:.2f}–{row['hi']:.2f}"
+                  for _, row in bin_ranges.iterrows()}
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Panel A — stacked bar
+    # A: stacked bar
     bottom = np.zeros(len(prop))
-    for cl in clusters:
-        vals = prop[cl].values
-        axes[0].bar(prop.index.astype(str), vals, bottom=bottom,
-                    color=pal[cl], label=f"C{cl}", width=0.7)
+    x_pos  = np.arange(len(prop))
+    for stage in stages:
+        vals = prop[stage].values
+        axes[0].bar(x_pos, vals, bottom=bottom,
+                    color=pal[stage], label=stage, width=0.7)
         bottom += vals
-    axes[0].set_xlabel(f"wMel titer quantile (Q1=lowest, Q{n_titer_bins}=highest)")
+    axes[0].set_xticks(x_pos)
+    axes[0].set_xticklabels(
+        [f"{b}\n({bin_annot.get(b,'')})" for b in prop.index], fontsize=8
+    )
+    axes[0].set_xlabel(f"wMel titer quantile (Q1=lowest, Q{len(actual_bins)}=highest)")
     axes[0].set_ylabel("% of cells")
     axes[0].set_title(
-        f"A  Cell-cycle phase composition per titer bin\n"
+        f"A  CC phase composition per titer bin\n"
         f"χ²={chi2:.1f}, df={dof}, p={p_chi:.2e}"
     )
-    axes[0].legend(title="CC cluster", bbox_to_anchor=(1.01, 1),
-                   loc="upper left", fontsize=7)
+    axes[0].legend(title="CC stage", bbox_to_anchor=(1.01, 1),
+                   loc="upper left", fontsize=9)
 
-    # Panel B — heatmap
-    sns.heatmap(prop.T, annot=True, fmt=".1f", cmap="YlOrRd",
-                linewidths=0.5, ax=axes[1],
+    # B: heatmap
+    sns.heatmap(prop.T.reindex(stages), annot=True, fmt=".1f",
+                cmap="YlOrRd", linewidths=0.5, ax=axes[1],
                 cbar_kws={"label": "% of cells in titer bin"})
     axes[1].set_xlabel("wMel titer bin")
-    axes[1].set_ylabel("CC cluster")
-    axes[1].set_title("B  Phase proportion heatmap (% per titer bin)")
+    axes[1].set_ylabel("CC stage")
+    axes[1].set_title("B  Phase proportion heatmap")
 
-    plt.suptitle("Q2 — Cell-cycle phase distribution across wMel titer", fontweight="bold")
+    plt.suptitle("Q2 — Cell-cycle phase distribution across wMel titer levels",
+                 fontweight="bold")
     plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"{tag}.pdf"), bbox_inches="tight", dpi=150)
+    out = os.path.join(fig_dir, f"q2_phase_dist_vs_titer_{sample}.pdf")
+    plt.savefig(out, bbox_inches="tight", dpi=150)
     plt.close()
-    print(f"   → {tag}.pdf")
+    print(f"   → {out}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q3 — Titer differs by cell-cycle phase (KW + Dunn + violin)
+# Q3 — Titer by CC phase + polar cyclicity
 # ─────────────────────────────────────────────────────────────────────────────
 
-def q3_titer_by_phase(query, fig_dir, sample,
+def q3_titer_by_phase(obs, umap_xy, fig_dir, sample,
                        titer_col="wolbachia_titer",
-                       cluster_col="cc_cluster",
-                       pseudotime_col="cyclum_pseudotime"):
-    """Q3: Do cells in different cell-cycle phases carry different wMel titers?
+                       stage_col="cc_stage",
+                       pseudotime_col="cc_pseudotime",
+                       n_sectors=12):
+    """Q3: Do cells in different CC phases carry different wMel titers,
+    and is titer cyclical around the cell cycle?
 
     Tests
     -----
-    - Kruskal-Wallis (omnibus): titer distribution differs across CC clusters?
-    - Dunn's post-hoc pairwise (BH FDR): which pairs differ?
-    - Spearman: titer vs cluster median titer rank (monotonic summary)
-    - Optional: if cyclum_pseudotime present, plots titer on a polar/circular axis
-      to reveal whether titer is cyclical with the cell cycle.
+    Kruskal-Wallis omnibus + Dunn post-hoc pairwise (BH FDR).
 
     Outputs
     -------
     PDF : q3_titer_by_phase_{sample}.pdf
-    CSV : q3_titer_by_phase_{sample}_kruskal.csv
-          q3_titer_by_phase_{sample}_dunn.csv
-          q3_titer_by_phase_{sample}_cluster_summary.csv
+    CSV : q3_kruskal_{sample}.csv
+          q3_dunn_{sample}.csv
+          q3_stage_summary_{sample}.csv
     """
-    tag = f"q3_titer_by_phase_{sample}"
-    obs = query.obs.copy()
+    print(f"\n── Q3: titer by CC phase ──")
 
-    for col in [titer_col, cluster_col]:
-        if col not in obs.columns:
-            print(f"  Q3 SKIP: '{col}' not in query.obs")
-            return
+    df = obs[[titer_col, stage_col]].copy()
+    df[titer_col] = pd.to_numeric(df[titer_col], errors="coerce")
+    df[stage_col] = df[stage_col].astype(str).str.strip().str.lower()
+    df = df.dropna()
+    print(f"   {len(df)} cells")
 
-    obs[titer_col]   = pd.to_numeric(obs[titer_col], errors="coerce")
-    obs[cluster_col] = obs[cluster_col].astype(str)
-    obs = obs.dropna(subset=[titer_col, cluster_col])
-
-    n_cells  = len(obs)
-    clusters = sorted(obs[cluster_col].unique(), key=lambda x: int(x) if x.isdigit() else x)
-    pal      = _cluster_palette(clusters)
-
-    print(f"\n── Q3: titer by CC phase  ({n_cells} cells, {len(clusters)} clusters) ──")
+    stages = [s for s in CC_ORDER if s in df[stage_col].unique()]
+    stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
+    pal    = _cc_palette(stages)
 
     # ── Kruskal-Wallis ────────────────────────────────────────────────────────
-    groups = [obs.loc[obs[cluster_col] == cl, titer_col].values for cl in clusters]
+    groups  = [df.loc[df[stage_col] == s, titer_col].values for s in stages]
     kw_stat, kw_p = kruskal(*groups)
     print(f"   Kruskal-Wallis: H={kw_stat:.3f}, p={kw_p:.3e}")
 
     pd.DataFrame({
         "statistic": [kw_stat], "p_value": [kw_p],
-        "n_clusters": [len(clusters)], "n_cells": [n_cells],
-    }).to_csv(os.path.join(fig_dir, f"{tag}_kruskal.csv"), index=False)
+        "n_stages": [len(stages)], "n_cells": [len(df)],
+    }).to_csv(os.path.join(fig_dir, f"q3_kruskal_{sample}.csv"), index=False)
 
-    # ── Dunn's post-hoc (manual, BH FDR) ─────────────────────────────────────
-    all_ranks  = scipy.stats.rankdata(obs[titer_col].values)
+    # ── Dunn post-hoc ─────────────────────────────────────────────────────────
+    all_ranks  = scipy.stats.rankdata(df[titer_col].values)
     n_total    = len(all_ranks)
-    _, counts  = np.unique(obs[titer_col].values, return_counts=True)
+    _, counts  = np.unique(df[titer_col].values, return_counts=True)
     tie_factor = np.sum(counts ** 3 - counts) / (12 * (n_total - 1)) if n_total > 1 else 0
+    df = df.copy()
+    df["_rank"] = all_ranks
 
-    obs["_rank"] = all_ranks
     rows = []
-    for cl_a, cl_b in combinations(clusters, 2):
-        ga = obs.loc[obs[cluster_col] == cl_a, "_rank"].values
-        gb = obs.loc[obs[cluster_col] == cl_b, "_rank"].values
+    for s_a, s_b in combinations(stages, 2):
+        ga = df.loc[df[stage_col] == s_a, "_rank"].values
+        gb = df.loc[df[stage_col] == s_b, "_rank"].values
         na, nb = len(ga), len(gb)
         if na < 2 or nb < 2:
             continue
@@ -452,132 +518,151 @@ def q3_titer_by_phase(query, fig_dir, sample,
         if se == 0:
             continue
         z = (ga.mean() - gb.mean()) / se
-        rows.append({"cluster_A": cl_a, "cluster_B": cl_b,
-                     "mean_rank_A": ga.mean(), "mean_rank_B": gb.mean(),
-                     "z_stat": z, "p_raw": 2 * scipy.stats.norm.sf(abs(z)),
-                     "n_A": na, "n_B": nb})
+        rows.append({
+            "stage_A": s_a, "stage_B": s_b,
+            "median_titer_A": np.median(df.loc[df[stage_col] == s_a, titer_col]),
+            "median_titer_B": np.median(df.loc[df[stage_col] == s_b, titer_col]),
+            "z_stat": z,
+            "p_raw": 2 * scipy.stats.norm.sf(abs(z)),
+            "n_A": na, "n_B": nb,
+        })
 
     dunn_df = pd.DataFrame(rows)
     if len(dunn_df):
         _, p_adj, _, _ = multipletests(dunn_df["p_raw"], method="fdr_bh")
-        dunn_df["p_adj_BH"] = p_adj
+        dunn_df["p_adj_BH"]  = p_adj
         dunn_df["significant"] = dunn_df["p_adj_BH"] < 0.05
         dunn_df = dunn_df.sort_values("p_adj_BH")
-        dunn_df.to_csv(os.path.join(fig_dir, f"{tag}_dunn.csv"), index=False)
-        n_sig = dunn_df["significant"].sum()
-        print(f"   Dunn post-hoc: {n_sig}/{len(dunn_df)} pairs significant (BH FDR<0.05)")
+        dunn_df.to_csv(os.path.join(fig_dir, f"q3_dunn_{sample}.csv"), index=False)
+        print(f"   Dunn: {dunn_df['significant'].sum()}/{len(dunn_df)} pairs significant")
+        print(dunn_df[["stage_A", "stage_B", "median_titer_A",
+                        "median_titer_B", "p_adj_BH", "significant"]].to_string(index=False))
 
-    # ── Cluster summary ───────────────────────────────────────────────────────
-    cluster_median = obs.groupby(cluster_col)[titer_col].median().to_dict()
-    summary = (obs.groupby(cluster_col)[titer_col]
-               .agg(n_cells="count", median="median", mean="mean", std="std",
-                    q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
-               .reset_index().rename(columns={cluster_col: "cluster"}))
-    summary.to_csv(os.path.join(fig_dir, f"{tag}_cluster_summary.csv"), index=False)
+    # Stage summary
+    stage_med = df.groupby(stage_col)[titer_col].median().to_dict()
+    (df.groupby(stage_col)[titer_col]
+       .agg(n_cells="count", median="median", mean="mean", std="std",
+            q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
+       .reindex(stages)
+       .reset_index()
+       .rename(columns={stage_col: "stage"})
+       .to_csv(os.path.join(fig_dir, f"q3_stage_summary_{sample}.csv"), index=False))
 
-    # Spearman: titer vs cluster-median-titer (monotonic ordering summary)
-    obs["_med"] = obs[cluster_col].map(cluster_median)
-    rho, rho_p = spearmanr(obs[titer_col], obs["_med"])
-    print(f"   Spearman (titer vs cluster median rank): rho={rho:.3f}, p={rho_p:.3e}")
+    # ── Polar data ────────────────────────────────────────────────────────────
+    has_pt = pseudotime_col in obs.columns
+    df_pol = None
+    if has_pt:
+        df_pol = obs[[titer_col, pseudotime_col, stage_col]].copy()
+        df_pol[titer_col]      = pd.to_numeric(df_pol[titer_col],      errors="coerce")
+        df_pol[pseudotime_col] = pd.to_numeric(df_pol[pseudotime_col], errors="coerce")
+        df_pol = df_pol.dropna()
 
-    # ── Figure: 4-panel ───────────────────────────────────────────────────────
-    # Panel A: violin + strip per CC cluster
-    # Panel B: UMAP coloured by titer
-    # Panel C: UMAP coloured by CC cluster
-    # Panel D: polar plot — mean titer by pseudotime phase (if available)
-    has_umap = "X_umap" in query.obsm
-    has_pt   = pseudotime_col in obs.columns
+    # ── Figure ────────────────────────────────────────────────────────────────
+    has_umap = umap_xy is not None
+    fig = plt.figure(figsize=(22, 5))
+    gs  = fig.add_gridspec(1, 4, wspace=0.45)
+    ax_vln = fig.add_subplot(gs[0])
+    ax_ut  = fig.add_subplot(gs[1])
+    ax_uc  = fig.add_subplot(gs[2])
+    ax_pol = fig.add_subplot(gs[3], projection="polar")
 
-    ncols = 4 if has_pt else 3
-    fig, axes = plt.subplots(1, ncols, figsize=(5 * ncols, 5))
-
-    # Panel A — violin + strip
-    ax = axes[0]
-    palette = {cl: pal[cl] for cl in clusters}
-    sns.violinplot(data=obs, x=cluster_col, y=titer_col, order=clusters,
-                   palette=palette, inner=None, linewidth=0.8, ax=ax, cut=0)
-    sns.stripplot(data=obs, x=cluster_col, y=titer_col, order=clusters,
-                  palette=palette, size=1.5, alpha=0.35, jitter=True, ax=ax)
-    for i, cl in enumerate(clusters):
-        ax.scatter(i, cluster_median[cl], color="white", s=30, zorder=5,
-                   edgecolors="black", linewidths=0.8)
-    ax.set_xlabel("Cell-cycle cluster")
-    ax.set_ylabel("wMel titer")
-    ax.set_title(f"A  Titer by CC phase\nKW p={kw_p:.2e} | ρ={rho:.2f}")
-    ax.tick_params(axis="x", rotation=45)
+    # Panel A — violin + strip + significance bars
+    sns.violinplot(data=df, x=stage_col, y=titer_col, order=stages,
+                   palette=pal, inner=None, linewidth=0.8, ax=ax_vln, cut=0)
+    sns.stripplot(data=df, x=stage_col, y=titer_col, order=stages,
+                  palette=pal, size=1.5, alpha=0.35, jitter=True, ax=ax_vln)
+    for i, s in enumerate(stages):
+        ax_vln.scatter(i, stage_med[s], color="white", s=35, zorder=5,
+                       edgecolors="black", linewidths=0.8)
+    if len(dunn_df):
+        sig    = dunn_df[dunn_df["significant"]]
+        y_max  = df[titer_col].quantile(0.99)
+        y_step = (df[titer_col].quantile(0.99) - df[titer_col].quantile(0.01)) * 0.08
+        for k, (_, row) in enumerate(sig.iterrows()):
+            if row["stage_A"] not in stages or row["stage_B"] not in stages:
+                continue
+            xi = stages.index(row["stage_A"])
+            xj = stages.index(row["stage_B"])
+            y  = y_max + y_step * (k + 1)
+            ax_vln.plot([xi, xj], [y, y], color="black", lw=1)
+            ax_vln.text((xi + xj) / 2, y + y_step * 0.15, "*",
+                        ha="center", va="bottom", fontsize=10)
+    ax_vln.set_xlabel("Cell-cycle stage")
+    ax_vln.set_ylabel("wMel titer")
+    ax_vln.set_title(f"A  Titer by CC stage\nKW p={kw_p:.2e}")
 
     # Panel B — UMAP titer
-    ax = axes[1]
     if has_umap:
-        obs_aln  = obs.reindex(query.obs.index)
-        tvals    = obs_aln[titer_col].values.astype(float)
-        xy       = query.obsm["X_umap"]
-        valid    = ~np.isnan(tvals)
-        sc_ = ax.scatter(xy[valid, 0], xy[valid, 1], c=tvals[valid],
-                         cmap="viridis", s=2, alpha=0.7, rasterized=True)
-        ax.scatter(xy[~valid, 0], xy[~valid, 1], c="lightgrey", s=1, alpha=0.2, rasterized=True)
-        plt.colorbar(sc_, ax=ax, label="wMel titer", shrink=0.8)
-    ax.set_title("B  UMAP — wMel titer")
-    ax.set_xticks([]); ax.set_yticks([])
+        tvals = obs[titer_col].values.astype(float)
+        valid = ~np.isnan(tvals)
+        sc_   = ax_ut.scatter(umap_xy[valid, 0], umap_xy[valid, 1],
+                               c=tvals[valid], cmap="viridis",
+                               s=2, alpha=0.7, rasterized=True)
+        ax_ut.scatter(umap_xy[~valid, 0], umap_xy[~valid, 1],
+                      c="lightgrey", s=1, alpha=0.2, rasterized=True)
+        plt.colorbar(sc_, ax=ax_ut, label="wMel titer", shrink=0.8)
+    ax_ut.set_title("B  UMAP — wMel titer")
+    ax_ut.set_xticks([]); ax_ut.set_yticks([])
 
-    # Panel C — UMAP CC cluster
-    ax = axes[2]
+    # Panel C — UMAP CC stage
     if has_umap:
-        xy       = query.obsm["X_umap"]
-        obs_aln  = obs.reindex(query.obs.index)
-        cl_vals  = obs_aln[cluster_col].astype(str).values
-        int_lbl  = np.array([clusters.index(c) if c in clusters else -1 for c in cl_vals])
-        ax.scatter(xy[:, 0], xy[:, 1], c=int_lbl,
-                   cmap=matplotlib.colormaps["tab20"].resampled(len(clusters)),
-                   s=2, alpha=0.7, rasterized=True)
-        for i, cl in enumerate(clusters):
-            ax.scatter([], [], color=pal[cl], label=f"C{cl}", s=10)
-        ax.legend(fontsize=5, markerscale=2,
-                  bbox_to_anchor=(1.01, 1), loc="upper left", title="CC cluster")
-    ax.set_title("C  UMAP — CC cluster")
-    ax.set_xticks([]); ax.set_yticks([])
+        stage_vals  = obs[stage_col].astype(str).str.lower().values
+        c_map_vals  = [pal.get(s, "grey") for s in stage_vals]
+        ax_uc.scatter(umap_xy[:, 0], umap_xy[:, 1],
+                      c=c_map_vals, s=2, alpha=0.7, rasterized=True)
+        for s in stages:
+            ax_uc.scatter([], [], color=pal[s], label=s, s=20)
+        ax_uc.legend(title="CC stage", fontsize=8, markerscale=2,
+                     bbox_to_anchor=(1.01, 1), loc="upper left")
+    ax_uc.set_title("C  UMAP — CC stage (transferred)")
+    ax_uc.set_xticks([]); ax_uc.set_yticks([])
 
-    # Panel D — polar plot: is titer cyclical?
-    if has_pt:
-        ax_pol = fig.add_subplot(1, ncols, ncols, projection="polar")
-        obs[pseudotime_col] = pd.to_numeric(obs[pseudotime_col], errors="coerce")
-        obs_pt = obs.dropna(subset=[pseudotime_col, titer_col])
-        if len(obs_pt) >= 20:
-            # Bin pseudotime into equal-width circular sectors
-            n_sectors = 12
-            edges   = np.linspace(0, 2 * np.pi, n_sectors + 1)
-            centers = (edges[:-1] + edges[1:]) / 2
-            obs_pt  = obs_pt.copy()
-            obs_pt["_sector"] = pd.cut(obs_pt[pseudotime_col], bins=edges,
-                                        labels=range(n_sectors), include_lowest=True)
-            sector_med = obs_pt.groupby("_sector", observed=True)[titer_col].median()
-            sector_med = sector_med.reindex(range(n_sectors)).fillna(0).values
+    # Panel D — polar: median titer per pseudotime sector
+    if has_pt and df_pol is not None and len(df_pol) >= 20:
+        edges   = np.linspace(0, 2 * np.pi, n_sectors + 1)
+        centers = (edges[:-1] + edges[1:]) / 2
+        df_pol  = df_pol.copy()
+        df_pol["_sector"] = pd.cut(df_pol[pseudotime_col], bins=edges,
+                                    labels=range(n_sectors), include_lowest=True)
+        sec_med = (df_pol.groupby("_sector", observed=True)[titer_col]
+                         .median()
+                         .reindex(range(n_sectors))
+                         .fillna(0).values)
+        vmin, vmax = sec_med.min(), sec_med.max()
+        norm_vals  = (sec_med - vmin) / (vmax - vmin + 1e-9)
+        width      = 2 * np.pi / n_sectors
+        for theta, r, nv in zip(centers, sec_med, norm_vals):
+            ax_pol.bar(theta, r, width=width * 0.85, bottom=0,
+                       color=plt.cm.coolwarm(nv), alpha=0.85)
+        # CC stage arc annotations at outer edge
+        r_annot = sec_med.max() * 1.2
+        for name, th0, th1 in [("g0/g1", 0, np.pi/2),
+                                 ("s",     np.pi/2, 3*np.pi/2),
+                                 ("g2/m",  3*np.pi/2, 2*np.pi)]:
+            if name in pal:
+                ax_pol.text((th0 + th1) / 2, r_annot, name,
+                            ha="center", va="center",
+                            fontsize=7, color=pal[name], fontweight="bold")
+        ax_pol.set_theta_zero_location("N")
+        ax_pol.set_theta_direction(-1)
+        ax_pol.set_xticks(np.linspace(0, 2 * np.pi, 5)[:-1])
+        ax_pol.set_xticklabels(["0", "π/2", "π", "3π/2"], fontsize=8)
+        ax_pol.set_title(
+            f"D  Titer cyclicity\n(median per pseudotime sector, n={n_sectors})",
+            pad=18, fontsize=9
+        )
+    else:
+        ax_pol.set_title("D  Polar: pseudotime not available", pad=15, fontsize=9)
 
-            # Polar bar
-            width   = 2 * np.pi / n_sectors
-            bars    = ax_pol.bar(centers, sector_med, width=width * 0.85,
-                                 bottom=0, alpha=0.8,
-                                 color=plt.cm.coolwarm(sector_med / (sector_med.max() + 1e-9)))
-            ax_pol.set_theta_zero_location("N")
-            ax_pol.set_theta_direction(-1)
-            ax_pol.set_xticks(np.linspace(0, 2 * np.pi, 5)[:-1])
-            ax_pol.set_xticklabels(["0 (G1?)", "π/2 (S?)", "π (G2?)", "3π/2 (M?)"])
-            ax_pol.set_title("D  Titer cyclicity\n(median per pseudotime sector)",
-                             pad=15, fontsize=9)
-        else:
-            ax_pol.set_title("D  Polar: insufficient data", pad=15, fontsize=9)
-        # Replace placeholder axis with polar
-        axes[3].set_visible(False)
-
-    plt.suptitle("Q3 — wMel titer across cell-cycle phases", fontweight="bold")
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, f"{tag}.pdf"), bbox_inches="tight", dpi=150)
+    plt.suptitle("Q3 — wMel titer across cell-cycle phases", fontweight="bold", y=1.02)
+    out = os.path.join(fig_dir, f"q3_titer_by_phase_{sample}.pdf")
+    plt.savefig(out, bbox_inches="tight", dpi=150)
     plt.close()
-    print(f"   → {tag}.pdf")
+    print(f"   → {out}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sanitise obs before writing
+# Sanitise obs
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sanitize_obs(adata):
@@ -592,7 +677,8 @@ def _sanitize_obs(adata):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(ref_path, query_path, out_path, fig_dir, sample,
-        min_genes, titer_col, pseudotime_col, ref_condition, n_titer_bins):
+        min_genes, titer_col, stage_col, pseudotime_col,
+        ref_condition, n_titer_bins, n_sectors):
 
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
@@ -601,92 +687,118 @@ def run(ref_path, query_path, out_path, fig_dir, sample,
     adata_full = sc.read_h5ad(query_path)
     ref        = sc.read_h5ad(ref_path)
 
-    print(f"Loaded query object : {adata_full.n_obs} cells")
-    print(f"Loaded reference    : {ref.n_obs} cells, {ref.obs['leiden'].nunique()} clusters")
-    print(f"Query obs columns   : {list(adata_full.obs.columns)}")
+    print(f"Loaded query : {adata_full.n_obs} cells")
+    print(f"Loaded ref   : {ref.n_obs} cells, {ref.obs['leiden'].nunique()} clusters")
 
-    # ── Identify infected / SV-timepoint cells ────────────────────────────────
+    # ── Subset to infected (query) cells ─────────────────────────────────────
     ref_conditions = [ref_condition] if isinstance(ref_condition, str) else ref_condition
     query_mask = (
         ~adata_full.obs["cell_line"].isin(ref_conditions) |
         (adata_full.obs["treatment"] != "Ctrl")
     )
-    print(f"\nReference conditions : {ref_conditions} (Ctrl only)")
-    print(f"Query bio_conditions :\n{adata_full.obs.loc[query_mask, 'bio_condition'].value_counts()}")
-    print(f"Query cells          : {query_mask.sum()}")
+    print(f"\nReference conditions : {ref_conditions} + treatment=Ctrl")
+    print(f"Query cells          : {query_mask.sum()}/{adata_full.n_obs}")
+    print(adata_full.obs.loc[query_mask, "bio_condition"].value_counts().to_string())
 
     if query_mask.sum() == 0:
         raise ValueError(
-            "No query cells found. Check --ref_condition and that your query h5ad "
-            "contains infected/SV-timepoint cells with treatment != 'Ctrl'.\n"
-            f"Available cell_lines : {adata_full.obs['cell_line'].unique().tolist()}\n"
-            f"Available treatments : {adata_full.obs['treatment'].unique().tolist()}"
+            "No query cells found.\n"
+            f"  cell_line values : {adata_full.obs['cell_line'].unique().tolist()}\n"
+            f"  treatment values : {adata_full.obs['treatment'].unique().tolist()}\n"
+            f"  ref_condition    : {ref_conditions}"
         )
 
     adata_query = adata_full[query_mask].copy()
 
-    # Verify titer column exists on query
+    # Confirm titer is present
     if titer_col not in adata_query.obs.columns:
-        raise ValueError(
-            f"'{titer_col}' not found in query obs. "
-            f"Available columns: {list(adata_query.obs.columns)}"
-        )
-    n_with_titer = pd.to_numeric(adata_query.obs[titer_col], errors="coerce").notna().sum()
-    print(f"\nQuery cells with non-null {titer_col}: {n_with_titer}/{adata_query.n_obs}")
+        raise ValueError(f"'{titer_col}' not in query obs. "
+                         f"Available: {list(adata_query.obs.columns)}")
+    n_titer = pd.to_numeric(adata_query.obs[titer_col], errors="coerce").notna().sum()
+    print(f"\nQuery cells with non-null {titer_col}: {n_titer}/{adata_query.n_obs}")
 
     # ── Ingest ────────────────────────────────────────────────────────────────
-    query = ingest_query(adata_query, ref=ref, min_genes=min_genes,
-                         fig_dir=fig_dir, sample=sample)
+    query = ingest_query(adata_query, ref=ref,
+                         min_genes=min_genes, fig_dir=fig_dir, sample=sample)
 
-    # ── Three biological questions ────────────────────────────────────────────
-    q1_titer_vs_pseudotime(query, fig_dir, sample,
-                           titer_col=titer_col, pseudotime_col=pseudotime_col,
-                           cluster_col="cc_cluster")
+    # ── Assign CC stage + pseudotime from reference cluster mapping ───────────
+    query, cluster_map = assign_cc_from_reference(
+        query, ref,
+        stage_col=stage_col,
+        pseudotime_col=pseudotime_col,
+        leiden_col="leiden",
+    )
+    # ── Diagnose CC transfer quality ──────────────────────────────────────────
+    print("\n── CC transfer diagnostics ──")
+    print("Query leiden_ref distribution:")
+    print(query.obs["leiden_ref"].value_counts().sort_index().to_string())
+    print("\nReference leiden distribution:")
+    print(ref.obs["leiden"].value_counts().sort_index().to_string())
+    print("\nCluster → stage mapping used:")
+    print(cluster_map[["cluster", "cc_stage", "purity", "n_ref_cells"]].to_string(index=False))
 
-    q2_phase_distribution_vs_titer(query, fig_dir, sample,
-                                   titer_col=titer_col, cluster_col="cc_cluster",
-                                   n_titer_bins=n_titer_bins)
+    # Check if query cells are piling into a subset of clusters
+    query_cluster_counts = query.obs["leiden_ref"].value_counts()
+    print(f"\nQuery cells: top 5 clusters by count:")
+    print(query_cluster_counts.head(5).to_string())
+    print(f"Query cells in clusters mapped to 's': "
+        f"{query.obs.loc[query.obs['cc_stage']=='s', 'leiden_ref'].nunique()} distinct clusters")
 
-    q3_titer_by_phase(query, fig_dir, sample,
-                      titer_col=titer_col, cluster_col="cc_cluster",
-                      pseudotime_col=pseudotime_col)
 
-    # ── Save outputs ──────────────────────────────────────────────────────────
+    cluster_map.to_csv(os.path.join(fig_dir, f"cluster_cc_map_{sample}.csv"), index=False)
+
+    # ── Run analyses ──────────────────────────────────────────────────────────
+    obs    = query.obs.copy()
+    umap   = query.obsm.get("X_umap", None)
+
+    q1_titer_vs_pseudotime(
+        obs, fig_dir, sample,
+        titer_col=titer_col,
+        pseudotime_col="cc_pseudotime",
+        stage_col="cc_stage",
+    )
+    q2_phase_distribution_vs_titer(
+        obs, fig_dir, sample,
+        titer_col=titer_col,
+        stage_col="cc_stage",
+        n_titer_bins=n_titer_bins,
+    )
+    q3_titer_by_phase(
+        obs, umap, fig_dir, sample,
+        titer_col=titer_col,
+        stage_col="cc_stage",
+        pseudotime_col="cc_pseudotime",
+        n_sectors=n_sectors,
+    )
+
+    # ── Save ──────────────────────────────────────────────────────────────────
     query = _sanitize_obs(query)
-    ref   = _sanitize_obs(ref)
-
-    query_out = out_path.replace(".h5ad", "_query.h5ad")
-    ref_out   = out_path.replace(".h5ad", "_reference.h5ad")
-    query.write(query_out)
-    ref.write(ref_out)
-
-    print("\n" + "=" * 60)
-    print("COMPLETE")
-    print("=" * 60)
-    print(f"Query   → {query_out}")
-    print(f"Reference → {ref_out}")
+    query.write(out_path)
+    print(f"\nSaved → {out_path}")
     print(f"Figures → {fig_dir}/")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Test wMel titer vs cell-cycle phase via reference-anchored ingest"
+        description="Ingest infected cells onto CC reference, then test titer vs cell cycle"
     )
     parser.add_argument("--ref",            required=True,
-                        help="Pre-built reference h5ad (uninfected, Leiden-clustered by CC phase)")
+                        help="Reference h5ad: uninfected, Leiden-clustered, cyclum-annotated")
     parser.add_argument("--query",          required=True,
-                        help="Full integrated h5ad containing infected/SV-timepoint cells")
-    parser.add_argument("--out_path",       default="results/integrated_by_reftiter_cellcycle.h5ad")
-    parser.add_argument("--fig_dir",        default="results/integrated_by_ref/figures/titer_vs_cellcycle")
+                        help="Full integrated h5ad containing infected cells")
+    parser.add_argument("--out_path",       default="results/integrated/titer_cellcycle.h5ad")
+    parser.add_argument("--fig_dir",        default="figures/titer_vs_cellcycle")
     parser.add_argument("--sample",         default="wolbachia_infection")
     parser.add_argument("--min_genes",      type=int,   default=200)
     parser.add_argument("--titer_col",      default="wolbachia_titer")
+    parser.add_argument("--stage_col",      default="cyclum_stage")
     parser.add_argument("--pseudotime_col", default="cyclum_pseudotime")
     parser.add_argument("--ref_condition",  nargs="+",  default=["JW18DOX"],
-                        help="cell_line value(s) treated as uninfected reference "
-                             "(these + treatment=Ctrl define what is NOT query)")
-    parser.add_argument("--n_titer_bins",   type=int,   default=5,
-                        help="Number of quantile bins for Q2 titer binning")
+                        help="cell_line value(s) that are uninfected reference "
+                             "(combined with treatment=Ctrl to define what is NOT query)")
+    parser.add_argument("--n_titer_bins",   type=int,   default=5)
+    parser.add_argument("--n_sectors",      type=int,   default=12,
+                        help="Polar plot sectors for Q3 cyclicity panel")
     args = parser.parse_args()
 
     run(
@@ -697,9 +809,11 @@ def main():
         sample=args.sample,
         min_genes=args.min_genes,
         titer_col=args.titer_col,
+        stage_col=args.stage_col,
         pseudotime_col=args.pseudotime_col,
         ref_condition=args.ref_condition,
         n_titer_bins=args.n_titer_bins,
+        n_sectors=args.n_sectors,
     )
 
 
