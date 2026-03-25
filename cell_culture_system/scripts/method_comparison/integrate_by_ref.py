@@ -868,10 +868,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Staged scRNA-seq integration: ingest query cells onto pre-built reference"
     )
-    parser.add_argument("--ref", required=True, nargs="+",
-                        help="Pre-built reference h5ad") 
-    parser.add_argument("--query", required=True, nargs="+",
-                        help="Query h5ad (to be ingested onto reference)")
+    parser.add_argument("--ref",           required=True, help="Pre-built reference h5ad") 
+    parser.add_argument("--query",         required=True, help="Query h5ad (to be ingested onto reference)")
     parser.add_argument("--sample",        default="wolbachia_infection")
     parser.add_argument("--batch_key",     default="batch")
     parser.add_argument("--min_cells",     type=int,   default=3)
