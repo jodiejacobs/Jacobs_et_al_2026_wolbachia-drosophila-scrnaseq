@@ -163,51 +163,32 @@ def calculate_wolbachia_titer(adata, rRNA_genes):
 # Doublet detection — subsampled
 # ─────────────────────────────────────────────────────────────────────────────
 def identify_doublets(adata, fig_dir):
-    '''
-    Doublet identification with scrublet 
-    '''
-    
     print("Starting scrublet doublet detection:")
     print(f"Dataset dimensions: {adata.n_obs} cells, {adata.n_vars} genes")
     
-    # Calculate maximum possible components
     max_components = min(adata.n_obs, adata.n_vars) - 1
-    n_components = min(30, max_components)  # Use 30 or fewer if data is small
-    
+    n_components   = min(30, max_components)
     print(f"Using {n_components} principal components (max possible: {max_components})")
     
-    # Initialize Scrublet with adata object
-    scrub = scr.Scrublet(adata.X, expected_doublet_rate=0.1) # requires an estimated rate as a prior 
-    # Run the doublet detection
-    doublet_scores, predicted_doublets = scrub.scrub_doublets(min_counts=2, 
-                                                          min_cells=3, 
-                                                          min_gene_variability_pctl=85, 
-                                                          n_prin_comps=n_components)
-    # scrub.call_doublets(threshold=0.25)
+    scrub = scr.Scrublet(adata.X, expected_doublet_rate=0.1)
+    doublet_scores, predicted_doublets = scrub.scrub_doublets(
+        min_counts=2, min_cells=3,
+        min_gene_variability_pctl=85,
+        n_prin_comps=n_components,
+    )
     scrub.call_doublets()
     
+    # Histogram only — scrublet UMAP removed (slow, not used downstream)
     print("Plotting scrublet histogram")
-    # Plot doublet score histogram
     scrub.plot_histogram()
     plt.savefig(f"{fig_dir}/doublet_histogram.pdf", bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-    # Plot UMAP:
-    print('Running UMAP...')
-    scrub.set_embedding('UMAP', scr.get_umap(scrub.manifold_obs_, 10, min_dist=0.3))
-    scrub.plot_embedding('UMAP', order_points=True)
-    plt.savefig(f"{fig_dir}/doublet_umap.pdf", bbox_inches='tight', pad_inches=0.1)
-    plt.close()
-    
     print("Saving scrublet data to adata")
-    
-    # Add scrublet results back to adata object FIRST
-    adata.obs['doublet_score'] = doublet_scores
-    adata.obs['predicted_doublet'] = predicted_doublets
-    
-    # THEN create the categorical version
-    adata.obs['predicted_doublet_cat'] = adata.obs['predicted_doublet'].astype(str).astype('category')
-    
+    adata.obs['doublet_score']         = doublet_scores
+    adata.obs['predicted_doublet']     = predicted_doublets
+    adata.obs['predicted_doublet_cat'] = (adata.obs['predicted_doublet']
+                                           .astype(str).astype('category'))
     return adata
 
 # ─────────────────────────────────────────────────────────────────────────────
