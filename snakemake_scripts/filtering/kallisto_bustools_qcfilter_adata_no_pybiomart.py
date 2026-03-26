@@ -162,68 +162,53 @@ def calculate_wolbachia_titer(adata, rRNA_genes):
 # ─────────────────────────────────────────────────────────────────────────────
 # Doublet detection — subsampled
 # ─────────────────────────────────────────────────────────────────────────────
-
-def identify_doublets(adata, fig_dir,
-                      max_cells=10000, n_pcs=20, random_state=42):
-    """Scrublet doublet detection with subsampling for large datasets.
-
-    For datasets > max_cells: fit Scrublet on a random subsample, score
-    all cells. This reduces runtime from O(n^2) to O(max_cells * n).
-    """
-    print(f"Scrublet doublet detection ({adata.n_obs} cells) …")
-
-    n_components = min(n_pcs, min(adata.n_obs, adata.n_vars) - 1)
-
-    # Get dense matrix efficiently — use sparse-aware approach
-    X = adata.X
-    if scipy.sparse.issparse(X):
-        X_dense = X.toarray()
-    else:
-        X_dense = X.copy()
-
-    if adata.n_obs > max_cells:
-        print(f"  Subsampling to {max_cells} cells for Scrublet fitting …")
-        rng = np.random.default_rng(random_state)
-        idx = rng.choice(adata.n_obs, max_cells, replace=False)
-        X_sub = X_dense[idx]
-
-        scrub = scr.Scrublet(X_sub, expected_doublet_rate=0.1)
-        scrub.scrub_doublets(
-            min_counts=2, min_cells=3,
-            min_gene_variability_pctl=85,
-            n_prin_comps=n_components,
-        )
-        # Score all cells using the fitted model
-        doublet_scores    = scrub.score_cells_db(X_dense)
-        predicted_doublets = doublet_scores > scrub.threshold_
-        print(f"  Scrublet threshold: {scrub.threshold_:.3f}")
-    else:
-        scrub = scr.Scrublet(X_dense, expected_doublet_rate=0.1)
-        doublet_scores, predicted_doublets = scrub.scrub_doublets(
-            min_counts=2, min_cells=3,
-            min_gene_variability_pctl=85,
-            n_prin_comps=n_components,
-        )
-        scrub.call_doublets()
-        predicted_doublets = scrub.predicted_doublets_
-
-    del X_dense
-    gc.collect()
-
+def identify_doublets(adata, fig_dir):
+    '''
+    Doublet identification with scrublet 
+    '''
+    
+    print("Starting scrublet doublet detection:")
+    print(f"Dataset dimensions: {adata.n_obs} cells, {adata.n_vars} genes")
+    
+    # Calculate maximum possible components
+    max_components = min(adata.n_obs, adata.n_vars) - 1
+    n_components = min(30, max_components)  # Use 30 or fewer if data is small
+    
+    print(f"Using {n_components} principal components (max possible: {max_components})")
+    
+    # Initialize Scrublet with adata object
+    scrub = scr.Scrublet(adata.X, expected_doublet_rate=0.1) # requires an estimated rate as a prior 
+    # Run the doublet detection
+    doublet_scores, predicted_doublets = scrub.scrub_doublets(min_counts=2, 
+                                                          min_cells=3, 
+                                                          min_gene_variability_pctl=85, 
+                                                          n_prin_comps=n_components)
+    # scrub.call_doublets(threshold=0.25)
+    scrub.call_doublets()
+    
+    print("Plotting scrublet histogram")
+    # Plot doublet score histogram
     scrub.plot_histogram()
-    plt.savefig(f"{fig_dir}/doublet_histogram.pdf", bbox_inches='tight')
+    plt.savefig(f"{fig_dir}/doublet_histogram.pdf", bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-    adata.obs['doublet_score']         = doublet_scores
-    adata.obs['predicted_doublet']     = predicted_doublets
-    adata.obs['predicted_doublet_cat'] = (adata.obs['predicted_doublet']
-                                           .astype(str).astype('category'))
-
-    n_doublets = predicted_doublets.sum()
-    print(f"  Predicted doublets: {n_doublets} "
-          f"({n_doublets/adata.n_obs*100:.1f}%)")
+    # Plot UMAP:
+    print('Running UMAP...')
+    scrub.set_embedding('UMAP', scr.get_umap(scrub.manifold_obs_, 10, min_dist=0.3))
+    scrub.plot_embedding('UMAP', order_points=True)
+    plt.savefig(f"{fig_dir}/doublet_umap.pdf", bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+    
+    print("Saving scrublet data to adata")
+    
+    # Add scrublet results back to adata object FIRST
+    adata.obs['doublet_score'] = doublet_scores
+    adata.obs['predicted_doublet'] = predicted_doublets
+    
+    # THEN create the categorical version
+    adata.obs['predicted_doublet_cat'] = adata.obs['predicted_doublet'].astype(str).astype('category')
+    
     return adata
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QC metrics
@@ -480,11 +465,7 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         print_qc_summary(raw_metrics)
 
         print("\n=== Doublet detection ===")
-        adata = identify_doublets(
-            adata, fig_dir,
-            max_cells=args.scrublet_max_cells,
-            n_pcs=args.n_pcs_scrublet,
-        )
+        adata = identify_doublets(adata, fig_dir, n_pcs=args.n_pcs_scrublet)
         all_metrics.append(
             calculate_qc_metrics(adata, sample_name=key,
                                   stage="post_doublet_detection"))
