@@ -11,7 +11,7 @@ cyclum_env: '/private/groups/russelllab/jodie/miniforge3/envs/cyclum'
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
 combine_script: "../snakemake_scripts/analysis/integrate_h5ad_by_condition.py" 
 kallisto_index: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
-filter_script: "../snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata.py"
+filter_script: "../snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata_no_pybiomart.py" # Changes to remove biomart dependancy on 3/25/26
 cell_cycle_script: "../snakemake_scripts/analysis/cyclum_cell_cycle.py"
 cyclum_analysis_script: "../snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"
 transcripts_to_genes: "../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
@@ -42,8 +42,8 @@ combine_partition: "medium"  # SLURM partition for combine jobs
 filter_threads: 128
 filter_cpus: 16
 filter_mem: 1000000  # MB
-filter_time: "192:00:00"  # HH:MM:SS
-filter_partition: "long"  # SLURM partition for filter jobs
+filter_time: "12:00:00"  # HH:MM:SS
+filter_partition: "medium"  # SLURM partition for filter jobs
 
 # Compute resources for cell cycle
 cell_cycle_threads: 64           # Instead of 128
@@ -76,7 +76,7 @@ validate_time: "8:00:00"
 # cellcycle_mem: 64000
 # cellcycle_time: "8:00:00"
 
-integrate_script: scripts/method_comparison/integrate.py #"scripts/method_comparison/validate_pipseq.py" 
+integrate_script: scripts/method_comparison/integrate_v2.py  # Changed to v2 on 3/25/26
 integrate_threads: 16
 integrate_partition: "medium"
 integrate_mem: 128000
