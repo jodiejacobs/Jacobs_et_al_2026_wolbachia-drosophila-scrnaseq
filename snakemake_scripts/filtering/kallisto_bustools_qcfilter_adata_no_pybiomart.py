@@ -465,7 +465,7 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         print_qc_summary(raw_metrics)
 
         print("\n=== Doublet detection ===")
-        adata = identify_doublets(adata, fig_dir, n_pcs=args.n_pcs_scrublet)
+        adata = identify_doublets(adata, fig_dir)
         all_metrics.append(
             calculate_qc_metrics(adata, sample_name=key,
                                   stage="post_doublet_detection"))
