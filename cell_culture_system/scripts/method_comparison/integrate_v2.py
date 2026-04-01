@@ -171,6 +171,31 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     # Store log-normalised pre-scale counts in .raw
     adata.raw = adata
 
+    # ── Cell cycle scoring on full gene set (before HVG subset) ──────────────
+    # Must happen here — after HVG subset, cell cycle marker genes are gone.
+    S_GENES_FBGN = [
+        'FBgn0005655', 'FBgn0015806', 'FBgn0034898', 'FBgn0011230', 'FBgn0015278',
+        'FBgn0019624', 'FBgn0020369', 'FBgn0261933', 'FBgn0020651', 'FBgn0020652',
+        'FBgn0015929', 'FBgn0032435', 'FBgn0015308', 'FBgn0011766', 'FBgn0262656',
+        'FBgn0010382', 'FBgn0010314', 'FBgn0000499', 'FBgn0015799', 'FBgn0028396',
+        'FBgn0015270', 'FBgn0015714', 'FBgn0025926', 'FBgn0003257',
+    ]
+    G2M_GENES_FBGN = [
+        'FBgn0010114', 'FBgn0010113', 'FBgn0011577', 'FBgn0004107', 'FBgn0003525',
+        'FBgn0003124', 'FBgn0025564', 'FBgn0025948', 'FBgn0027548', 'FBgn0005619',
+        'FBgn0011739', 'FBgn0002863', 'FBgn0024822', 'FBgn0002610', 'FBgn0010309',
+        'FBgn0261823', 'FBgn0036449',
+    ]
+    s_present   = [g for g in S_GENES_FBGN   if g in adata.var_names]
+    g2m_present = [g for g in G2M_GENES_FBGN if g in adata.var_names]
+    print(f"  Cell cycle genes found: S={len(s_present)}/{len(S_GENES_FBGN)}, "
+        f"G2M={len(g2m_present)}/{len(G2M_GENES_FBGN)}")
+    if len(s_present) >= 3 and len(g2m_present) >= 3:
+        sc.tl.score_genes_cell_cycle(adata, s_genes=s_present, g2m_genes=g2m_present)
+        print(f"  Phase distribution: {adata.obs['phase'].value_counts().to_dict()}")
+    else:
+        print("  WARNING: Too few cell cycle genes found, skipping scoring.")
+
     # Subset to HVGs, scale, PCA
     adata = adata[:, adata.var["highly_variable"]].copy()
     sc.pp.scale(adata, max_value=10)
