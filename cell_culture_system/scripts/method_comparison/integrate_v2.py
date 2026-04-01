@@ -219,7 +219,7 @@ def optimize_leiden_resolution(
     random_state=42,
 ):
     if resolutions is None:
-        resolutions = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0]
+        resolutions = [0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
 
     os.makedirs(fig_dir, exist_ok=True)
     X_pca = adata.obsm.get("X_pca_harmony", adata.obsm["X_pca"])[:, :n_pcs]
