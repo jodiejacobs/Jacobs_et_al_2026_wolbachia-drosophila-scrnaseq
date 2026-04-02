@@ -603,12 +603,25 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
     stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
     pal    = _cc_palette(stages)
 
-    bin_labels = [f"Q{i+1}" for i in range(n_titer_bins)]
+    # ── qcut with duplicate-safe labels ──────────────────────────────────────
+    # Use duplicates="drop" and derive labels from actual bin count afterward
+    _, bin_edges = pd.qcut(df[titer_col], q=n_titer_bins,
+                           retbins=True, duplicates="drop")
+    actual_n_bins = len(bin_edges) - 1
+    if actual_n_bins < 2:
+        print(f"   SKIP: too few unique titer values to form bins"); return
+
+    bin_labels = [f"Q{i+1}" for i in range(actual_n_bins)]
     df = df.copy()
-    df["titer_bin"] = pd.qcut(df[titer_col], q=n_titer_bins,
-                               labels=bin_labels, duplicates="drop")
+    df["titer_bin"] = pd.cut(df[titer_col], bins=bin_edges,
+                             labels=bin_labels, include_lowest=True)
     df = df.dropna(subset=["titer_bin"])
     actual_bins = df["titer_bin"].cat.categories.tolist()
+
+    if actual_n_bins < n_titer_bins:
+        print(f"   NOTE: requested {n_titer_bins} bins but only {actual_n_bins} "
+              f"possible given duplicate titer values")
+    # ─────────────────────────────────────────────────────────────────────────
 
     ct   = pd.crosstab(df["titer_bin"], df[stage_col]).reindex(columns=stages, fill_value=0)
     prop = ct.div(ct.sum(axis=1), axis=0) * 100
@@ -624,7 +637,7 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
                     .agg(lo="min", hi="max").reset_index())
     bin_annot  = {row["titer_bin"]: f"{row['lo']:.2f}–{row['hi']:.2f}"
                   for _, row in bin_ranges.iterrows()}
-
+    
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     bottom = np.zeros(len(prop))

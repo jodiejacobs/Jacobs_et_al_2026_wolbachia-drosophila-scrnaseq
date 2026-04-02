@@ -831,8 +831,8 @@ rule project_to_cell_cycle:
 
         python {params.script} \
             --query {input.query_h5ad} \
-            --reference {input.ref_h5ad} \
-            --output {output.projected_h5ad}
+            --ref {input.ref_h5ad} \
+            --out_path {output.projected_h5ad}
         """
 
 rule cluster_marker_pathway:
