@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
 import scipy.stats
-from scipy.stats import kruskal, spearmanr, chi2_contingency
+from scipy.stats import kruskal, spearmanr, chi2_contingency, t as t_dist, chi2 as chi2_dist, norm
 from itertools import combinations
 from statsmodels.stats.multitest import multipletests
 from statsmodels.nonparametric.smoothers_lowess import lowess
@@ -58,6 +58,98 @@ CC_COLORS = {"g0/g1": "#4C72B0", "s": "#DD8452", "g2/m": "#55A868"}
 def _cc_palette(stages):
     cmap = matplotlib.colormaps["tab10"]
     return {s: CC_COLORS.get(s, cmap(i % 10)) for i, s in enumerate(stages)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P-value helpers — underflow-safe
+# ─────────────────────────────────────────────────────────────────────────────
+
+def spearman_p_exact(x, y):
+    """Spearman rho + underflow-safe p via t-distribution logsf."""
+    rho, _ = spearmanr(x, y)
+    n = len(x)
+    denom = max(1 - rho**2, 1e-15)
+    t_stat = rho * np.sqrt((n - 2) / denom)
+    # Guard: if t_stat is inf (rho=±1 with large n), logsf returns -inf
+    if not np.isfinite(t_stat):
+        return rho, 0.0, -np.inf, t_stat
+    log_p  = t_dist.logsf(abs(t_stat), df=n - 2) + np.log(2)
+    p_val  = np.exp(log_p)
+    log10_p = log_p / np.log(10)
+    return rho, p_val, log10_p, t_stat
+
+def chi2_p_exact(stat, dof):
+    """Chi-squared p via logsf — underflow-safe.
+
+    Returns
+    -------
+    p_val : float
+    log10_p : float
+    """
+    log_p  = chi2_dist.logsf(stat, df=dof)
+    p_val  = np.exp(log_p)
+    return p_val, log_p / np.log(10)
+
+
+def kw_p_exact(H, k):
+    """Kruskal-Wallis p via chi2 logsf — underflow-safe.
+
+    Returns
+    -------
+    p_val : float
+    log10_p : float
+    """
+    log_p = chi2_dist.logsf(H, df=k - 1)
+    p_val = np.exp(log_p)
+    return p_val, log_p / np.log(10)
+
+
+def z_p_exact(z):
+    """Two-tailed normal p via logsf — underflow-safe.
+
+    Returns
+    -------
+    p_val : float
+    log10_p : float
+    """
+    log_p = norm.logsf(abs(z)) + np.log(2)
+    p_val = np.exp(log_p)
+    return p_val, log_p / np.log(10)
+
+
+def format_p(p_val, log10_p):
+    """Human-readable p string; falls back to log10 notation on underflow."""
+    # Guard against -inf or nan (e.g. degenerate input, perfect correlation)
+    if not np.isfinite(log10_p):
+        if p_val == 0.0:
+            return "p<5e-324"
+        return f"p={p_val:.2e}"
+    if p_val == 0.0 or p_val < 5e-300:
+        exp = int(np.floor(log10_p))
+        man = 10 ** (log10_p - exp)
+        return f"p={man:.2f}×10^{exp}"
+    if p_val < 0.001:
+        return f"p={p_val:.2e}"
+    return f"p={p_val:.4f}"
+
+
+def bh_adjust_log10(log10_p_raw_array):
+    """BH-adjust an array of log10 p-values, returning (p_adj, log10_p_adj).
+
+    Uses the raw float p for multipletests when not underflowed; for
+    underflowed values substitutes the minimum positive float so that
+    multipletests ranks them correctly (all as most significant).
+    """
+    p_raw = np.array([10**lp for lp in log10_p_raw_array], dtype=float)
+    # Replace exact zeros with smallest positive float64 for multipletests
+    p_raw_safe = np.where(p_raw == 0.0, np.finfo(float).tiny, p_raw)
+    _, p_adj, _, _ = multipletests(p_raw_safe, method="fdr_bh")
+    log10_p_adj = np.where(
+        p_adj == 0.0,
+        np.log10(np.finfo(float).tiny),   # ~-308
+        np.log10(np.maximum(p_adj, np.finfo(float).tiny)),
+    )
+    return p_adj, log10_p_adj
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,7 +300,7 @@ def load_query_files(query_paths, ref_condition, titer_col,
         if titer_col not in a.obs.columns:
             print(f"   WARNING: '{titer_col}' not in obs — titer analyses will skip this file")
 
-        a.obs["dataset"]   = "query"
+        a.obs["dataset"]     = "query"
         a.obs["source_file"] = basename
         a.obs_names = [f"{basename}_{bc}" for bc in a.obs_names]
 
@@ -279,7 +371,7 @@ def joint_preprocess_and_harmony(ref_raw, query_raw, ref_full,
     sc.pp.log1p(combined)
 
     # ── 3. Restrict to reference HVGs ─────────────────────────────────────────
-    ref_hvgs = ref_full.var_names[ref_full.var["highly_variable"]].tolist()
+    ref_hvgs     = ref_full.var_names[ref_full.var["highly_variable"]].tolist()
     hvgs_present = [g for g in ref_hvgs if g in combined.var_names]
     print(f"   Reference HVGs: {len(ref_hvgs)} total, "
           f"{len(hvgs_present)} present in combined dataset")
@@ -301,7 +393,6 @@ def joint_preprocess_and_harmony(ref_raw, query_raw, ref_full,
     sc.tl.pca(combined, n_comps=n_pcs, use_highly_variable=True, svd_solver="arpack")
 
     # ── 6. Harmony ────────────────────────────────────────────────────────────
-    # Validate harmony_vars exist
     missing_vars = [v for v in harmony_vars if v not in combined.obs.columns]
     if missing_vars:
         print(f"   WARNING: harmony_vars {missing_vars} not in obs — dropping them")
@@ -309,7 +400,6 @@ def joint_preprocess_and_harmony(ref_raw, query_raw, ref_full,
     if not harmony_vars:
         raise ValueError("No valid harmony_vars remain — cannot run Harmony")
 
-    # Fill any NaN in harmony vars (e.g. replicate missing for some cells)
     for v in harmony_vars:
         combined.obs[v] = combined.obs[v].astype(str).fillna("unknown")
 
@@ -317,7 +407,7 @@ def joint_preprocess_and_harmony(ref_raw, query_raw, ref_full,
     pca_matrix = combined.obsm["X_pca"]
     meta       = combined.obs[harmony_vars].copy()
     ho = hm.run_harmony(pca_matrix, meta, harmony_vars,
-                         max_iter_harmony=30, random_state=42)
+                        max_iter_harmony=30, random_state=42)
     combined.obsm["X_pca_harmony"] = ho.Z_corr.T
 
     print("   Harmony complete")
@@ -349,6 +439,8 @@ def knn_label_transfer(combined, ref_mask, ref_full, k=15):
     -------
     query : AnnData
         Query cells with obs["leiden_ref"] added.
+    combined : AnnData
+        Combined object with UMAP stored.
     """
     from sklearn.neighbors import NearestNeighbors
 
@@ -376,11 +468,11 @@ def knn_label_transfer(combined, ref_mask, ref_full, k=15):
 
     # Build query AnnData from combined
     query = combined[~ref_mask].copy()
-    query.obs["leiden_ref"]        = transferred
-    query.obs["knn_confidence"]    = confidence
-    query.obsm["X_pca_harmony"]    = query_pca
+    query.obs["leiden_ref"]     = transferred
+    query.obs["knn_confidence"] = confidence
+    query.obsm["X_pca_harmony"] = query_pca
 
-    # Also store UMAP projection (computed on combined, subset here)
+    # UMAP on full combined, then subset
     print("   Computing UMAP on combined Harmony embedding …")
     sc.pp.neighbors(combined, use_rep="X_pca_harmony", n_neighbors=30)
     sc.tl.umap(combined)
@@ -418,9 +510,9 @@ def assign_cc_from_reference(query, ref_full,
         return vc.iloc[0] / vc.sum()
 
     stage_map = (ref_obs.groupby(leiden_col)[stage_col]
-                         .agg(cc_stage=majority, purity=purity)
-                         .reset_index()
-                         .rename(columns={leiden_col: "cluster"}))
+                        .agg(cc_stage=majority, purity=purity)
+                        .reset_index()
+                        .rename(columns={leiden_col: "cluster"}))
 
     if pseudotime_col in ref_full.obs.columns:
         pt_map = (ref_full.obs[[leiden_col, pseudotime_col]]
@@ -498,13 +590,23 @@ def q1_titer_vs_pseudotime(obs, fig_dir, sample,
     stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
     pal    = _cc_palette(stages)
 
-    rho, p_val = spearmanr(pt, tit)
-    print(f"   Spearman rho={rho:.3f}, p={p_val:.3e}")
+    # ── Underflow-safe Spearman ───────────────────────────────────────────────
+    rho, p_val, log10_p, t_stat = spearman_p_exact(pt, tit)
+    p_str = format_p(p_val, log10_p)
+    print(f"   Spearman rho={rho:.3f}, {p_str}  "
+          f"(t={t_stat:.2f}, df={len(df)-2}, log10_p={log10_p:.1f})")
 
     pd.DataFrame({
-        "spearman_rho": [rho], "p_value": [p_val], "n_cells": [len(df)],
-        "note": ["cc_pseudotime is cluster-median from reference"],
+        "spearman_rho":  [rho],
+        "t_stat":        [t_stat],
+        "df":            [len(df) - 2],
+        "p_value":       [p_val],
+        "log10_p":       [log10_p],
+        "n_cells":       [len(df)],
+        "note": ["cc_pseudotime is cluster-median from reference; "
+                 "log10_p exact even when p_value underflows to 0.0"],
     }).to_csv(os.path.join(fig_dir, f"q1_spearman_{sample}.csv"), index=False)
+    # ─────────────────────────────────────────────────────────────────────────
 
     # LOWESS
     do_lowess = n_unique_pt >= 5
@@ -520,7 +622,7 @@ def q1_titer_vs_pseudotime(obs, fig_dir, sample,
         centers = (edges[:-1] + edges[1:]) / 2
         bin_lbl = [f"{e:.2f}" for e in edges[:-1]]
         df["_pt_bin"] = pd.cut(df[pseudotime_col], bins=edges,
-                                labels=bin_lbl, include_lowest=True)
+                               labels=bin_lbl, include_lowest=True)
         bsum = (df.dropna(subset=["_pt_bin"])
                   .groupby("_pt_bin", observed=True)[titer_col]
                   .agg(n_cells="count", median="median", mean="mean",
@@ -529,7 +631,7 @@ def q1_titer_vs_pseudotime(obs, fig_dir, sample,
                   .reset_index())
         occupied = bsum["_pt_bin"].astype(str).values
         bsum["bin_center"] = [centers[bin_lbl.index(b)]
-                               for b in occupied if b in bin_lbl]
+                              for b in occupied if b in bin_lbl]
         bsum.to_csv(os.path.join(fig_dir, f"q1_bin_summary_{sample}.csv"), index=False)
 
     pi_ticks  = [0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi]
@@ -543,7 +645,7 @@ def q1_titer_vs_pseudotime(obs, fig_dir, sample,
                         c=[pal[stage]], s=3, alpha=0.4, label=stage, rasterized=True)
     axes[0].set_xlabel("CC pseudotime (cluster-median, radians)")
     axes[0].set_ylabel("wMel titer")
-    axes[0].set_title(f"A  Titer vs pseudotime\nSpearman ρ={rho:.3f}, p={p_val:.2e}")
+    axes[0].set_title(f"A  Titer vs pseudotime\nSpearman ρ={rho:.3f}, {p_str}")
     axes[0].set_xticks(pi_ticks); axes[0].set_xticklabels(pi_labels)
     axes[0].legend(title="CC stage", fontsize=8, markerscale=3)
 
@@ -573,7 +675,7 @@ def q1_titer_vs_pseudotime(obs, fig_dir, sample,
                      ha="center", va="center", transform=axes[2].transAxes)
     axes[2].set_xlabel("Pseudotime bin center (radians)")
     axes[2].set_ylabel("wMel titer")
-    axes[2].set_title(f"C  Median titer ± IQR")
+    axes[2].set_title("C  Median titer ± IQR")
 
     plt.suptitle("Q1 — wMel titer vs cell-cycle pseudotime", fontweight="bold")
     plt.tight_layout()
@@ -604,12 +706,11 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
     pal    = _cc_palette(stages)
 
     # ── qcut with duplicate-safe labels ──────────────────────────────────────
-    # Use duplicates="drop" and derive labels from actual bin count afterward
     _, bin_edges = pd.qcut(df[titer_col], q=n_titer_bins,
                            retbins=True, duplicates="drop")
     actual_n_bins = len(bin_edges) - 1
     if actual_n_bins < 2:
-        print(f"   SKIP: too few unique titer values to form bins"); return
+        print("   SKIP: too few unique titer values to form bins"); return
 
     bin_labels = [f"Q{i+1}" for i in range(actual_n_bins)]
     df = df.copy()
@@ -627,17 +728,27 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
     prop = ct.div(ct.sum(axis=1), axis=0) * 100
     prop.to_csv(os.path.join(fig_dir, f"q2_composition_{sample}.csv"))
 
-    chi2, p_chi, dof, _ = chi2_contingency(ct.values)
-    print(f"   Chi-squared: χ²={chi2:.3f}, df={dof}, p={p_chi:.3e}")
+    # ── Underflow-safe chi-squared ────────────────────────────────────────────
+    chi2_stat, _, dof, _ = chi2_contingency(ct.values)
+    p_chi, log10_p_chi   = chi2_p_exact(chi2_stat, dof)
+    p_str = format_p(p_chi, log10_p_chi)
+    print(f"   Chi-squared: χ²={chi2_stat:.3f}, df={dof}, {p_str}  "
+          f"(log10_p={log10_p_chi:.1f})")
+
     pd.DataFrame({
-        "chi2": [chi2], "dof": [dof], "p_value": [p_chi], "n_cells": [len(df)],
+        "chi2":    [chi2_stat],
+        "dof":     [dof],
+        "p_value": [p_chi],
+        "log10_p": [log10_p_chi],
+        "n_cells": [len(df)],
     }).to_csv(os.path.join(fig_dir, f"q2_chisq_{sample}.csv"), index=False)
+    # ─────────────────────────────────────────────────────────────────────────
 
     bin_ranges = (df.groupby("titer_bin", observed=True)[titer_col]
                     .agg(lo="min", hi="max").reset_index())
     bin_annot  = {row["titer_bin"]: f"{row['lo']:.2f}–{row['hi']:.2f}"
                   for _, row in bin_ranges.iterrows()}
-    
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     bottom = np.zeros(len(prop))
@@ -652,7 +763,7 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
     axes[0].set_xlabel(f"wMel titer quantile (Q1=lowest, Q{len(actual_bins)}=highest)")
     axes[0].set_ylabel("% of cells")
     axes[0].set_title(f"A  CC phase composition per titer bin\n"
-                       f"χ²={chi2:.1f}, df={dof}, p={p_chi:.2e}")
+                      f"χ²={chi2_stat:.1f}, df={dof}, {p_str}")
     axes[0].legend(title="CC stage", bbox_to_anchor=(1.01, 1),
                    loc="upper left", fontsize=9)
 
@@ -677,10 +788,10 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def q3_titer_by_phase(obs, umap_xy, fig_dir, sample,
-                       titer_col="wolbachia_titer",
-                       stage_col="cc_stage",
-                       pseudotime_col="cc_pseudotime",
-                       n_sectors=12):
+                      titer_col="wolbachia_titer",
+                      stage_col="cc_stage",
+                      pseudotime_col="cc_pseudotime",
+                      n_sectors=12):
     print(f"\n── Q3: titer by CC phase ──")
 
     df = obs[[titer_col, stage_col]].copy()
@@ -693,54 +804,77 @@ def q3_titer_by_phase(obs, umap_xy, fig_dir, sample,
     stages += [s for s in df[stage_col].unique() if s not in CC_ORDER]
     pal    = _cc_palette(stages)
 
-    groups  = [df.loc[df[stage_col] == s, titer_col].values for s in stages]
-    kw_stat, kw_p = kruskal(*groups)
-    print(f"   Kruskal-Wallis: H={kw_stat:.3f}, p={kw_p:.3e}")
+    groups = [df.loc[df[stage_col] == s, titer_col].values for s in stages]
+
+    # ── Underflow-safe Kruskal-Wallis ─────────────────────────────────────────
+    kw_stat, _  = kruskal(*groups)
+    kw_p, log10_p_kw = kw_p_exact(kw_stat, len(stages))
+    p_str_kw = format_p(kw_p, log10_p_kw)
+    print(f"   Kruskal-Wallis: H={kw_stat:.3f}, {p_str_kw}  "
+          f"(log10_p={log10_p_kw:.1f})")
 
     pd.DataFrame({
-        "statistic": [kw_stat], "p_value": [kw_p],
-        "n_stages": [len(stages)], "n_cells": [len(df)],
+        "statistic": [kw_stat],
+        "p_value":   [kw_p],
+        "log10_p":   [log10_p_kw],
+        "n_stages":  [len(stages)],
+        "n_cells":   [len(df)],
     }).to_csv(os.path.join(fig_dir, f"q3_kruskal_{sample}.csv"), index=False)
+    # ─────────────────────────────────────────────────────────────────────────
 
     all_ranks  = scipy.stats.rankdata(df[titer_col].values)
     n_total    = len(all_ranks)
     _, counts  = np.unique(df[titer_col].values, return_counts=True)
-    tie_factor = np.sum(counts**3 - counts) / (12*(n_total-1)) if n_total > 1 else 0
+    tie_factor = np.sum(counts**3 - counts) / (12*(n_total - 1)) if n_total > 1 else 0
     df = df.copy()
     df["_rank"] = all_ranks
 
+    # ── Underflow-safe Dunn post-hoc ──────────────────────────────────────────
     rows = []
     for s_a, s_b in combinations(stages, 2):
         ga = df.loc[df[stage_col] == s_a, "_rank"].values
         gb = df.loc[df[stage_col] == s_b, "_rank"].values
         na, nb = len(ga), len(gb)
         if na < 2 or nb < 2: continue
-        se = np.sqrt((n_total*(n_total+1)/12 - tie_factor) * (1/na + 1/nb))
+        se = np.sqrt((n_total*(n_total + 1)/12 - tie_factor) * (1/na + 1/nb))
         if se == 0: continue
         z = (ga.mean() - gb.mean()) / se
+        p_raw, log10_p_raw = z_p_exact(z)
         rows.append({
-            "stage_A": s_a, "stage_B": s_b,
-            "median_titer_A": np.median(df.loc[df[stage_col]==s_a, titer_col]),
-            "median_titer_B": np.median(df.loc[df[stage_col]==s_b, titer_col]),
-            "z_stat": z, "p_raw": 2*scipy.stats.norm.sf(abs(z)),
-            "n_A": na, "n_B": nb,
+            "stage_A":        s_a,
+            "stage_B":        s_b,
+            "median_titer_A": np.median(df.loc[df[stage_col] == s_a, titer_col]),
+            "median_titer_B": np.median(df.loc[df[stage_col] == s_b, titer_col]),
+            "z_stat":         z,
+            "p_raw":          p_raw,
+            "log10_p_raw":    log10_p_raw,
+            "n_A":            na,
+            "n_B":            nb,
         })
 
     dunn_df = pd.DataFrame(rows)
     if len(dunn_df):
-        _, p_adj, _, _ = multipletests(dunn_df["p_raw"], method="fdr_bh")
+        p_adj, log10_p_adj = bh_adjust_log10(dunn_df["log10_p_raw"].values)
         dunn_df["p_adj_BH"]    = p_adj
-        dunn_df["significant"] = dunn_df["p_adj_BH"] < 0.05
-        dunn_df = dunn_df.sort_values("p_adj_BH")
+        dunn_df["log10_p_adj"] = log10_p_adj
+        dunn_df["significant"] = dunn_df["log10_p_adj"] < np.log10(0.05)
+        dunn_df = dunn_df.sort_values("log10_p_adj")
         dunn_df.to_csv(os.path.join(fig_dir, f"q3_dunn_{sample}.csv"), index=False)
+
         print(f"   Dunn: {dunn_df['significant'].sum()}/{len(dunn_df)} pairs significant")
-        print(dunn_df[["stage_A","stage_B","median_titer_A",
-                        "median_titer_B","p_adj_BH","significant"]].to_string(index=False))
+        disp = dunn_df[["stage_A", "stage_B", "median_titer_A", "median_titer_B",
+                         "log10_p_adj", "significant"]].copy()
+        disp["p_adj_str"] = [format_p(pa, lp)
+                             for pa, lp in zip(dunn_df["p_adj_BH"], dunn_df["log10_p_adj"])]
+        print(disp[["stage_A", "stage_B", "median_titer_A", "median_titer_B",
+                    "p_adj_str", "significant"]].to_string(index=False))
+    # ─────────────────────────────────────────────────────────────────────────
 
     stage_med = df.groupby(stage_col)[titer_col].median().to_dict()
     (df.groupby(stage_col)[titer_col]
        .agg(n_cells="count", median="median", mean="mean", std="std",
-            q25=lambda x: x.quantile(0.25), q75=lambda x: x.quantile(0.75))
+            q25=lambda x: x.quantile(0.25),
+            q75=lambda x: x.quantile(0.75))
        .reindex(stages).reset_index()
        .rename(columns={stage_col: "stage"})
        .to_csv(os.path.join(fig_dir, f"q3_stage_summary_{sample}.csv"), index=False))
@@ -779,20 +913,20 @@ def q3_titer_by_phase(obs, umap_xy, fig_dir, sample,
             xj = stages.index(row["stage_B"])
             y  = y_max + y_step * (k_idx + 1)
             ax_vln.plot([xi, xj], [y, y], color="black", lw=1)
-            ax_vln.text((xi+xj)/2, y+y_step*0.15, "*",
+            ax_vln.text((xi + xj) / 2, y + y_step * 0.15, "*",
                         ha="center", va="bottom", fontsize=10)
     ax_vln.set_xlabel("Cell-cycle stage")
     ax_vln.set_ylabel("wMel titer")
-    ax_vln.set_title(f"A  Titer by CC stage\nKW p={kw_p:.2e}")
+    ax_vln.set_title(f"A  Titer by CC stage\nKW {p_str_kw}")
 
     # B: UMAP titer
     if has_umap:
         tvals = obs[titer_col].values.astype(float)
         valid = ~np.isnan(tvals)
-        sc_   = ax_ut.scatter(umap_xy[valid,0], umap_xy[valid,1],
-                               c=tvals[valid], cmap="viridis",
-                               s=2, alpha=0.7, rasterized=True)
-        ax_ut.scatter(umap_xy[~valid,0], umap_xy[~valid,1],
+        sc_   = ax_ut.scatter(umap_xy[valid, 0], umap_xy[valid, 1],
+                              c=tvals[valid], cmap="viridis",
+                              s=2, alpha=0.7, rasterized=True)
+        ax_ut.scatter(umap_xy[~valid, 0], umap_xy[~valid, 1],
                       c="lightgrey", s=1, alpha=0.2, rasterized=True)
         plt.colorbar(sc_, ax=ax_ut, label="wMel titer", shrink=0.8)
     ax_ut.set_title("B  UMAP — wMel titer")
@@ -802,36 +936,38 @@ def q3_titer_by_phase(obs, umap_xy, fig_dir, sample,
     if has_umap:
         stage_vals = obs[stage_col].astype(str).str.lower().values
         c_map_vals = [pal.get(s, "grey") for s in stage_vals]
-        ax_uc.scatter(umap_xy[:,0], umap_xy[:,1],
+        ax_uc.scatter(umap_xy[:, 0], umap_xy[:, 1],
                       c=c_map_vals, s=2, alpha=0.7, rasterized=True)
         for s in stages:
             ax_uc.scatter([], [], color=pal[s], label=s, s=20)
         ax_uc.legend(title="CC stage", fontsize=8, markerscale=2,
-                     bbox_to_anchor=(1.01,1), loc="upper left")
+                     bbox_to_anchor=(1.01, 1), loc="upper left")
     ax_uc.set_title("C  UMAP — CC stage (KNN transferred)")
     ax_uc.set_xticks([]); ax_uc.set_yticks([])
 
     # D: polar titer cyclicity
     if has_pt and df_pol is not None and len(df_pol) >= 20:
-        edges   = np.linspace(0, 2*np.pi, n_sectors+1)
+        edges   = np.linspace(0, 2*np.pi, n_sectors + 1)
         centers = (edges[:-1] + edges[1:]) / 2
         df_pol  = df_pol.copy()
         df_pol["_sector"] = pd.cut(df_pol[pseudotime_col], bins=edges,
-                                    labels=range(n_sectors), include_lowest=True)
+                                   labels=range(n_sectors), include_lowest=True)
         sec_med = (df_pol.groupby("_sector", observed=True)[titer_col]
-                         .median().reindex(range(n_sectors)).fillna(0).values)
+                         .median()
+                         .reindex(range(n_sectors))
+                         .fillna(0).values)
         vmin, vmax = sec_med.min(), sec_med.max()
         norm_vals  = (sec_med - vmin) / (vmax - vmin + 1e-9)
         width      = 2*np.pi / n_sectors
         for theta, r, nv in zip(centers, sec_med, norm_vals):
-            ax_pol.bar(theta, r, width=width*0.85, bottom=0,
+            ax_pol.bar(theta, r, width=width * 0.85, bottom=0,
                        color=plt.cm.coolwarm(nv), alpha=0.85)
         r_annot = sec_med.max() * 1.2
         for name, th0, th1 in [("g0/g1", 0, np.pi/2),
-                                 ("s",     np.pi/2, 3*np.pi/2),
-                                 ("g2/m",  3*np.pi/2, 2*np.pi)]:
+                                ("s",     np.pi/2, 3*np.pi/2),
+                                ("g2/m",  3*np.pi/2, 2*np.pi)]:
             if name in pal:
-                ax_pol.text((th0+th1)/2, r_annot, name,
+                ax_pol.text((th0 + th1) / 2, r_annot, name,
                             ha="center", va="center",
                             fontsize=7, color=pal[name], fontweight="bold")
         ax_pol.set_theta_zero_location("N")
@@ -879,7 +1015,7 @@ def run(ref_path, query_paths, out_path, fig_dir, sample,
         if matched:
             expanded.extend(matched)
         else:
-            expanded.append(p)  # keep as-is; will fail gracefully in load_query_files
+            expanded.append(p)
     query_paths = expanded
     print(f"Query files ({len(query_paths)}):")
     for p in query_paths:
@@ -915,13 +1051,14 @@ def run(ref_path, query_paths, out_path, fig_dir, sample,
     )
 
     # ── Sanity-check UMAP ─────────────────────────────────────────────────────
-    sc.pl.umap(combined, color=["dataset", "leiden"] if "leiden" in combined.obs.columns
+    sc.pl.umap(combined,
+               color=["dataset", "leiden"] if "leiden" in combined.obs.columns
                else ["dataset"],
                save=f"_{sample}_combined_dataset.pdf")
 
     # ── Analyses ──────────────────────────────────────────────────────────────
-    obs    = query.obs.copy()
-    umap   = query.obsm.get("X_umap", None)
+    obs  = query.obs.copy()
+    umap = query.obsm.get("X_umap", None)
 
     q1_titer_vs_pseudotime(
         obs, fig_dir, sample,

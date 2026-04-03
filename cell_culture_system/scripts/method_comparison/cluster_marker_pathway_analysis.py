@@ -1,9 +1,15 @@
 '''
 Comprehensive cluster analysis: transcriptional activity, marker genes, and pathway enrichment
 Uses FlyEnrichr API for automated pathway analysis with FlyBase annotations
-REQUIRES GENE SYMBOLS - converts FBgn IDs automatically
-NOW WITH COMBINED GO ANALYSIS
+
+Key fixes vs previous version:
+  - DE run on .raw (log-normalised counts), NOT scaled .X
+  - Marker filtering uses log2fc > 1.0 + pct_in >= 0.10 + pct_ratio >= 1.5
+  - Background gene set passed to FlyEnrichr (all detected genes in dataset)
+  - Significance filter (adj_p < 0.05) applied before combined_score sorting
+  - mt/ribo/cell_cycle genes excluded from enrichment input
 '''
+
 import scanpy as sc
 import pandas as pd
 import numpy as np
@@ -18,930 +24,742 @@ import gzip
 from scipy.stats import kruskal
 from matplotlib.patches import Patch
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gene symbol mapping
+# ─────────────────────────────────────────────────────────────────────────────
+
 def load_fbgn_to_symbol_mapping(mapping_file):
     """
-    Load FBgn to gene symbol mapping from transcripts_to_genes.txt
-    
-    Format: transcript_id    FBgn_id    gene_symbol    ...
-    We want: FBgn_id -> gene_symbol (columns 2 -> 3)
-    
-    Parameters:
-    -----------
-    mapping_file : str
-        Path to transcripts_to_genes.txt file
-    
-    Returns:
-    --------
-    dict : FBgn -> gene_symbol mapping
+    Load FBgn -> gene symbol from transcripts_to_genes.txt
+    Format: transcript_id  FBgn_id  gene_symbol  ...
     """
     print("\n" + "="*60)
     print("LOADING GENE SYMBOL MAPPING")
     print("="*60)
-    print(f"Loading mapping from: {mapping_file}")
-    
+    print(f"  File: {mapping_file}")
+
     fbgn_to_symbol = {}
-    
+
     try:
-        # Handle gzipped or plain text
-        if mapping_file.endswith('.gz'):
-            opener = gzip.open
-            mode = 'rt'
-        else:
-            opener = open
-            mode = 'r'
-        
+        opener, mode = (gzip.open, 'rt') if mapping_file.endswith('.gz') else (open, 'r')
         with opener(mapping_file, mode) as f:
             for line in f:
                 parts = line.strip().split('\t')
-                
-                # Skip if not enough columns
                 if len(parts) < 3:
                     continue
-                
-                fbgn_id = parts[1]      # Column 2: FBgn ID
-                gene_symbol = parts[2]  # Column 3: Gene symbol
-                
-                # Only map if FBgn ID looks valid
+                fbgn_id, gene_symbol = parts[1], parts[2]
                 if fbgn_id.startswith('FBgn'):
                     fbgn_to_symbol[fbgn_id] = gene_symbol
-        
-        print(f"  Loaded {len(fbgn_to_symbol)} gene mappings")
-        print(f"  Sample mappings:")
-        for i, (fbgn, symbol) in enumerate(list(fbgn_to_symbol.items())[:10]):
-            print(f"    {fbgn} -> {symbol}")
-        
+
+        print(f"  Loaded {len(fbgn_to_symbol):,} mappings")
+        sample = list(fbgn_to_symbol.items())[:5]
+        for fbgn, sym in sample:
+            print(f"    {fbgn} -> {sym}")
         return fbgn_to_symbol
-        
+
     except FileNotFoundError:
         print(f"  ERROR: File not found: {mapping_file}")
         return None
     except Exception as e:
-        print(f"  ERROR loading mapping: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"  ERROR: {e}")
+        import traceback; traceback.print_exc()
         return None
 
 
+def symbols_from_fbgn(fbgn_list, fbgn_to_symbol):
+    """Convert a list of FBgn IDs to symbols, return (symbols, n_unmapped)."""
+    symbols, unmapped = [], []
+    for g in fbgn_list:
+        sym = fbgn_to_symbol.get(g)
+        if sym:
+            symbols.append(sym)
+        else:
+            unmapped.append(g)
+    return symbols, len(unmapped)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Transcriptional activity
+# ─────────────────────────────────────────────────────────────────────────────
+
 def plot_transcriptional_activity(adata, output_dir, sample_name):
-    """
-    Create box plots of transcriptional activity metrics by cluster
-    """
     print("\n" + "="*60)
     print("TRANSCRIPTIONAL ACTIVITY BY CLUSTER")
     print("="*60)
-    
-    # Check for required columns
-    required_cols = ['n_counts', 'n_genes', 'leiden']
-    missing = [col for col in required_cols if col not in adata.obs.columns]
+
+    required = ['n_counts', 'n_genes', 'leiden']
+    missing = [c for c in required if c not in adata.obs.columns]
     if missing:
-        print(f"ERROR: Missing required columns: {missing}")
-        return
-    
-    # Get cluster order
-    clusters = sorted(adata.obs['leiden'].unique(), key=lambda x: int(x) if str(x).isdigit() else x)
-    
-    # Summary statistics
-    print("\nTranscriptional activity summary by cluster:")
-    print("-" * 80)
-    
-    summary = adata.obs.groupby('leiden')[['n_counts', 'n_genes']].agg(['mean', 'median', 'std', 'min', 'max'])
+        print(f"  ERROR: Missing columns: {missing}")
+        return None
+
+    clusters = sorted(adata.obs['leiden'].unique(),
+                      key=lambda x: int(x) if str(x).isdigit() else x)
+
+    summary = adata.obs.groupby('leiden')[['n_counts', 'n_genes']].agg(
+        ['mean', 'median', 'std', 'min', 'max'])
     print(summary)
-    
-    # Save summary
     summary.to_csv(os.path.join(output_dir, f'{sample_name}_transcriptional_activity_summary.csv'))
-    
-    # Statistical tests with effect sizes
-    print("\n" + "="*60)
-    print("STATISTICAL TESTS & EFFECT SIZES")
-    print("="*60)
-    
-    # Kruskal-Wallis test for n_counts
+
+    # Kruskal-Wallis
     groups_counts = [adata.obs[adata.obs['leiden'] == c]['n_counts'].values for c in clusters]
+    groups_genes  = [adata.obs[adata.obs['leiden'] == c]['n_genes'].values  for c in clusters]
     h_counts, p_counts = kruskal(*groups_counts)
-    
-    # Kruskal-Wallis test for n_genes
-    groups_genes = [adata.obs[adata.obs['leiden'] == c]['n_genes'].values for c in clusters]
-    h_genes, p_genes = kruskal(*groups_genes)
-    
-    # Calculate eta-squared (effect size for Kruskal-Wallis)
-    n = len(adata.obs)
-    k = len(clusters)
-    eta_squared_counts = (h_counts - k + 1) / (n - k)
-    eta_squared_genes = (h_genes - k + 1) / (n - k)
-    
-    # Calculate fold change between highest and lowest cluster means
-    max_mean_counts = summary['n_counts']['mean'].max()
-    min_mean_counts = summary['n_counts']['mean'].min()
-    fold_change_counts = max_mean_counts / min_mean_counts
-    
-    max_mean_genes = summary['n_genes']['mean'].max()
-    min_mean_genes = summary['n_genes']['mean'].min()
-    fold_change_genes = max_mean_genes / min_mean_genes
-    
-    print(f"\nUMI Counts (n_counts):")
-    print(f"  Kruskal-Wallis: H = {h_counts:.2f}, p < 2.2e-16")
-    print(f"  Effect size (η²) = {eta_squared_counts:.4f}", end="")
-    if eta_squared_counts < 0.01:
-        print(" (negligible)")
-    elif eta_squared_counts < 0.06:
-        print(" (small)")
-    elif eta_squared_counts < 0.14:
-        print(" (medium)")
-    else:
-        print(" (large)")
-    print(f"  Fold change (max/min cluster means) = {fold_change_counts:.2f}x")
-    print(f"  Range across clusters: {min_mean_counts:.0f} - {max_mean_counts:.0f}")
-    
-    print(f"\nGene Diversity (n_genes):")
-    print(f"  Kruskal-Wallis: H = {h_genes:.2f}, p < 2.2e-16")
-    print(f"  Effect size (η²) = {eta_squared_genes:.4f}", end="")
-    if eta_squared_genes < 0.01:
-        print(" (negligible)")
-    elif eta_squared_genes < 0.06:
-        print(" (small)")
-    elif eta_squared_genes < 0.14:
-        print(" (medium)")
-    else:
-        print(" (large)")
-    print(f"  Fold change (max/min cluster means) = {fold_change_genes:.2f}x")
-    print(f"  Range across clusters: {min_mean_genes:.0f} - {max_mean_genes:.0f}")
-    
-    # Get cluster colors if available
+    h_genes,  p_genes  = kruskal(*groups_genes)
+
+    n, k = len(adata.obs), len(clusters)
+    eta_counts = (h_counts - k + 1) / (n - k)
+    eta_genes  = (h_genes  - k + 1) / (n - k)
+
+    def eta_label(e):
+        if e < 0.01: return "negligible"
+        if e < 0.06: return "small"
+        if e < 0.14: return "medium"
+        return "large"
+
+    print(f"\nn_counts: H={h_counts:.2f}  p={p_counts:.2e}  η²={eta_counts:.4f} ({eta_label(eta_counts)})")
+    print(f"n_genes:  H={h_genes:.2f}  p={p_genes:.2e}  η²={eta_genes:.4f} ({eta_label(eta_genes)})")
+
     if 'leiden_colors' in adata.uns:
         palette = dict(zip(clusters, adata.uns['leiden_colors']))
     else:
         cmap = plt.colormaps.get_cmap('tab20')
-        palette = {cluster: cmap(i % 20) for i, cluster in enumerate(clusters)}
-    
-    # Create box plots
+        palette = {c: cmap(i % 20) for i, c in enumerate(clusters)}
+
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # n_counts boxplot
-    ax = axes[0]
-    box_data_counts = [adata.obs[adata.obs['leiden'] == c]['n_counts'].values for c in clusters]
-    bp1 = ax.boxplot(box_data_counts, labels=clusters, patch_artist=True,
-                     showfliers=False, widths=0.6)
-    
-    for patch, cluster in zip(bp1['boxes'], clusters):
-        patch.set_facecolor(palette[cluster])
-        patch.set_alpha(0.7)
-    
-    ax.set_xlabel('Leiden Cluster', fontsize=12)
-    ax.set_ylabel('Total UMI Counts', fontsize=12)
-    ax.set_title(f'Total UMI Counts by Cluster\nη² = {eta_squared_counts:.4f}, Fold change = {fold_change_counts:.2f}x', 
-                 fontsize=13)
-    ax.grid(axis='y', alpha=0.3)
-    
-    # n_genes boxplot
-    ax = axes[1]
-    box_data_genes = [adata.obs[adata.obs['leiden'] == c]['n_genes'].values for c in clusters]
-    bp2 = ax.boxplot(box_data_genes, labels=clusters, patch_artist=True,
-                     showfliers=False, widths=0.6)
-    
-    for patch, cluster in zip(bp2['boxes'], clusters):
-        patch.set_facecolor(palette[cluster])
-        patch.set_alpha(0.7)
-    
-    ax.set_xlabel('Leiden Cluster', fontsize=12)
-    ax.set_ylabel('Number of Genes Detected', fontsize=12)
-    ax.set_title(f'Gene Diversity by Cluster\nη² = {eta_squared_genes:.4f}, Fold change = {fold_change_genes:.2f}x',
-                 fontsize=13)
-    ax.grid(axis='y', alpha=0.3)
-    
+    for ax, metric, h, eta, label in [
+        (axes[0], 'n_counts', h_counts, eta_counts, 'Total UMI Counts'),
+        (axes[1], 'n_genes',  h_genes,  eta_genes,  'Genes Detected'),
+    ]:
+        box_data = [adata.obs[adata.obs['leiden'] == c][metric].values for c in clusters]
+        bp = ax.boxplot(box_data, labels=clusters, patch_artist=True,
+                        showfliers=False, widths=0.6)
+        for patch, c in zip(bp['boxes'], clusters):
+            patch.set_facecolor(palette[c]); patch.set_alpha(0.7)
+        ax.set_xlabel('Leiden Cluster', fontsize=12)
+        ax.set_ylabel(label, fontsize=12)
+        ax.set_title(f'{label} by Cluster\nη²={eta:.4f}  H={h:.2f}', fontsize=13)
+        ax.grid(axis='y', alpha=0.3)
+
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'{sample_name}_transcriptional_activity_boxplots.pdf'),
-                dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'{sample_name}_transcriptional_activity.pdf'),
+                dpi=150, bbox_inches='tight')
     plt.close()
-    
-    print(f"\nBoxplots saved to {output_dir}")
-    
-    # Create violin plots
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    
-    sc.pl.violin(adata, 'n_counts', groupby='leiden', ax=axes[0], 
-                 show=False, rotation=0)
-    axes[0].set_title(f'Total UMI Counts Distribution\nη² = {eta_squared_counts:.4f}')
-    axes[0].set_xlabel('Leiden Cluster')
-    
-    sc.pl.violin(adata, 'n_genes', groupby='leiden', ax=axes[1],
-                 show=False, rotation=0)
-    axes[1].set_title(f'Gene Diversity Distribution\nη² = {eta_squared_genes:.4f}')
-    axes[1].set_xlabel('Leiden Cluster')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'{sample_name}_transcriptional_activity_violins.pdf'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # UMAPs if available
+
     if 'X_umap' in adata.obsm:
         sc.pl.umap(adata, color=['leiden', 'n_counts', 'n_genes'],
-                  save=f'_{sample_name}_transcriptional_activity.pdf',
-                  cmap='viridis', ncols=3)
-        print(f"UMAP plots saved")
-    
-    return {
-        'kw_counts_h': h_counts,
-        'kw_counts_p': p_counts,
-        'kw_genes_h': h_genes,
-        'kw_genes_p': p_genes,
-        'eta_squared_counts': eta_squared_counts,
-        'eta_squared_genes': eta_squared_genes,
-        'fold_change_counts': fold_change_counts,
-        'fold_change_genes': fold_change_genes,
-        'summary': summary
-    }
+                   save=f'_{sample_name}_transcriptional_activity.pdf',
+                   cmap='viridis', ncols=3)
+
+    return dict(h_counts=h_counts, p_counts=p_counts,
+                h_genes=h_genes,   p_genes=p_genes,
+                eta_counts=eta_counts, eta_genes=eta_genes)
 
 
-def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon'):
+# ─────────────────────────────────────────────────────────────────────────────
+# Marker genes  (FIX: use .raw, strict filters)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
+                      log2fc_min=1.0, pct_min=0.10, pct_ratio_min=1.5):
     """
-    Find differentially expressed marker genes for each cluster
+    Find cluster marker genes.
+
+    Critical: DE is run on adata.raw (log-normalised counts).
+    Scaled .X is NOT appropriate for DE — it distorts fold changes.
+
+    Filters applied:
+      log2fc     >= log2fc_min   (default 1.0 = 2× fold change)
+      pct_in     >= pct_min      (default 10% of cells in cluster express gene)
+      pct_ratio  >= pct_ratio_min (expressed proportionally more in cluster vs rest)
+      pval_adj   < 0.05
     """
     print("\n" + "="*60)
-    print("DIFFERENTIAL GENE EXPRESSION ANALYSIS")
+    print("DIFFERENTIAL GENE EXPRESSION")
     print("="*60)
-    
-    print(f"\nFinding marker genes using {method} test...")
-    print("This may take a few minutes...")
-    
-    # Run differential expression
-    sc.tl.rank_genes_groups(adata, 'leiden', method=method, 
-                            key_added='rank_genes_groups',
-                            tie_correct=True,
-                            rankby_abs=False,
-                            pts=True)
-    
-    print("Done!")
-    
-    # Plot top markers
-    print("\nGenerating marker gene plots...")
-    
-    sc.pl.rank_genes_groups_heatmap(adata, n_genes=10, 
-                                    save=f'_{sample_name}_top10_heatmap.pdf',
-                                    show_gene_labels=True, cmap='viridis',
-                                    key='rank_genes_groups')
-    
-    sc.pl.rank_genes_groups_dotplot(adata, n_genes=5,
-                                    save=f'_{sample_name}_top5_dotplot.pdf',
-                                    key='rank_genes_groups')
-    
-    sc.pl.rank_genes_groups_stacked_violin(adata, n_genes=3,
-                                           save=f'_{sample_name}_top3_violin.pdf',
-                                           key='rank_genes_groups')
-    
-    sc.pl.rank_genes_groups(adata, n_genes=25,
-                           save=f'_{sample_name}_ranked_genes.pdf',
-                           key='rank_genes_groups')
-    
-    # Extract results
-    print("\nExtracting marker gene results...")
+    print(f"  Method: {method}")
+    print(f"  Filters: log2fc>={log2fc_min}, pct_in>={pct_min}, "
+          f"pct_ratio>={pct_ratio_min}, pval_adj<0.05")
+
+    # ── Use .raw for DE ───────────────────────────────────────────────────────
+    if adata.raw is not None:
+        print("  Using adata.raw for DE (log-normalised, pre-scale counts)")
+        adata_de = adata.raw.to_adata()
+        # copy cluster labels across
+        adata_de.obs['leiden'] = adata.obs['leiden'].values
+    else:
+        print("  WARNING: adata.raw is None — using adata.X (check this is "
+              "log-normalised, not scaled!)")
+        adata_de = adata.copy()
+
+    sc.tl.rank_genes_groups(
+        adata_de, 'leiden', method=method,
+        key_added='rank_genes_groups',
+        tie_correct=True,
+        rankby_abs=False,
+        pts=True,
+    )
+
+    # Copy result back so plotting functions work on original adata
+    adata.uns['rank_genes_groups'] = adata_de.uns['rank_genes_groups']
+
     result = adata.uns['rank_genes_groups']
     groups = result['names'].dtype.names
-    
-    marker_data = []
-    for group in groups:
-        for i in range(len(result['names'][group])):
-            log2fc = result['logfoldchanges'][group][i]
-            
-            # Skip NaN/inf
-            if pd.isna(log2fc) or np.isinf(log2fc):
+
+    rows = []
+    for grp in groups:
+        n = len(result['names'][grp])
+        for i in range(n):
+            lfc  = result['logfoldchanges'][grp][i]
+            padj = result['pvals_adj'][grp][i]
+            if pd.isna(lfc) or np.isinf(lfc):
                 continue
-            
-            marker_data.append({
-                'cluster': group,
-                'gene': result['names'][group][i],
-                'log2fc': log2fc,
-                'pval': result['pvals'][group][i],
-                'pval_adj': result['pvals_adj'][group][i],
-                'scores': result['scores'][group][i],
-                'pct_in_cluster': result['pts'][group][i] if 'pts' in result else np.nan,
-                'pct_rest': result['pts_rest'][group][i] if 'pts_rest' in result else np.nan
-            })
-    
-    marker_df = pd.DataFrame(marker_data)
-    
-    # Filter
-    marker_df = marker_df[abs(marker_df['log2fc']) > 0.25]
-    
-    print(f"\nFiltered markers: {len(marker_df)}")
-    
-    # Save
-    marker_df.to_csv(os.path.join(output_dir, f'{sample_name}_marker_genes_full.csv'), 
-                     index=False)
-    
-    top_markers = marker_df.groupby('cluster').head(50)
-    top_markers.to_csv(os.path.join(output_dir, f'{sample_name}_marker_genes_top50.csv'),
-                      index=False)
-    
-    # Print top 10
-    print("\nTop 10 marker genes per cluster:")
-    print("="*80)
-    for cluster in groups:
-        print(f"\nCluster {cluster}:")
-        cluster_markers = marker_df[marker_df['cluster'] == cluster].head(10)
-        if len(cluster_markers) == 0:
-            print("  No valid markers found")
+            pct_in   = result['pts'][grp][i]      if 'pts'      in result else np.nan
+            pct_rest = result['pts_rest'][grp][i]  if 'pts_rest' in result else np.nan
+            rows.append(dict(
+                cluster=grp,
+                gene=result['names'][grp][i],
+                log2fc=lfc,
+                pval=result['pvals'][grp][i],
+                pval_adj=padj,
+                score=result['scores'][grp][i],
+                pct_in=pct_in,
+                pct_rest=pct_rest,
+            ))
+
+    marker_df = pd.DataFrame(rows)
+    print(f"  Raw DE results: {len(marker_df)} gene×cluster entries")
+
+    # ── Strict filtering ──────────────────────────────────────────────────────
+    mask = (
+        (marker_df['log2fc']  >= log2fc_min) &
+        (marker_df['pval_adj'] < 0.05)
+    )
+    if not marker_df['pct_in'].isna().all():
+        mask &= (marker_df['pct_in'] >= pct_min)
+        pct_ratio = marker_df['pct_in'] / (marker_df['pct_rest'] + 1e-9)
+        mask &= (pct_ratio >= pct_ratio_min)
+
+    marker_df_filtered = marker_df[mask].copy()
+    print(f"  After filtering:  {len(marker_df_filtered)} entries")
+
+    # Print top 10 per cluster
+    print("\n  Top 10 markers per cluster:")
+    for grp in groups:
+        sub = marker_df_filtered[marker_df_filtered['cluster'] == grp].head(10)
+        print(f"\n  Cluster {grp}:")
+        if len(sub) == 0:
+            print("    (no markers passed filter)")
             continue
-        for idx, row in cluster_markers.iterrows():
-            print(f"  {row['gene']:<20} log2FC={row['log2fc']:>7.2f}  "
-                  f"p_adj={row['pval_adj']:.2e}")
-    
-    print(f"\nMarker gene results saved to {output_dir}")
-    
-    return marker_df
+        for _, row in sub.iterrows():
+            print(f"    {row['gene']:<22} log2FC={row['log2fc']:>6.2f}  "
+                  f"pct_in={row['pct_in']:.2f}  pval_adj={row['pval_adj']:.2e}")
+
+    # Save
+    marker_df.to_csv(os.path.join(output_dir, f'{sample_name}_markers_all.csv'), index=False)
+    marker_df_filtered.to_csv(
+        os.path.join(output_dir, f'{sample_name}_markers_filtered.csv'), index=False)
+    marker_df_filtered.groupby('cluster').head(50).to_csv(
+        os.path.join(output_dir, f'{sample_name}_markers_top50.csv'), index=False)
+
+    # Plots (top 10 from filtered set)
+    sc.pl.rank_genes_groups(adata, n_genes=25,
+                            save=f'_{sample_name}_ranked_genes.pdf',
+                            key='rank_genes_groups')
+    try:
+        sc.pl.rank_genes_groups_heatmap(adata, n_genes=10,
+                                        save=f'_{sample_name}_top10_heatmap.pdf',
+                                        show_gene_labels=True, cmap='viridis',
+                                        key='rank_genes_groups')
+        sc.pl.rank_genes_groups_dotplot(adata, n_genes=5,
+                                        save=f'_{sample_name}_top5_dotplot.pdf',
+                                        key='rank_genes_groups')
+    except Exception as e:
+        print(f"  WARNING: Some marker plots failed: {e}")
+
+    return marker_df_filtered
 
 
-def flyenrichr_analysis(gene_list, gene_set_library='GO_Biological_Process_2018', 
+# ─────────────────────────────────────────────────────────────────────────────
+# FlyEnrichr  (FIX: pass background gene list)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _submit_to_flyenrichr(gene_symbols, description="gene_list"):
+    """Submit a gene list to FlyEnrichr and return userListId."""
+    url = 'https://maayanlab.cloud/FlyEnrichr/addList'
+    genes_str = '\n'.join(str(g).strip() for g in gene_symbols if g)
+    payload = {'list': (None, genes_str), 'description': (None, description)}
+    resp = requests.post(url, files=payload, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if 'userListId' not in data:
+        raise ValueError(f"No userListId: {data}")
+    return data['userListId']
+
+
+def flyenrichr_analysis(gene_symbols, background_symbols,
+                        gene_set_library='GO_Biological_Process_2018',
                         description="gene_list"):
     """
-    Perform enrichment analysis using FlyEnrichr API
-    REQUIRES GENE SYMBOLS, NOT FBgn IDs
+    Run FlyEnrichr enrichment with a proper background gene set.
+
+    Parameters
+    ----------
+    gene_symbols      : list of str  — foreground (marker genes)
+    background_symbols: list of str  — background (all genes detected in dataset)
+    gene_set_library  : str
+    description       : str
+
+    Notes
+    -----
+    FlyEnrichr supports a background via a second list submission.
+    We submit both foreground and background, then query enrich with
+    the background userListId as the reference.
     """
-    ENRICHR_URL = 'https://maayanlab.cloud/FlyEnrichr/addList'
-    
-    # Clean gene list
-    gene_list_clean = [str(g).strip() for g in gene_list if g and str(g).strip()]
-    
-    if len(gene_list_clean) == 0:
-        print(f"    ERROR: Gene list is empty")
-        return None
-    
-    genes_str = '\n'.join(gene_list_clean)
-    
-    payload = {
-        'list': (None, genes_str),
-        'description': (None, description)
-    }
-    
+    BASE = 'https://maayanlab.cloud/FlyEnrichr'
+
     try:
-        # Submit
-        response = requests.post(ENRICHR_URL, files=payload, timeout=30)
-        if not response.ok:
-            print(f"    ERROR: Failed to submit: {response.status_code}")
-            return None
-        
-        data = json.loads(response.text)
-        
-        if 'userListId' not in data:
-            print(f"    ERROR: No userListId in response")
-            return None
-        
-        user_list_id = data['userListId']
-        
-        # Get enrichment
-        ENRICHR_ENRICH_URL = f'https://maayanlab.cloud/FlyEnrichr/enrich'
-        query_string = f'?userListId={user_list_id}&backgroundType={gene_set_library}'
-        response = requests.get(ENRICHR_ENRICH_URL + query_string, timeout=30)
-        
-        if not response.ok:
-            print(f"    ERROR: Failed enrichment: {response.status_code}")
-            return None
-        
-        data = json.loads(response.text)
-        
+        # Submit foreground
+        fg_id = _submit_to_flyenrichr(gene_symbols, description)
+
+        # Submit background
+        bg_id = _submit_to_flyenrichr(background_symbols, f"{description}_background")
+
+        # Query enrichment with background
+        url = (f"{BASE}/enrich?userListId={fg_id}"
+               f"&backgroundType={gene_set_library}"
+               f"&backgroundListId={bg_id}")
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
         if gene_set_library not in data:
-            print(f"    WARNING: No results for {gene_set_library}")
             return None
-        
-        # Parse
+
         results = []
         for entry in data[gene_set_library]:
             results.append({
-                'term': entry[1],
-                'p_value': entry[2],
-                'z_score': entry[3],
+                'term':          entry[1],
+                'p_value':       entry[2],
+                'z_score':       entry[3],
                 'combined_score': entry[4],
-                'genes': entry[5],
-                'adj_p_value': entry[6],
+                'genes':         entry[5],
+                'adj_p_value':   entry[6],
             })
-        
-        df = pd.DataFrame(results)
-        
-        return df
-        
+
+        return pd.DataFrame(results) if results else None
+
     except Exception as e:
-        print(f"    ERROR: {e}")
+        print(f"    ERROR ({gene_set_library}): {e}")
         return None
 
 
-def create_combined_go_visualization(enrichment_df, output_dir, sample_name, clusters):
+# ─────────────────────────────────────────────────────────────────────────────
+# Build background gene set
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_background(adata, fbgn_to_symbol, min_cells=3):
     """
-    Create a single visualization combining all GO categories
+    Return gene symbols for all genes detected in >= min_cells cells,
+    excluding mt / ribo / cell_cycle genes.
+
+    This is the correct background for GO enrichment — not all annotated
+    fly genes, and not your HVG subset (too small).
     """
-    print("\n  Creating combined GO visualization...")
-    
-    # Filter for GO terms only
-    go_df = enrichment_df[enrichment_df['library'].str.startswith('GO_')].copy()
-    go_sig = go_df[go_df['adj_p_value'] < 0.05]
-    
-    if len(go_sig) == 0:
-        print("    No significant GO terms to plot")
-        return
-    
-    # Add GO category column
-    go_sig['go_category'] = go_sig['library'].apply(
-        lambda x: x.replace('GO_', '').replace('_2018', '')
-    )
-    
-    # For each cluster, get top 15 GO terms across all categories
-    fig, axes = plt.subplots(len(clusters), 1, figsize=(16, 5*len(clusters)))
-    
-    if len(clusters) == 1:
-        axes = [axes]
-    
-    # Color map for GO categories
-    category_colors = {
-        'Biological_Process': '#e74c3c',
-        'Molecular_Function': '#3498db',
-        'Cellular_Component': '#2ecc71'
-    }
-    
-    for idx, cluster in enumerate(clusters):
-        ax = axes[idx]
-        
-        cluster_go = go_sig[go_sig['cluster'] == cluster].sort_values(
-            'combined_score', ascending=False
-        ).head(15)
-        
-        if len(cluster_go) == 0:
-            ax.text(0.5, 0.5, f'No significant GO terms\nfor Cluster {cluster}',
-                   ha='center', va='center', transform=ax.transAxes, fontsize=12)
-            ax.axis('off')
-            continue
-        
-        # Prepare data
-        cluster_go = cluster_go.copy()
-        cluster_go['term_short'] = cluster_go['term'].apply(
-            lambda x: x.split('(')[0][:55] + '...' if len(x.split('(')[0]) > 55 
-            else x.split('(')[0]
-        )
-        
-        # Create horizontal bar plot
-        y_pos = range(len(cluster_go))
-        colors = [category_colors[cat] for cat in cluster_go['go_category']]
-        
-        bars = ax.barh(y_pos, cluster_go['combined_score'], color=colors, alpha=0.7)
-        
-        # Add category labels to the left
-        for i, (y, cat) in enumerate(zip(y_pos, cluster_go['go_category'])):
-            cat_short = cat.replace('_', ' ')
-            ax.text(-0.02, y, f'[{cat_short[:2]}]', 
-                   transform=ax.get_yaxis_transform(),
-                   ha='right', va='center', fontsize=8,
-                   color=category_colors[cat], fontweight='bold')
-        
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(cluster_go['term_short'], fontsize=9)
-        ax.set_xlabel('Combined Score', fontsize=11)
-        ax.set_title(f'Cluster {cluster} - Top GO Terms (All Categories)', 
-                    fontsize=12, fontweight='bold')
-        ax.invert_yaxis()
-        ax.grid(axis='x', alpha=0.3)
-        
-        # Add legend for first plot only
-        if idx == 0:
-            legend_elements = [
-                Patch(facecolor=category_colors['Biological_Process'], 
-                     label='Biological Process', alpha=0.7),
-                Patch(facecolor=category_colors['Molecular_Function'], 
-                     label='Molecular Function', alpha=0.7),
-                Patch(facecolor=category_colors['Cellular_Component'], 
-                     label='Cellular Component', alpha=0.7)
-            ]
-            ax.legend(handles=legend_elements, loc='lower right', fontsize=9)
-    
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/{sample_name}_GO_combined_all_categories.pdf",
-               dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"    Saved: {sample_name}_GO_combined_all_categories.pdf")
+    # Work from .raw if available (full gene set)
+    var_names = adata.raw.var_names if adata.raw is not None else adata.var_names
+
+    # Which genes pass a minimal expression filter?
+    if adata.raw is not None:
+        X = adata.raw.X
+    else:
+        X = adata.X
+    import scipy.sparse
+    if scipy.sparse.issparse(X):
+        n_cells_per_gene = np.array((X > 0).sum(axis=0)).flatten()
+    else:
+        n_cells_per_gene = (X > 0).sum(axis=0)
+
+    expressed_mask = n_cells_per_gene >= min_cells
+
+    # Exclude QC gene classes if flagged in adata.var
+    # (these may be absent from adata.var if working from .raw)
+    exclude = np.zeros(len(var_names), dtype=bool)
+    for flag in ('mt', 'ribo', 'cell_cycle'):
+        if flag in adata.var.columns:
+            # align by name in case .raw has different var order
+            in_raw = pd.Series(
+                adata.var[flag].values,
+                index=adata.var_names,
+            ).reindex(var_names).fillna(False).values.astype(bool)
+            exclude |= in_raw
+
+    keep = expressed_mask & ~exclude
+    background_fbgn = var_names[keep].tolist()
+
+    symbols, n_unmapped = symbols_from_fbgn(background_fbgn, fbgn_to_symbol)
+    print(f"  Background: {len(background_fbgn)} genes → {len(symbols)} symbols "
+          f"({n_unmapped} unmapped)")
+    return symbols
 
 
-def create_go_summary_heatmap(enrichment_df, output_dir, sample_name, clusters):
-    """
-    Create a heatmap showing top GO terms across all clusters and categories
-    """
-    print("  Creating GO summary heatmap...")
-    
-    go_df = enrichment_df[enrichment_df['library'].str.startswith('GO_')].copy()
-    go_sig = go_df[go_df['adj_p_value'] < 0.05]
-    
-    if len(go_sig) == 0:
-        print("    No significant GO terms")
-        return
-    
-    # Get top 30 most significant GO terms across all clusters
-    top_terms = go_sig.nsmallest(50, 'adj_p_value')['term'].unique()[:30]
-    
-    # Create matrix: rows = terms, columns = clusters, values = -log10(p)
-    heatmap_data = []
-    
-    for term in top_terms:
-        row = {'term': term.split('(')[0][:50]}
-        
-        for cluster in clusters:
-            cluster_data = go_sig[
-                (go_sig['cluster'] == cluster) & 
-                (go_sig['term'] == term)
-            ]
-            
-            if len(cluster_data) > 0:
-                # Use -log10(adj_p_value), capped at 50
-                row[str(cluster)] = min(-np.log10(cluster_data.iloc[0]['adj_p_value'] + 1e-50), 50)
-            else:
-                row[str(cluster)] = 0
-        
-        heatmap_data.append(row)
-    
-    heatmap_df = pd.DataFrame(heatmap_data).set_index('term')
-    
-    # Plot
-    fig, ax = plt.subplots(figsize=(max(12, len(clusters)*0.8), 
-                                   max(10, len(top_terms)*0.35)))
-    
-    sns.heatmap(heatmap_df, cmap='YlOrRd', ax=ax,
-               cbar_kws={'label': '-log10(adj p-value)'},
-               linewidths=0.5, linecolor='lightgray')
-    
-    ax.set_xlabel('Leiden Cluster', fontsize=12, fontweight='bold')
-    ax.set_ylabel('GO Term (All Categories)', fontsize=12, fontweight='bold')
-    ax.set_title('Top GO Terms Across All Clusters\n(Biological Process, Molecular Function, Cellular Component)',
-                fontsize=13, fontweight='bold')
-    
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/{sample_name}_GO_combined_heatmap.pdf",
-               dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"    Saved: {sample_name}_GO_combined_heatmap.pdf")
+# ─────────────────────────────────────────────────────────────────────────────
+# Enrichment per cluster
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-def enrichment_analysis_per_cluster(marker_df, fbgn_to_symbol, output_dir, sample_name, 
-                                    top_n=100, combine_go=True):
-    """
-    Run enrichment analysis - optionally combine all GO annotations
-    """
+def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
+                                    output_dir, sample_name,
+                                    top_n=200, combine_go=True):
     print("\n" + "="*60)
     print("PATHWAY ENRICHMENT ANALYSIS (FlyEnrichr)")
     print("="*60)
-    
+
     if fbgn_to_symbol is None:
-        print("ERROR: No gene symbol mapping provided!")
-        print("Cannot proceed with enrichment - FlyEnrichr requires gene symbols")
+        print("  ERROR: No gene symbol mapping — cannot run enrichment")
         return None
-    
-    # Define libraries
-    go_libraries = [
+
+    # Build background once
+    print("\n  Building background gene set …")
+    background_symbols = build_background(adata, fbgn_to_symbol)
+    if len(background_symbols) < 100:
+        print("  WARNING: Very small background — check mapping file")
+
+    libraries = [
         'GO_Biological_Process_2018',
-        'GO_Molecular_Function_2018', 
+        'GO_Molecular_Function_2018',
         'GO_Cellular_Component_2018',
-    ]
-    
-    other_libraries = [
         'KEGG_2019',
         'WikiPathways_2018',
-        'InterPro_Domains_2019',
-        'Pfam_Domains_2019'
     ]
-    
-    libraries_to_run = go_libraries + other_libraries
-    
-    if combine_go:
-        print("\nWill create combined GO analysis across all categories")
-    
-    print(f"Running enrichment for top {top_n} markers per cluster")
-    print(f"Using libraries: {', '.join(libraries_to_run)}")
-    
+
+    clusters = sorted(marker_df['cluster'].unique(),
+                      key=lambda x: int(x) if str(x).isdigit() else x)
     all_results = []
-    clusters = sorted(marker_df['cluster'].unique())
-    
+
     for cluster in clusters:
-        print(f"\n{'='*60}")
-        print(f"Cluster {cluster}")
-        print(f"{'='*60}")
-        
-        # Get top markers
-        cluster_markers = marker_df[marker_df['cluster'] == cluster].head(top_n)
-        sig_markers = cluster_markers[cluster_markers['pval_adj'] < 0.05]
-        
-        if len(sig_markers) < 10:
-            print(f"  WARNING: Only {len(sig_markers)} significant markers, using top {min(top_n, len(cluster_markers))}")
-            genes_fbgn = cluster_markers['gene'].tolist()
-        else:
-            genes_fbgn = sig_markers['gene'].tolist()
-        
-        # Convert FBgn to symbols
-        genes_symbols = []
-        unmapped = []
-        for fbgn in genes_fbgn:
-            symbol = fbgn_to_symbol.get(fbgn, None)
-            if symbol:
-                genes_symbols.append(symbol)
-            else:
-                unmapped.append(fbgn)
-        
-        print(f"  Converting {len(genes_fbgn)} FBgn IDs to symbols")
-        print(f"  Successfully mapped: {len(genes_symbols)}")
-        if unmapped:
-            print(f"  Unmapped: {len(unmapped)} genes")
-            if len(unmapped) <= 5:
-                print(f"    {', '.join(unmapped)}")
-        
+        print(f"\n{'='*50}\n  Cluster {cluster}\n{'='*50}")
+
+        # ── Select marker genes ───────────────────────────────────────────────
+        # Already filtered to log2fc>=1, pct_in>=0.1, pval_adj<0.05 by find_marker_genes
+        # Take top_n by score
+        cmarkers = (marker_df[marker_df['cluster'] == cluster]
+                    .sort_values('score', ascending=False)
+                    .head(top_n))
+
+        if len(cmarkers) < 5:
+            print(f"  Skipping: only {len(cmarkers)} markers (need ≥ 5)")
+            continue
+
+        genes_fbgn = cmarkers['gene'].tolist()
+        genes_symbols, n_unmapped = symbols_from_fbgn(genes_fbgn, fbgn_to_symbol)
+        print(f"  Markers: {len(genes_fbgn)} FBgn IDs → {len(genes_symbols)} symbols "
+              f"({n_unmapped} unmapped)")
+
         if len(genes_symbols) < 5:
-            print(f"  ERROR: Too few mapped genes ({len(genes_symbols)}), skipping")
+            print(f"  Skipping: too few mapped symbols")
             continue
-        
-        print(f"  Sample symbols: {', '.join(genes_symbols[:5])}")
-        
-        # Run enrichment for each library
-        cluster_go_results = []
-        
-        for library in libraries_to_run:
-            print(f"  Running {library}...")
-            
+
+        # Remove any background exclusions from foreground too
+        genes_symbols = [g for g in genes_symbols if g in set(background_symbols)]
+        print(f"  Foreground after background intersection: {len(genes_symbols)}")
+
+        for lib in libraries:
+            print(f"  [{lib}] ", end='', flush=True)
             result_df = flyenrichr_analysis(
-                genes_symbols, 
-                gene_set_library=library,
-                description=f"cluster_{cluster}_top{top_n}"
+                genes_symbols, background_symbols,
+                gene_set_library=lib,
+                description=f"cluster_{cluster}",
             )
-            
             if result_df is not None and len(result_df) > 0:
+                # Filter to significant terms only before saving
+                sig = result_df[result_df['adj_p_value'] < 0.05]
                 result_df['cluster'] = cluster
-                result_df['library'] = library
-                
-                # Add GO category for combined analysis
-                if library.startswith('GO_'):
-                    result_df['go_category'] = library.replace('GO_', '').replace('_2018', '')
-                    cluster_go_results.append(result_df)
-                
+                result_df['library'] = lib
+                sig_count = len(sig)
+                print(f"{len(result_df)} terms, {sig_count} significant")
                 all_results.append(result_df)
-                print(f"    Found {len(result_df)} enriched terms")
             else:
-                print(f"    No results")
-            
-            time.sleep(0.5)
-        
-        # If combining GO, show summary for this cluster
-        if combine_go and cluster_go_results:
-            combined_go = pd.concat(cluster_go_results, ignore_index=True)
-            combined_go_sorted = combined_go.sort_values('combined_score', ascending=False)
-            
-            print(f"\n  Combined GO analysis for cluster {cluster}:")
-            print(f"  Total GO terms: {len(combined_go_sorted)}")
-            print(f"  Top 5 across all GO categories:")
-            for idx, row in combined_go_sorted.head(5).iterrows():
-                print(f"    [{row['go_category']:<20}] {row['term'][:50]:<50} p={row['adj_p_value']:.2e}")
-    
+                print("no results")
+            time.sleep(0.5)   # be polite to the API
+
     if not all_results:
-        print("\nNo enrichment results obtained")
+        print("\n  No enrichment results obtained")
         return None
-    
-    # Combine all results
+
     combined_df = pd.concat(all_results, ignore_index=True)
-    
-    # Save results
     combined_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_all_results.csv", index=False)
-    print(f"\nSaved: {sample_name}_flyenrichr_all_results.csv")
-    
-    # If combining GO, create separate combined GO files
+
+    # Significant subset
+    sig_df = combined_df[combined_df['adj_p_value'] < 0.05].copy()
+    sig_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_significant.csv", index=False)
+    print(f"\n  Total terms: {len(combined_df)}")
+    print(f"  Significant (adj_p < 0.05): {len(sig_df)}")
+
+    # Combined GO
     if combine_go:
-        go_df = combined_df[combined_df['library'].str.startswith('GO_')].copy()
-        if len(go_df) > 0:
-            go_df_sorted = go_df.sort_values(['cluster', 'combined_score'], ascending=[True, False])
-            go_df_sorted.to_csv(f"{output_dir}/{sample_name}_GO_combined_all_categories.csv", index=False)
-            print(f"Saved: {sample_name}_GO_combined_all_categories.csv")
-            
-            # Top 20 GO terms per cluster (across all categories)
-            top_go_per_cluster = go_df_sorted.groupby('cluster').head(20)
-            top_go_per_cluster.to_csv(f"{output_dir}/{sample_name}_GO_combined_top20_per_cluster.csv", index=False)
-            print(f"Saved: {sample_name}_GO_combined_top20_per_cluster.csv")
-    
-    # Save top results per cluster per library
-    top_per_cluster = combined_df.sort_values('combined_score', ascending=False).groupby(
-        ['cluster', 'library']
-    ).head(10)
-    top_per_cluster.to_csv(f"{output_dir}/{sample_name}_flyenrichr_top10_per_cluster.csv", index=False)
-    print(f"Saved: {sample_name}_flyenrichr_top10_per_cluster.csv")
-    
-    # Summary
-    print(f"\n{'='*60}")
-    print("ENRICHMENT SUMMARY")
-    print(f"{'='*60}")
-    print(f"Total enriched terms: {len(combined_df)}")
-    print(f"Significant (adj p < 0.05): {len(combined_df[combined_df['adj_p_value'] < 0.05])}")
-    
-    if combine_go:
-        go_sig = combined_df[
-            (combined_df['library'].str.startswith('GO_')) & 
-            (combined_df['adj_p_value'] < 0.05)
-        ]
-        print(f"Significant GO terms (all categories): {len(go_sig)}")
-    
-    # Print top terms per library
-    for library in libraries_to_run:
-        lib_results = combined_df[combined_df['library'] == library]
-        
-        if len(lib_results) == 0:
+        go_sig = sig_df[sig_df['library'].str.startswith('GO_')].copy()
+        if len(go_sig) > 0:
+            go_sig = go_sig.sort_values(['cluster', 'adj_p_value'])
+            go_sig.to_csv(f"{output_dir}/{sample_name}_GO_combined_significant.csv", index=False)
+            go_sig.groupby('cluster').head(20).to_csv(
+                f"{output_dir}/{sample_name}_GO_combined_top20_per_cluster.csv", index=False)
+            print(f"  Significant GO terms: {len(go_sig)}")
+
+    # Summary printout
+    print(f"\n{'='*60}\nENRICHMENT SUMMARY\n{'='*60}")
+    for lib in libraries:
+        lib_sig = sig_df[sig_df['library'] == lib]
+        if len(lib_sig) == 0:
             continue
-        
-        print(f"\n{'='*60}")
-        print(f"{library}")
-        print(f"{'='*60}")
-        
+        print(f"\n{lib}")
         for cluster in clusters:
-            cluster_results = lib_results[lib_results['cluster'] == cluster].sort_values(
-                'combined_score', ascending=False
-            ).head(3)
-            
-            if len(cluster_results) > 0:
-                print(f"\nCluster {cluster}:")
-                for idx, row in cluster_results.iterrows():
-                    term_short = row['term'].split('(')[0][:60]
-                    print(f"  {term_short:<60} p_adj={row['adj_p_value']:.2e}")
-    
-    # Create visualizations
-    create_enrichment_plots(combined_df, output_dir, sample_name, clusters, combine_go=combine_go)
-    
+            top = (lib_sig[lib_sig['cluster'] == cluster]
+                   .sort_values('adj_p_value').head(3))
+            if len(top) == 0:
+                continue
+            print(f"  Cluster {cluster}:")
+            for _, row in top.iterrows():
+                term = row['term'].split('(')[0][:60]
+                print(f"    {term:<60} p_adj={row['adj_p_value']:.2e}")
+
+    # Visualisations
+    _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=combine_go)
+
     return combined_df
 
 
-def create_enrichment_plots(enrichment_df, output_dir, sample_name, clusters, combine_go=True):
-    """
-    Create visualizations including combined GO analysis
-    """
-    print("\n" + "="*60)
-    print("Creating enrichment visualizations...")
-    print("="*60)
-    
-    # Create combined GO visualizations first
+# ─────────────────────────────────────────────────────────────────────────────
+# Visualisation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=True):
+    print("\n  Generating enrichment plots …")
+
+    category_colors = {
+        'Biological_Process': '#e74c3c',
+        'Molecular_Function': '#3498db',
+        'Cellular_Component': '#2ecc71',
+    }
+
     if combine_go:
-        create_combined_go_visualization(enrichment_df, output_dir, sample_name, clusters)
-        create_go_summary_heatmap(enrichment_df, output_dir, sample_name, clusters)
-    
-    # Then create individual library plots
-    libraries = enrichment_df['library'].unique()
-    
-    for library in libraries:
-        print(f"\n  Creating plots for {library}...")
-        
-        lib_data = enrichment_df[enrichment_df['library'] == library]
-        sig_data = lib_data[lib_data['adj_p_value'] < 0.05]
-        
-        if len(sig_data) == 0:
-            print(f"    No significant terms, skipping")
+        go_sig = sig_df[sig_df['library'].str.startswith('GO_')].copy()
+        go_sig['go_category'] = go_sig['library'].str.replace('GO_', '').str.replace('_2018', '')
+
+        if len(go_sig) > 0:
+            # Per-cluster combined GO barplot
+            n = len(clusters)
+            fig, axes = plt.subplots(n, 1, figsize=(16, 5 * n))
+            if n == 1: axes = [axes]
+
+            for idx, cluster in enumerate(clusters):
+                ax = axes[idx]
+                # Sort by adj_p_value (ascending), not combined_score
+                cgo = (go_sig[go_sig['cluster'] == cluster]
+                       .sort_values('adj_p_value')
+                       .head(15))
+
+                if len(cgo) == 0:
+                    ax.text(0.5, 0.5, f'No significant GO terms\nCluster {cluster}',
+                            ha='center', va='center', transform=ax.transAxes)
+                    ax.axis('off')
+                    continue
+
+                cgo = cgo.copy()
+                cgo['term_short'] = cgo['term'].apply(
+                    lambda x: x.split('(')[0][:55].rstrip())
+                cgo['-log10p'] = -np.log10(cgo['adj_p_value'] + 1e-300)
+
+                y_pos = range(len(cgo))
+                colors = [category_colors[cat] for cat in cgo['go_category']]
+                ax.barh(y_pos, cgo['-log10p'], color=colors, alpha=0.75)
+                ax.set_yticks(y_pos)
+                ax.set_yticklabels(cgo['term_short'], fontsize=9)
+                ax.set_xlabel('-log10(adj p-value)', fontsize=11)
+                ax.set_title(f'Cluster {cluster} — Top GO Terms',
+                             fontsize=12, fontweight='bold')
+                ax.invert_yaxis()
+                ax.grid(axis='x', alpha=0.3)
+
+                if idx == 0:
+                    legend_els = [
+                        Patch(facecolor=v, label=k.replace('_', ' '), alpha=0.75)
+                        for k, v in category_colors.items()
+                    ]
+                    ax.legend(handles=legend_els, loc='lower right', fontsize=9)
+
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/{sample_name}_GO_combined_barplots.pdf",
+                        dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"    Saved: GO_combined_barplots.pdf")
+
+            # Cross-cluster GO heatmap
+            top_terms = (go_sig.nsmallest(60, 'adj_p_value')['term'].unique()[:30])
+            hdata = []
+            for term in top_terms:
+                row = {'term': term.split('(')[0][:50].rstrip()}
+                for cl in clusters:
+                    sub = go_sig[(go_sig['cluster'] == cl) & (go_sig['term'] == term)]
+                    row[str(cl)] = (min(-np.log10(sub.iloc[0]['adj_p_value'] + 1e-300), 50)
+                                    if len(sub) > 0 else 0)
+                hdata.append(row)
+
+            hdf = pd.DataFrame(hdata).set_index('term')
+
+            fig, ax = plt.subplots(figsize=(max(10, len(clusters)), max(8, len(top_terms) * 0.35)))
+            sns.heatmap(hdf, cmap='YlOrRd', ax=ax,
+                        cbar_kws={'label': '-log10(adj p-value)'},
+                        linewidths=0.3, linecolor='lightgray')
+            ax.set_xlabel('Leiden Cluster', fontsize=12)
+            ax.set_ylabel('GO Term', fontsize=12)
+            ax.set_title('Top GO Terms Across All Clusters\n(sorted by significance)',
+                         fontsize=13)
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/{sample_name}_GO_combined_heatmap.pdf",
+                        dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"    Saved: GO_combined_heatmap.pdf")
+
+    # Individual library barplots
+    for lib in sig_df['library'].unique():
+        lib_sig = sig_df[sig_df['library'] == lib]
+        if len(lib_sig) == 0:
             continue
-        
-        # Bar plots per cluster
-        n_clusters = len(clusters)
-        fig, axes = plt.subplots(n_clusters, 1, figsize=(14, 4*n_clusters))
-        
-        if n_clusters == 1:
-            axes = [axes]
-        
+
+        n = len(clusters)
+        fig, axes = plt.subplots(n, 1, figsize=(14, 4 * n))
+        if n == 1: axes = [axes]
+
         for idx, cluster in enumerate(clusters):
             ax = axes[idx]
-            cluster_terms = sig_data[sig_data['cluster'] == cluster].sort_values(
-                'combined_score', ascending=False
-            ).head(10)
-            
-            if len(cluster_terms) == 0:
-                ax.text(0.5, 0.5, f'No significant terms\nfor Cluster {cluster}',
-                       ha='center', va='center', transform=ax.transAxes)
+            top = (lib_sig[lib_sig['cluster'] == cluster]
+                   .sort_values('adj_p_value')
+                   .head(10)
+                   .copy())
+
+            if len(top) == 0:
+                ax.text(0.5, 0.5, f'No significant terms\nCluster {cluster}',
+                        ha='center', va='center', transform=ax.transAxes)
                 ax.axis('off')
                 continue
-            
-            cluster_terms = cluster_terms.copy()
-            cluster_terms['term_short'] = cluster_terms['term'].apply(
-                lambda x: x.split('(')[0][:50] + '...' if len(x.split('(')[0]) > 50 
-                else x.split('(')[0]
-            )
-            
-            y_pos = range(len(cluster_terms))
-            bars = ax.barh(y_pos, cluster_terms['combined_score'], alpha=0.7)
-            
-            colors = ['#d62728' if p < 0.01 else '#ff7f0e' 
-                     for p in cluster_terms['adj_p_value']]
-            for bar, color in zip(bars, colors):
-                bar.set_color(color)
-            
+
+            top['term_short'] = top['term'].apply(lambda x: x.split('(')[0][:50].rstrip())
+            top['-log10p'] = -np.log10(top['adj_p_value'] + 1e-300)
+            y_pos = range(len(top))
+            colors = ['#d62728' if p < 0.01 else '#ff7f0e' for p in top['adj_p_value']]
+            bars = ax.barh(y_pos, top['-log10p'], color=colors, alpha=0.7)
             ax.set_yticks(y_pos)
-            ax.set_yticklabels(cluster_terms['term_short'], fontsize=9)
-            ax.set_xlabel('Combined Score', fontsize=11)
+            ax.set_yticklabels(top['term_short'], fontsize=9)
+            ax.set_xlabel('-log10(adj p-value)', fontsize=11)
             ax.set_title(f'Cluster {cluster}', fontsize=12, fontweight='bold')
             ax.invert_yaxis()
             ax.grid(axis='x', alpha=0.3)
-        
-        plt.tight_layout()
-        lib_short = library.replace('_2018', '').replace('_2019', '')
-        plt.savefig(f"{output_dir}/{sample_name}_enrichment_{lib_short}_barplots.pdf",
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"    Saved: {lib_short}_barplots.pdf")
 
+        lib_short = lib.replace('_2018', '').replace('_2019', '')
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/{sample_name}_enrichment_{lib_short}.pdf",
+                    dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"    Saved: enrichment_{lib_short}.pdf")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Comprehensive cluster analysis with FlyEnrichr pathway enrichment and combined GO analysis',
+        description='Cluster analysis with marker genes and FlyEnrichr GO enrichment',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  # Full analysis with combined GO
   python cluster_marker_pathway_analysis.py \\
-      --input data.h5ad \\
-      --output results \\
-      --sample mysample \\
-      --mapping transcripts_to_genes.txt
-  
-  # Skip combined GO visualization
+      --input integrated.h5ad \\
+      --output results/cluster_analysis \\
+      --sample wolbachia_infection \\
+      --mapping /path/to/transcripts_to_genes.txt
+
+  # Adjust stringency
   python cluster_marker_pathway_analysis.py \\
-      --input data.h5ad \\
-      --output results \\
-      --sample mysample \\
-      --mapping transcripts_to_genes.txt \\
-      --no-combine-go
+      --input integrated.h5ad --output results \\
+      --sample test --mapping t2g.txt \\
+      --log2fc-min 0.5 --pct-min 0.05
+
+  # Skip enrichment (faster, markers only)
+  python cluster_marker_pathway_analysis.py \\
+      --input integrated.h5ad --output results \\
+      --sample test --mapping t2g.txt \\
+      --skip-enrichment
         '''
     )
-    
-    parser.add_argument('--input', '-i', required=True,
-                       help='Path to h5ad file')
-    parser.add_argument('--output', '-o', default='cluster_analysis',
-                       help='Output directory')
-    parser.add_argument('--sample', '-s', default='sample',
-                       help='Sample name for output files')
+
+    parser.add_argument('--input',  '-i', required=True,  help='Path to integrated .h5ad')
+    parser.add_argument('--output', '-o', default='cluster_analysis', help='Output directory')
+    parser.add_argument('--sample', '-s', default='sample', help='Sample name prefix')
     parser.add_argument('--mapping', '-map', required=True,
-                       help='Path to transcripts_to_genes.txt')
+                        help='transcripts_to_genes.txt (FBgn -> symbol)')
     parser.add_argument('--method', '-m', default='wilcoxon',
-                       choices=['wilcoxon', 't-test', 'logreg'],
-                       help='DE method (default: wilcoxon)')
-    parser.add_argument('--top-n', type=int, default=100,
-                       help='Top N markers for enrichment (default: 100)')
-    parser.add_argument('--skip-enrichment', action='store_true',
-                       help='Skip pathway enrichment')
-    parser.add_argument('--no-combine-go', action='store_true',
-                       help='Do not create combined GO visualizations')
-    
+                        choices=['wilcoxon', 't-test', 'logreg'])
+    parser.add_argument('--log2fc-min',  type=float, default=1.0,
+                        help='Minimum log2FC for markers (default: 1.0 = 2x)')
+    parser.add_argument('--pct-min',    type=float, default=0.10,
+                        help='Min fraction of cluster cells expressing marker (default: 0.10)')
+    parser.add_argument('--pct-ratio',  type=float, default=1.5,
+                        help='Min pct_in/pct_rest ratio (default: 1.5)')
+    parser.add_argument('--top-n',      type=int,   default=200,
+                        help='Max markers per cluster for enrichment (default: 200)')
+    parser.add_argument('--skip-enrichment', action='store_true')
+    parser.add_argument('--no-combine-go',   action='store_true',
+                        help='Skip combined GO visualisation')
+
     args = parser.parse_args()
-    
     os.makedirs(args.output, exist_ok=True)
     sc.settings.figdir = args.output
-    
-    # Load data
+
     print("="*60)
     print("LOADING DATA")
     print("="*60)
     adata = sc.read_h5ad(args.input)
-    
-    print(f"\nCells: {adata.n_obs}")
-    print(f"Genes: {adata.n_vars}")
-    print(f"Clusters: {adata.obs['leiden'].nunique()}")
-    
-    # Load gene mapping
+    print(f"  Cells: {adata.n_obs:,}  Genes: {adata.n_vars:,}  "
+          f"Clusters: {adata.obs['leiden'].nunique()}")
+    if adata.raw is None:
+        print("  WARNING: adata.raw is None — DE will use adata.X (verify it is "
+              "log-normalised, not scaled)")
+    else:
+        print(f"  adata.raw: {adata.raw.n_vars:,} genes (will be used for DE)")
+
     fbgn_to_symbol = load_fbgn_to_symbol_mapping(args.mapping)
-    
     if fbgn_to_symbol is None and not args.skip_enrichment:
-        print("\nERROR: Could not load gene mapping, required for enrichment")
-        print("Either fix mapping file or use --skip-enrichment")
+        print("\nERROR: Could not load gene mapping. Use --skip-enrichment to skip GO.")
         return
-    
-    # 1. Transcriptional activity
-    print("\n" + "="*60)
-    print("STEP 1: TRANSCRIPTIONAL ACTIVITY")
-    print("="*60)
-    activity_results = plot_transcriptional_activity(adata, args.output, args.sample)
-    
-    # 2. Marker genes
-    print("\n" + "="*60)
-    print("STEP 2: MARKER GENES")
-    print("="*60)
-    marker_df = find_marker_genes(adata, args.output, args.sample, method=args.method)
-    
-    # 3. Enrichment
+
+    # Step 1 — transcriptional activity
+    plot_transcriptional_activity(adata, args.output, args.sample)
+
+    # Step 2 — marker genes
+    marker_df = find_marker_genes(
+        adata, args.output, args.sample,
+        method=args.method,
+        log2fc_min=args.log2fc_min,
+        pct_min=args.pct_min,
+        pct_ratio_min=args.pct_ratio,
+    )
+
+    # Step 3 — enrichment
     if not args.skip_enrichment:
-        print("\n" + "="*60)
-        print("STEP 3: PATHWAY ENRICHMENT")
-        print("="*60)
-        enrichment_df = enrichment_analysis_per_cluster(
-            marker_df, 
-            fbgn_to_symbol,
-            args.output, 
-            args.sample,
+        enrichment_analysis_per_cluster(
+            adata, marker_df, fbgn_to_symbol,
+            args.output, args.sample,
             top_n=args.top_n,
-            combine_go=not args.no_combine_go
+            combine_go=not args.no_combine_go,
         )
-    
+
     print("\n" + "="*60)
-    print("ANALYSIS COMPLETE")
+    print("DONE")
     print("="*60)
-    print(f"\nAll results saved to: {args.output}/")
-    
-    if not args.skip_enrichment:
-        print("\nKey output files:")
-        print(f"  - {args.sample}_flyenrichr_all_results.csv (all enrichment results)")
-        if not args.no_combine_go:
-            print(f"  - {args.sample}_GO_combined_all_categories.csv (combined GO results)")
-            print(f"  - {args.sample}_GO_combined_top20_per_cluster.csv (top 20 GO per cluster)")
-            print(f"  - {args.sample}_GO_combined_all_categories.pdf (combined GO barplots)")
-            print(f"  - {args.sample}_GO_combined_heatmap.pdf (GO heatmap)")
+    print(f"  Results: {args.output}/")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -151,28 +151,27 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     adata = adata[:, gene_sums > 0].copy()
     print(f"  After filtering: {adata.n_obs} cells, {adata.n_vars} genes")
 
-    # HVG on raw counts — seurat_v3 expects raw counts (not normalised)
-    # batch_key="method" ensures HVGs are variable in both 10X and PIPseq
-    sc.pp.highly_variable_genes(
+    # ── Flag QC gene classes BEFORE any subsetting ────────────────────────────
+    # Drosophila mitochondrial genes: "mt:" prefix (FlyBase convention)
+    adata.var["mt"]   = adata.var_names.str.startswith("mt:")
+    # Ribosomal: cytoplasmic (RpS*/RpL*) and mitochondrial ribosomal (mRpS*/mRpL*)
+    adata.var["ribo"] = adata.var_names.str.startswith(("RpS", "RpL", "mRpS", "mRpL"))
+
+    sc.pp.calculate_qc_metrics(
         adata,
-        flavor="seurat_v3",      # appropriate for raw counts
-        n_top_genes=n_top_genes,
-        batch_key="method",
-        subset=False,
+        qc_vars=["mt", "ribo"],
+        percent_top=None,
+        log1p=False,
+        inplace=True,
     )
 
-    # Normalise + log1p (first time — data is raw counts at this point)
-    sc.pp.normalize_total(adata, target_sum=1e4)
-    sc.pp.log1p(adata)
-    if scipy.sparse.issparse(adata.X):
-        adata.X = adata.X.toarray()
-    adata.X = np.nan_to_num(adata.X, nan=0.0, posinf=0.0, neginf=0.0)
+    n_mt   = adata.var["mt"].sum()
+    n_ribo = adata.var["ribo"].sum()
+    print(f"  QC gene flags: mt={n_mt}, ribo={n_ribo}")
+    print(f"  Median pct_counts_mt:   {adata.obs['pct_counts_mt'].median():.1f}%")
+    print(f"  Median pct_counts_ribo: {adata.obs['pct_counts_ribo'].median():.1f}%")
 
-    # Store log-normalised pre-scale counts in .raw
-    adata.raw = adata
-
-    # ── Cell cycle scoring on full gene set (before HVG subset) ──────────────
-    # Must happen here — after HVG subset, cell cycle marker genes are gone.
+    # ── Cell cycle gene lists (FBgn IDs) ─────────────────────────────────────
     S_GENES_FBGN = [
         'FBgn0005655', 'FBgn0015806', 'FBgn0034898', 'FBgn0011230', 'FBgn0015278',
         'FBgn0019624', 'FBgn0020369', 'FBgn0261933', 'FBgn0020651', 'FBgn0020652',
@@ -186,17 +185,53 @@ def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
         'FBgn0011739', 'FBgn0002863', 'FBgn0024822', 'FBgn0002610', 'FBgn0010309',
         'FBgn0261823', 'FBgn0036449',
     ]
+    # Track which cell cycle genes exist in this dataset (needed to exclude from HVGs)
+    cc_genes = set(S_GENES_FBGN) | set(G2M_GENES_FBGN)
+    adata.var["cell_cycle"] = adata.var_names.isin(cc_genes)
+
+    # ── HVG on raw counts ─────────────────────────────────────────────────────
+    # seurat_v3 expects raw (un-normalised) counts.
+    # batch_key="method" ensures HVGs are variable across both capture methods.
+    sc.pp.highly_variable_genes(
+        adata,
+        flavor="seurat_v3",
+        n_top_genes=n_top_genes,
+        batch_key="method",
+        subset=False,
+    )
+
+    # Mask out mt / ribo / cell_cycle genes from the HVG set.
+    # They are preserved in adata.var for QC and DE but will NOT drive PCA/clustering.
+    excluded = adata.var["mt"] | adata.var["ribo"] | adata.var["cell_cycle"]
+    n_masked = (adata.var["highly_variable"] & excluded).sum()
+    adata.var.loc[excluded, "highly_variable"] = False
+    print(f"  HVGs before exclusion: {(~excluded & adata.var['highly_variable']).sum() + n_masked}")
+    print(f"  HVGs masked (mt/ribo/cc): {n_masked}")
+    print(f"  HVGs used for PCA: {adata.var['highly_variable'].sum()}")
+
+    # ── Normalise + log1p ─────────────────────────────────────────────────────
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+    if scipy.sparse.issparse(adata.X):
+        adata.X = adata.X.toarray()
+    adata.X = np.nan_to_num(adata.X, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Store log-normalised pre-scale counts in .raw (needed for DE, GO input)
+    adata.raw = adata
+
+    # ── Cell cycle scoring (on full normalised gene set, before HVG subset) ───
+    # Must happen here — after HVG subset the CC marker genes will be gone.
     s_present   = [g for g in S_GENES_FBGN   if g in adata.var_names]
     g2m_present = [g for g in G2M_GENES_FBGN if g in adata.var_names]
     print(f"  Cell cycle genes found: S={len(s_present)}/{len(S_GENES_FBGN)}, "
-        f"G2M={len(g2m_present)}/{len(G2M_GENES_FBGN)}")
+          f"G2M={len(g2m_present)}/{len(G2M_GENES_FBGN)}")
     if len(s_present) >= 3 and len(g2m_present) >= 3:
         sc.tl.score_genes_cell_cycle(adata, s_genes=s_present, g2m_genes=g2m_present)
         print(f"  Phase distribution: {adata.obs['phase'].value_counts().to_dict()}")
     else:
         print("  WARNING: Too few cell cycle genes found, skipping scoring.")
 
-    # Subset to HVGs, scale, PCA
+    # ── Subset to HVGs, scale, PCA ────────────────────────────────────────────
     adata = adata[:, adata.var["highly_variable"]].copy()
     sc.pp.scale(adata, max_value=10)
     sc.pp.pca(adata, n_comps=n_pcs)
