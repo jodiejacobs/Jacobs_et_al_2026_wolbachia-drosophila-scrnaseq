@@ -23,6 +23,8 @@ import time
 import gzip
 from scipy.stats import kruskal
 from matplotlib.patches import Patch
+import scipy.sparse
+from scipy.sparse import issparse
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,13 +188,21 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     if adata.raw is not None:
         print("  Using adata.raw for DE (log-normalised, pre-scale counts)")
         adata_de = adata.raw.to_adata()
-        # copy cluster labels across
+        adata_de.X = scipy.sparse.csr_matrix(adata_de.X)  # ensure sparse
         adata_de.obs['leiden'] = adata.obs['leiden'].values
     else:
         print("  WARNING: adata.raw is None — using adata.X (check this is "
               "log-normalised, not scaled!)")
         adata_de = adata.copy()
+        adata_de.X = scipy.sparse.csr_matrix(adata_de.X)  # ensure sparse
 
+    # Filter to genes expressed in >= 3 cells (matches build_background threshold)
+    n_cells_per_gene = np.array((adata_de.X > 0).sum(axis=0)).flatten()
+    n_before = adata_de.n_vars
+    adata_de = adata_de[:, n_cells_per_gene >= 3].copy()
+    print(f"  Genes after expression filter: {adata_de.n_vars:,} / {n_before:,}")
+
+    sc.settings.n_jobs = -1  # use all available cores
     sc.tl.rank_genes_groups(
         adata_de, 'leiden', method=method,
         key_added='rank_genes_groups',
