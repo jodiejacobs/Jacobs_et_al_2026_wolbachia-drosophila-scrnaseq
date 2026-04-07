@@ -196,6 +196,12 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
         adata_de = adata.copy()
         adata_de.X = scipy.sparse.csr_matrix(adata_de.X)  # ensure sparse
 
+    # Filter out Wolbachia transcripts (GQX67_ prefix)
+    n_before_bact = adata_de.n_vars
+    adata_de = adata_de[:, ~adata_de.var_names.str.startswith('GQX67_')].copy()
+    print(f"  Genes after Wolbachia filter: {adata_de.n_vars:,} / {n_before_bact:,} "
+          f"({n_before_bact - adata_de.n_vars:,} bacterial transcripts removed)")
+
     # Filter to genes expressed in >= 3 cells (matches build_background threshold)
     n_cells_per_gene = np.array((adata_de.X > 0).sum(axis=0)).flatten()
     n_before = adata_de.n_vars
@@ -372,15 +378,10 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
 def build_background(adata, fbgn_to_symbol, min_cells=3):
     """
     Return gene symbols for all genes detected in >= min_cells cells,
-    excluding mt / ribo / cell_cycle genes.
-
-    This is the correct background for GO enrichment — not all annotated
-    fly genes, and not your HVG subset (too small).
+    excluding mt / ribo / cell_cycle / Wolbachia genes.
     """
-    # Work from .raw if available (full gene set)
     var_names = adata.raw.var_names if adata.raw is not None else adata.var_names
 
-    # Which genes pass a minimal expression filter?
     if adata.raw is not None:
         X = adata.raw.X
     else:
@@ -393,26 +394,29 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
 
     expressed_mask = n_cells_per_gene >= min_cells
 
-    # Exclude QC gene classes if flagged in adata.var
-    # (these may be absent from adata.var if working from .raw)
+    # Build exclude mask — initialise first, then OR in each category
     exclude = np.zeros(len(var_names), dtype=bool)
+
+    # Exclude QC gene classes flagged in adata.var
     for flag in ('mt', 'ribo', 'cell_cycle'):
         if flag in adata.var.columns:
-            # align by name in case .raw has different var order
             in_raw = pd.Series(
                 adata.var[flag].values,
                 index=adata.var_names,
             ).reindex(var_names).fillna(False).values.astype(bool)
             exclude |= in_raw
 
+    # Exclude Wolbachia transcripts
+    bact_mask = pd.Series(var_names).str.startswith('GQX67_').values
+    exclude |= bact_mask
+
     keep = expressed_mask & ~exclude
     background_fbgn = var_names[keep].tolist()
 
     symbols, n_unmapped = symbols_from_fbgn(background_fbgn, fbgn_to_symbol)
     print(f"  Background: {len(background_fbgn)} genes → {len(symbols)} symbols "
-          f"({n_unmapped} unmapped)")
+          f"({n_unmapped} unmapped, {bact_mask.sum()} bacterial excluded)")
     return symbols
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enrichment per cluster
@@ -711,12 +715,12 @@ Examples:
                         help='transcripts_to_genes.txt (FBgn -> symbol)')
     parser.add_argument('--method', '-m', default='wilcoxon',
                         choices=['wilcoxon', 't-test', 'logreg'])
-    parser.add_argument('--log2fc-min',  type=float, default=1.0,
-                        help='Minimum log2FC for markers (default: 1.0 = 2x)')
+    parser.add_argument('--log2fc-min',  type=float, default=0.5,
+                        help='Minimum log2FC for markers (default: 0.5 = 1.41x)')
     parser.add_argument('--pct-min',    type=float, default=0.10,
                         help='Min fraction of cluster cells expressing marker (default: 0.10)')
-    parser.add_argument('--pct-ratio',  type=float, default=1.5,
-                        help='Min pct_in/pct_rest ratio (default: 1.5)')
+    parser.add_argument('--pct-ratio',  type=float, default=1.2,
+                        help='Min pct_in/pct_rest ratio (default: 1.2)')
     parser.add_argument('--top-n',      type=int,   default=200,
                         help='Max markers per cluster for enrichment (default: 200)')
     parser.add_argument('--skip-enrichment', action='store_true')
