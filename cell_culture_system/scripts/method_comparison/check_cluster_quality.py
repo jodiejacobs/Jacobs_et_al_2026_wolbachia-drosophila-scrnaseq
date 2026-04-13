@@ -9,10 +9,10 @@ from itertools import combinations
 def flag_bad_clusters(
     adata,
     cluster_key='leiden',
-    min_cell_frac=0.01,       # clusters < 1% of total cells
-    min_median_genes=200,      # clusters with very low complexity
-    corr_threshold=0.97,       # pairwise mean expression correlation
-    marker_score_threshold=2.0, # min Wilcoxon score for top marker
+    min_cell_frac=0.01,
+    min_median_genes=200,
+    corr_threshold=0.97,
+    marker_score_threshold=2.0,
     de_method='wilcoxon',
     output_prefix='cluster_qc'
 ):
@@ -34,7 +34,7 @@ def flag_bad_clusters(
     if 'n_genes' not in obs.columns:
         obs['n_genes'] = np.asarray((adata.X > 0).sum(axis=1)).flatten()
 
-    stats = obs.groupby(cluster_key)['n_genes'].agg(
+    stats = obs.groupby(cluster_key, observed=False)['n_genes'].agg(
         n_cells='count',
         median_genes='median'
     ).reset_index()
@@ -52,7 +52,6 @@ def flag_bad_clusters(
     stats['flag_weak_markers'] = stats['max_marker_score'] < marker_score_threshold
 
     # ── 3. Pairwise Jaccard on top marker genes ────────────────────────────────
-    # Get top 50 marker genes per cluster
     top_genes = {}
     for cl in clusters:
         df_cl = marker_df[marker_df['group'] == cl].nlargest(50, 'scores')
@@ -68,11 +67,10 @@ def flag_bad_clusters(
         jaccard_mat.loc[c, c] = 1.0
     jaccard_mat = jaccard_mat.astype(float)
 
-    # Flag pairs with high Jaccard similarity
     high_jaccard_pairs = []
     for c1, c2 in combinations(clusters, 2):
         j = jaccard_mat.loc[c1, c2]
-        if j > 0.3:  # >30% overlap in top markers → flag
+        if j > 0.3:
             high_jaccard_pairs.append((c1, c2, round(j, 3)))
 
     # ── 4. Mean expression correlation ────────────────────────────────────────
@@ -101,10 +99,11 @@ def flag_bad_clusters(
     stats['any_flag'] = stats[['flag_small', 'flag_low_genes',
                                 'flag_weak_markers', 'flag_similar_to_another']].any(axis=1)
 
-    # ── 6. Plot ────────────────────────────────────────────────────────────────
+    # ── 6. Plots ───────────────────────────────────────────────────────────────
+
+    # Jaccard + flag heatmaps
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # Jaccard heatmap
     mask_diag = np.eye(len(clusters), dtype=bool)
     sns.heatmap(
         jaccard_mat, ax=axes[0],
@@ -119,14 +118,6 @@ def flag_bad_clusters(
     axes[0].set_title('Jaccard similarity (top 50 marker genes)')
     axes[0].set_xlabel('Cluster')
     axes[0].set_ylabel('Cluster')
-
-    # Plot UMAP colored by flags
-    sc.pl.umap(adata, color=['leiden', 'n_genes', 'total_counts', 'pct_counts_mt'],
-            ncols=2, vmax={'n_genes': 1000}, show=False)
-    plt.savefig(f'{output_prefix}_flag_umap.png', dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_prefix}_flag_umap.png")
-
-    # Per-cluster flag summary
 
     flag_cols = ['flag_small', 'flag_low_genes', 'flag_weak_markers', 'flag_similar_to_another']
     flag_display = stats.set_index(cluster_key)[flag_cols].astype(int)
@@ -148,7 +139,18 @@ def flag_bad_clusters(
     plt.tight_layout()
     plt.savefig(f'{output_prefix}_flags.png', dpi=150, bbox_inches='tight')
     print(f"Saved: {output_prefix}_flags.png")
-    plt.show()
+    plt.close()
+
+    # UMAP panels with per-panel vmax
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    sc.pl.umap(adata, color='leiden',        ax=axes[0, 0], show=False)
+    sc.pl.umap(adata, color='n_genes',       ax=axes[0, 1], show=False, vmax=1000)
+    sc.pl.umap(adata, color='total_counts',  ax=axes[1, 0], show=False)
+    sc.pl.umap(adata, color='pct_counts_mt', ax=axes[1, 1], show=False)
+    plt.tight_layout()
+    plt.savefig(f'{output_prefix}_flag_umap.png', dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_prefix}_flag_umap.png")
+    plt.close()
 
     # ── 7. Print report ────────────────────────────────────────────────────────
     print("\n── Cluster QC report ──────────────────────────────")
@@ -165,6 +167,27 @@ def flag_bad_clusters(
         for c1, c2, r in sorted(high_corr_pairs, key=lambda x: -x[2]):
             print(f"  Clusters {c1} <-> {c2}  r={r}")
 
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    # Histogram of n_genes across all cells
+    axes[0].hist(adata.obs['n_genes_by_counts'], bins=200, color='steelblue', alpha=0.7)
+    axes[0].axvline(500,  color='orange', linestyle='--', label='500')
+    axes[0].axvline(1000, color='red',    linestyle='--', label='1000')
+    axes[0].set_xlabel('n_genes per cell')
+    axes[0].set_ylabel('n cells')
+    axes[0].set_title('Gene count distribution')
+    axes[0].legend()
+
+    # Log scale to see the low end more clearly
+    axes[1].hist(np.log1p(adata.obs['n_genes_by_counts']), bins=200, color='steelblue', alpha=0.7)
+    axes[1].set_xlabel('log(n_genes + 1)')
+    axes[1].set_title('Log gene count distribution')
+
+    plt.tight_layout()
+    plt.savefig('ngenes_distribution.png', dpi=150)
     return stats, jaccard_mat, high_jaccard_pairs, high_corr_pairs
 
 
@@ -179,7 +202,7 @@ if __name__ == '__main__':
         min_median_genes=200,
         corr_threshold=0.97,
         marker_score_threshold=2.0,
-        output_prefix='cluster_qc'
+        output_prefix='results/qc/cluster_qc'
     )
 
     # Optional: merge flagged clusters

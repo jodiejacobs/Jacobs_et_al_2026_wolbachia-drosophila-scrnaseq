@@ -646,7 +646,7 @@ rule integrate_uninfected:
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
-            --min_genes 200 \
+            --min_genes 700 \
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
@@ -690,7 +690,7 @@ rule integrate:
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
-            --min_genes 200 \
+            --min_genes 700 \
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
