@@ -185,6 +185,54 @@ def flag_bad_clusters(
 
     plt.tight_layout()
     plt.savefig('ngenes_distribution.png', dpi=150)
+
+# ── 8. Flagged cluster inspection plots ───────────────────────────────────
+    flagged_clusters = stats[stats['flag_similar_to_another']][cluster_key].tolist()
+    small_clusters   = stats[stats['flag_small']][cluster_key].tolist()
+    inspect_clusters = list(set(flagged_clusters + small_clusters))
+
+    if inspect_clusters:
+        # UMAP highlighting similar/small clusters vs rest
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        sc.pl.umap(adata, color=cluster_key, ax=axes[0], show=False,
+                   groups=inspect_clusters, na_color='#e0e0e0',
+                   title='Flagged clusters (similar/small)')
+
+        sc.pl.umap(adata, color=cluster_key, ax=axes[1], show=False,
+                   title='All clusters (labeled)')
+
+        plt.tight_layout()
+        plt.savefig(f'{output_prefix}_flagged_umap.png', dpi=150, bbox_inches='tight')
+        print(f"Saved: {output_prefix}_flagged_umap.png")
+        plt.close()
+
+        # Dotplot of top 10 markers for flagged clusters
+        sc.pl.rank_genes_groups_dotplot(
+            adata,
+            groups=inspect_clusters,
+            n_genes=10,
+            show=False
+        )
+
+        plt.savefig(f'{output_prefix}_flagged_dotplot.png', dpi=150, bbox_inches='tight')
+        print(f"Saved: {output_prefix}_flagged_dotplot.png")
+        plt.close()
+        
+        # Ensure group labels are strings to match rank_genes_groups keys
+        inspect_clusters_str = [str(c) for c in inspect_clusters]
+        sc.tl.dendrogram(adata, groupby=cluster_key)
+
+        ax = sc.pl.rank_genes_groups_dotplot(
+            adata,
+            groups=inspect_clusters_str,
+            n_genes=10,
+            show=False,
+            return_fig=True
+        )
+        ax.savefig(f'{output_prefix}_flagged_dotplot.png', dpi=150, bbox_inches='tight')
+        plt.close()
+
     return stats, jaccard_mat, high_jaccard_pairs, high_corr_pairs
 
 

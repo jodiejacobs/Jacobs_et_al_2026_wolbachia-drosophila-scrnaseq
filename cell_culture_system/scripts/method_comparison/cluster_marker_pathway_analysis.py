@@ -4,7 +4,8 @@ Uses FlyEnrichr API for automated pathway analysis with FlyBase annotations
 
 Key fixes vs previous version:
   - DE run on .raw (log-normalised counts), NOT scaled .X
-  - Marker filtering uses log2fc > 1.0 + pct_in >= 0.10 + pct_ratio >= 1.5
+  - Marker filtering uses log2fc > 0.25 + pct_in >= 0.05 + pct_ratio >= 1.0
+  - All passing markers passed to FlyEnrichr (no top_n cap)
   - Background gene set passed to FlyEnrichr (all detected genes in dataset)
   - Significance filter (adj_p < 0.05) applied before combined_score sorting
   - mt/ribo/cell_cycle genes excluded from enrichment input
@@ -160,11 +161,11 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Marker genes  (FIX: use .raw, strict filters)
+# Marker genes  (relaxed filters, all passing markers retained)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
-                      log2fc_min=1.0, pct_min=0.10, pct_ratio_min=1.5):
+                      log2fc_min=0.25, pct_min=0.05, pct_ratio_min=1.0):
     """
     Find cluster marker genes.
 
@@ -172,9 +173,9 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     Scaled .X is NOT appropriate for DE — it distorts fold changes.
 
     Filters applied:
-      log2fc     >= log2fc_min   (default 1.0 = 2× fold change)
-      pct_in     >= pct_min      (default 10% of cells in cluster express gene)
-      pct_ratio  >= pct_ratio_min (expressed proportionally more in cluster vs rest)
+      log2fc     >= log2fc_min    (default 0.25 = 1.19x fold change)
+      pct_in     >= pct_min       (default 5% of cells in cluster express gene)
+      pct_ratio  >= pct_ratio_min (default 1.0 — expressed at least equally vs rest)
       pval_adj   < 0.05
     """
     print("\n" + "="*60)
@@ -247,7 +248,7 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     marker_df = pd.DataFrame(rows)
     print(f"  Raw DE results: {len(marker_df)} gene×cluster entries")
 
-    # ── Strict filtering ──────────────────────────────────────────────────────
+    # ── Filtering ─────────────────────────────────────────────────────────────
     mask = (
         (marker_df['log2fc']  >= log2fc_min) &
         (marker_df['pval_adj'] < 0.05)
@@ -259,6 +260,9 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
 
     marker_df_filtered = marker_df[mask].copy()
     print(f"  After filtering:  {len(marker_df_filtered)} entries")
+    for grp in groups:
+        n_grp = (marker_df_filtered['cluster'] == grp).sum()
+        print(f"    Cluster {grp}: {n_grp} markers")
 
     # Print top 10 per cluster
     print("\n  Top 10 markers per cluster:")
@@ -298,7 +302,7 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FlyEnrichr  (FIX: pass background gene list)
+# FlyEnrichr  (background gene list)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _submit_to_flyenrichr(gene_symbols, description="gene_list"):
@@ -326,23 +330,13 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
     background_symbols: list of str  — background (all genes detected in dataset)
     gene_set_library  : str
     description       : str
-
-    Notes
-    -----
-    FlyEnrichr supports a background via a second list submission.
-    We submit both foreground and background, then query enrich with
-    the background userListId as the reference.
     """
     BASE = 'https://maayanlab.cloud/FlyEnrichr'
 
     try:
-        # Submit foreground
         fg_id = _submit_to_flyenrichr(gene_symbols, description)
-
-        # Submit background
         bg_id = _submit_to_flyenrichr(background_symbols, f"{description}_background")
 
-        # Query enrichment with background
         url = (f"{BASE}/enrich?userListId={fg_id}"
                f"&backgroundType={gene_set_library}"
                f"&backgroundListId={bg_id}")
@@ -356,12 +350,12 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
         results = []
         for entry in data[gene_set_library]:
             results.append({
-                'term':          entry[1],
-                'p_value':       entry[2],
-                'z_score':       entry[3],
+                'term':           entry[1],
+                'p_value':        entry[2],
+                'z_score':        entry[3],
                 'combined_score': entry[4],
-                'genes':         entry[5],
-                'adj_p_value':   entry[6],
+                'genes':          entry[5],
+                'adj_p_value':    entry[6],
             })
 
         return pd.DataFrame(results) if results else None
@@ -386,7 +380,6 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
         X = adata.raw.X
     else:
         X = adata.X
-    import scipy.sparse
     if scipy.sparse.issparse(X):
         n_cells_per_gene = np.array((X > 0).sum(axis=0)).flatten()
     else:
@@ -394,10 +387,8 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
 
     expressed_mask = n_cells_per_gene >= min_cells
 
-    # Build exclude mask — initialise first, then OR in each category
     exclude = np.zeros(len(var_names), dtype=bool)
 
-    # Exclude QC gene classes flagged in adata.var
     for flag in ('mt', 'ribo', 'cell_cycle'):
         if flag in adata.var.columns:
             in_raw = pd.Series(
@@ -406,7 +397,6 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
             ).reindex(var_names).fillna(False).values.astype(bool)
             exclude |= in_raw
 
-    # Exclude Wolbachia transcripts
     bact_mask = pd.Series(var_names).str.startswith('GQX67_').values
     exclude |= bact_mask
 
@@ -418,22 +408,23 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
           f"({n_unmapped} unmapped, {bact_mask.sum()} bacterial excluded)")
     return symbols
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Enrichment per cluster
+# Enrichment per cluster  (all passing markers, no top_n cap)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                                     output_dir, sample_name,
-                                    top_n=200, combine_go=True):
+                                    combine_go=True):
     print("\n" + "="*60)
     print("PATHWAY ENRICHMENT ANALYSIS (FlyEnrichr)")
     print("="*60)
+    print("  Using all markers passing filters (no top_n cap)")
 
     if fbgn_to_symbol is None:
         print("  ERROR: No gene symbol mapping — cannot run enrichment")
         return None
 
-    # Build background once
     print("\n  Building background gene set …")
     background_symbols = build_background(adata, fbgn_to_symbol)
     if len(background_symbols) < 100:
@@ -454,16 +445,15 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
     for cluster in clusters:
         print(f"\n{'='*50}\n  Cluster {cluster}\n{'='*50}")
 
-        # ── Select marker genes ───────────────────────────────────────────────
-        # Already filtered to log2fc>=1, pct_in>=0.1, pval_adj<0.05 by find_marker_genes
-        # Take top_n by score
+        # All markers passing filters, sorted by score — no cap
         cmarkers = (marker_df[marker_df['cluster'] == cluster]
-                    .sort_values('score', ascending=False)
-                    .head(top_n))
+                    .sort_values('score', ascending=False))
 
         if len(cmarkers) < 5:
             print(f"  Skipping: only {len(cmarkers)} markers (need ≥ 5)")
             continue
+
+        print(f"  Using {len(cmarkers)} markers for enrichment")
 
         genes_fbgn = cmarkers['gene'].tolist()
         genes_symbols, n_unmapped = symbols_from_fbgn(genes_fbgn, fbgn_to_symbol)
@@ -474,7 +464,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
             print(f"  Skipping: too few mapped symbols")
             continue
 
-        # Remove any background exclusions from foreground too
         genes_symbols = [g for g in genes_symbols if g in set(background_symbols)]
         print(f"  Foreground after background intersection: {len(genes_symbols)}")
 
@@ -486,7 +475,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 description=f"cluster_{cluster}",
             )
             if result_df is not None and len(result_df) > 0:
-                # Filter to significant terms only before saving
                 sig = result_df[result_df['adj_p_value'] < 0.05]
                 result_df['cluster'] = cluster
                 result_df['library'] = lib
@@ -495,7 +483,7 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 all_results.append(result_df)
             else:
                 print("no results")
-            time.sleep(0.5)   # be polite to the API
+            time.sleep(0.5)
 
     if not all_results:
         print("\n  No enrichment results obtained")
@@ -504,13 +492,11 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_all_results.csv", index=False)
 
-    # Significant subset
     sig_df = combined_df[combined_df['adj_p_value'] < 0.05].copy()
     sig_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_significant.csv", index=False)
     print(f"\n  Total terms: {len(combined_df)}")
     print(f"  Significant (adj_p < 0.05): {len(sig_df)}")
 
-    # Combined GO
     if combine_go:
         go_sig = sig_df[sig_df['library'].str.startswith('GO_')].copy()
         if len(go_sig) > 0:
@@ -520,7 +506,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 f"{output_dir}/{sample_name}_GO_combined_top20_per_cluster.csv", index=False)
             print(f"  Significant GO terms: {len(go_sig)}")
 
-    # Summary printout
     print(f"\n{'='*60}\nENRICHMENT SUMMARY\n{'='*60}")
     for lib in libraries:
         lib_sig = sig_df[sig_df['library'] == lib]
@@ -537,7 +522,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 term = row['term'].split('(')[0][:60]
                 print(f"    {term:<60} p_adj={row['adj_p_value']:.2e}")
 
-    # Visualisations
     _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=combine_go)
 
     return combined_df
@@ -561,14 +545,12 @@ def _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=True)
         go_sig['go_category'] = go_sig['library'].str.replace('GO_', '').str.replace('_2018', '')
 
         if len(go_sig) > 0:
-            # Per-cluster combined GO barplot
             n = len(clusters)
             fig, axes = plt.subplots(n, 1, figsize=(16, 5 * n))
             if n == 1: axes = [axes]
 
             for idx, cluster in enumerate(clusters):
                 ax = axes[idx]
-                # Sort by adj_p_value (ascending), not combined_score
                 cgo = (go_sig[go_sig['cluster'] == cluster]
                        .sort_values('adj_p_value')
                        .head(15))
@@ -608,7 +590,6 @@ def _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=True)
             plt.close()
             print(f"    Saved: GO_combined_barplots.pdf")
 
-            # Cross-cluster GO heatmap
             top_terms = (go_sig.nsmallest(60, 'adj_p_value')['term'].unique()[:30])
             hdata = []
             for term in top_terms:
@@ -635,7 +616,6 @@ def _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=True)
             plt.close()
             print(f"    Saved: GO_combined_heatmap.pdf")
 
-    # Individual library barplots
     for lib in sig_df['library'].unique():
         lib_sig = sig_df[sig_df['library'] == lib]
         if len(lib_sig) == 0:
@@ -662,7 +642,7 @@ def _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=True)
             top['-log10p'] = -np.log10(top['adj_p_value'] + 1e-300)
             y_pos = range(len(top))
             colors = ['#d62728' if p < 0.01 else '#ff7f0e' for p in top['adj_p_value']]
-            bars = ax.barh(y_pos, top['-log10p'], color=colors, alpha=0.7)
+            ax.barh(y_pos, top['-log10p'], color=colors, alpha=0.7)
             ax.set_yticks(y_pos)
             ax.set_yticklabels(top['term_short'], fontsize=9)
             ax.set_xlabel('-log10(adj p-value)', fontsize=11)
@@ -694,11 +674,11 @@ Examples:
       --sample wolbachia_infection \\
       --mapping /path/to/transcripts_to_genes.txt
 
-  # Adjust stringency
+  # Tighten stringency
   python cluster_marker_pathway_analysis.py \\
       --input integrated.h5ad --output results \\
       --sample test --mapping t2g.txt \\
-      --log2fc-min 0.5 --pct-min 0.05
+      --log2fc-min 1.0 --pct-min 0.10 --pct-ratio 1.5
 
   # Skip enrichment (faster, markers only)
   python cluster_marker_pathway_analysis.py \\
@@ -715,14 +695,12 @@ Examples:
                         help='transcripts_to_genes.txt (FBgn -> symbol)')
     parser.add_argument('--method', '-m', default='wilcoxon',
                         choices=['wilcoxon', 't-test', 'logreg'])
-    parser.add_argument('--log2fc-min',  type=float, default=0.5,
-                        help='Minimum log2FC for markers (default: 0.5 = 1.41x)')
-    parser.add_argument('--pct-min',    type=float, default=0.10,
-                        help='Min fraction of cluster cells expressing marker (default: 0.10)')
-    parser.add_argument('--pct-ratio',  type=float, default=1.2,
-                        help='Min pct_in/pct_rest ratio (default: 1.2)')
-    parser.add_argument('--top-n',      type=int,   default=200,
-                        help='Max markers per cluster for enrichment (default: 200)')
+    parser.add_argument('--log2fc-min',  type=float, default=0.25,
+                        help='Minimum log2FC for markers (default: 0.25 = 1.19x)')
+    parser.add_argument('--pct-min',    type=float, default=0.05,
+                        help='Min fraction of cluster cells expressing marker (default: 0.05)')
+    parser.add_argument('--pct-ratio',  type=float, default=1.0,
+                        help='Min pct_in/pct_rest ratio (default: 1.0)')
     parser.add_argument('--skip-enrichment', action='store_true')
     parser.add_argument('--no-combine-go',   action='store_true',
                         help='Skip combined GO visualisation')
@@ -760,12 +738,11 @@ Examples:
         pct_ratio_min=args.pct_ratio,
     )
 
-    # Step 3 — enrichment
+    # Step 3 — enrichment (all passing markers, no top_n cap)
     if not args.skip_enrichment:
         enrichment_analysis_per_cluster(
             adata, marker_df, fbgn_to_symbol,
             args.output, args.sample,
-            top_n=args.top_n,
             combine_go=not args.no_combine_go,
         )
 
