@@ -167,9 +167,6 @@ def flag_bad_clusters(
         for c1, c2, r in sorted(high_corr_pairs, key=lambda x: -x[2]):
             print(f"  Clusters {c1} <-> {c2}  r={r}")
 
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     # Histogram of n_genes across all cells
