@@ -753,6 +753,11 @@ def main():
             print(f"  Cluster {row['cluster']:>4}  "
                   f"median={row['median_pseudotime']:.3f}")
     print(f"\nOutputs -> {args.fig_dir}/")
+    adata.obs["sceptic_pseudotime"] = pd.Series(pseudotime, index=cell_ids).reindex(adata.obs_names).values
+    
+    out_h5ad = os.path.join(args.fig_dir, f"sceptic_{args.sample}.h5ad")
+    adata.write_h5ad(out_h5ad)
+    print(f"  h5ad -> {out_h5ad}")
 
 if __name__ == "__main__":
     main()
