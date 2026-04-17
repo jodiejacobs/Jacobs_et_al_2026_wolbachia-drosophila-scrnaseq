@@ -129,9 +129,14 @@ def add_metadata(adata, batch_key):
 
 def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
     # Remove bacterial / rRNA genes
-    bacteria_genes = ["GQX67_00940", "GQX67_05945"] + [
-        g for g in adata.var_names if g.startswith("16S_")]
-    adata = adata[:, ~adata.var_names.isin(bacteria_genes)].copy()
+    bacteria_mask = (
+        adata.var_names.str.startswith("GQX67") |
+        adata.var_names.str.startswith("16S_")
+        )
+    
+    n_bac = bacteria_mask.sum()
+    print(f"  Removing {n_bac} bacterial transcripts (GQX67* + 16S_*) before PCA")
+    adata = adata[:, ~bacteria_mask].copy()
 
     if scipy.sparse.issparse(adata.X):
         adata.X.eliminate_zeros()

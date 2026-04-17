@@ -119,7 +119,10 @@ rule all:
         "results/nmf_continuous_var/.done",
         "results/nmf_categorical_var/.done",
         "results/nmf_annotate_programs/program_cellcycle_overlap.csv",
-        "results/pseudotime_genes/{sample}/summary_dynamic_genes.csv"
+        expand("results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/.done",
+            sample=["wolbachia_infection"])
 
 # Establish rule precedencex
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -841,11 +844,11 @@ rule cluster_marker_pathway:
         h5ad    = "results/integrated/integrated_with_cellcycle.h5ad",
         mapping = config["transcripts_to_genes"]
     output:
-        # Only markers are guaranteed — enrichment CSVs depend on having enough sig markers
-        markers_top50       = "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
+        markers_top50 = "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
     params:
         script     = config["cluster_marker_pathway_script"],
         output_dir = "results/cluster_marker_pathway",
+        sample     = "wolbachia_infection",          # ← add this
         method     = config.get("cluster_marker_de_method", "wilcoxon"),
         top_n      = config.get("cluster_marker_top_n", 100)
     log:
@@ -859,7 +862,7 @@ rule cluster_marker_pathway:
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting cluster marker and pathway analysis for {wildcards.sample}"
+        echo "Starting cluster marker and pathway analysis for {params.sample}"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
@@ -867,9 +870,9 @@ rule cluster_marker_pathway:
         python {params.script} \
             --input   {input.h5ad} \
             --output  {params.output_dir} \
-            --sample  {wildcards.sample} \
+            --sample  {params.sample} \
             --mapping {input.mapping} \
-            --method  {params.method} 
+            --method  {params.method}
 
         echo "Cluster marker and pathway analysis complete"
         """
@@ -931,7 +934,6 @@ rule pseudotime_gene_importance:
                           "scripts/method_comparison/pseudotime_gene_importance.py"),
         outdir      = "results/pseudotime_genes/{sample}",
         program_dir = "results/nmf_programs",
-        skip_ts     = "--skip-tradeseq" if not config.get("run_tradeseq", True) else ""
     log:
         "logs/pseudotime_genes/{sample}.log"
     threads:
@@ -939,7 +941,7 @@ rule pseudotime_gene_importance:
     resources:
         slurm_partition = config.get("pseudotime_gene_partition", "medium"),
         mem_mb          = config.get("pseudotime_gene_mem", 64000),
-        slurm_time      = config.get("pseudotime_gene_time", "4:00:00")
+        slurm_time      = config.get("pseudotime_gene_time", "12:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -952,7 +954,8 @@ rule pseudotime_gene_importance:
             --h5ad        {input.h5ad} \
             --outdir      {params.outdir} \
             --program-dir {params.program_dir} \
-            {params.skip_ts}
+            --n-threads   {threads}
+
 
         echo "Pseudotime gene importance complete for {wildcards.sample}"
         """
