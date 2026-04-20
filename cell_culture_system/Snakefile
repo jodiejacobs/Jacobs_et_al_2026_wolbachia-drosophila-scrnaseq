@@ -122,6 +122,8 @@ rule all:
         expand("results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
             sample=["wolbachia_infection"]),
         expand("results/pseudotime_genes/{sample}/.done",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/tradeseq.done",
             sample=["wolbachia_infection"])
 
 # Establish rule precedencex
@@ -1132,6 +1134,44 @@ rule nmf_annotate_programs:
             {params.skip_fly}
 
         echo "NMF program annotation complete"
+        """
+rule run_tradeseq:
+    input:
+        counts = "results/pseudotime_genes/{sample}/tradeseq_inputs/counts_genesXcells.csv",
+        pt     = "results/pseudotime_genes/{sample}/tradeseq_inputs/pseudotime.csv",
+    output:
+        assoc  = "results/pseudotime_genes/{sample}/tradeseq_association.csv",
+        sve    = "results/pseudotime_genes/{sample}/tradeseq_startvsend.csv",
+        sce    = "results/pseudotime_genes/{sample}/tradeseq_sce.rds",
+        flag   = touch("results/pseudotime_genes/{sample}/tradeseq.done")
+    params:
+        script = "scripts/method_comparison/run_tradeseq.R",
+        outdir = "results/pseudotime_genes/{sample}",
+        nknots = config.get("tradeseq_nknots", 6),
+    log:
+        "logs/tradeseq/{sample}.log"
+    threads:
+        config.get("tradeseq_threads", 16)
+    resources:
+        slurm_partition = config.get("tradeseq_partition", "medium"),
+        mem_mb          = config.get("tradeseq_mem", 128000),
+        slurm_time      = config.get("tradeseq_time", "12:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting tradeSeq for {wildcards.sample}"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        Rscript {params.script} \
+            --counts   {input.counts} \
+            --pt       {input.pt} \
+            --outdir   {params.outdir} \
+            --nknots   {params.nknots} \
+            --nworkers {threads}
+
+        echo "tradeSeq complete for {wildcards.sample}"
         """
 
 """
