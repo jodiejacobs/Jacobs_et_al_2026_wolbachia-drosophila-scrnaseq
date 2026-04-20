@@ -921,15 +921,16 @@ rule run_sceptic:
 
         echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
-
 rule pseudotime_gene_importance:
     input:
         h5ad        = "results/sceptic/{sample}/sceptic_{sample}.h5ad",
         done        = "results/sceptic/{sample}/.done",
-        program_dir = "results/nmf_programs/.done"   # ensures NMF is complete
+        program_dir = "results/nmf_programs/.done"
     output:
         summary  = "results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
         spearman = "results/pseudotime_genes/{sample}/spearman_sig.csv",
+        counts   = "results/pseudotime_genes/{sample}/tradeseq_inputs/counts_genesXcells.csv",
+        pt       = "results/pseudotime_genes/{sample}/tradeseq_inputs/pseudotime.csv",
         flag     = touch("results/pseudotime_genes/{sample}/.done")
     params:
         script      = config.get("pseudotime_gene_script",
@@ -943,7 +944,7 @@ rule pseudotime_gene_importance:
     resources:
         slurm_partition = config.get("pseudotime_gene_partition", "medium"),
         mem_mb          = config.get("pseudotime_gene_mem", 64000),
-        slurm_time      = config.get("pseudotime_gene_time", "12:00:00")
+        slurm_time      = config.get("pseudotime_gene_time", "2:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -955,9 +956,7 @@ rule pseudotime_gene_importance:
         python {params.script} \
             --h5ad        {input.h5ad} \
             --outdir      {params.outdir} \
-            --program-dir {params.program_dir} \
-            --n-threads   {threads}
-
+            --program-dir {params.program_dir}
 
         echo "Pseudotime gene importance complete for {wildcards.sample}"
         """

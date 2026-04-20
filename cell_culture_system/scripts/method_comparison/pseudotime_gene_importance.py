@@ -326,152 +326,85 @@ cat("  tradeSeq complete.
 """
 
 
-def run_tradeseq(counts, gene_names, cell_names, pseudotime, outdir,
-                  spearman_df=None, n_threads=8):
+def prepare_tradeseq_inputs(counts, gene_names, cell_names, pseudotime, outdir,
+                             spearman_df=None):
     """
-    Write inputs as RDS (sparse), run embedded R script via subprocess.
+    Write tradeSeq input CSVs (counts + pseudotime) for later use with
+    run_tradeseq.R. Does NOT run R — call this script first, then run:
 
-    Key optimisations vs naive approach:
-      - Sparse RDS instead of dense CSV  (~10x smaller, faster to read in R)
-      - Pre-filter to Spearman candidates before fitting GAMs
-        (fitting 2000 genes instead of 17000 = ~8x faster)
-      - Use all allocated threads for BiocParallel MulticoreParam
+        Rscript scripts/method_comparison/run_tradeseq.R \
+            --counts  {outdir}/tradeseq_inputs/counts_genesXcells.csv \
+            --pt      {outdir}/tradeseq_inputs/pseudotime.csv \
+            --outdir  {outdir} \
+            --nknots  6 \
+            --nworkers 16
     """
-    print("\n[2/5] tradeSeq GAM analysis (via R subprocess) ...")
+    print("\n[2/5] Preparing tradeSeq inputs ...")
 
     ts_dir = os.path.join(outdir, "tradeseq_inputs")
     os.makedirs(ts_dir, exist_ok=True)
 
     # ── Pre-filter genes using Spearman results ──────────────────────────────
     # Fitting GAMs on all 17k genes is prohibitively slow.
-    # Use Spearman sig genes + top candidates by |rho| as input to tradeSeq.
+    # Use Spearman sig genes + top candidates by |rho|, capped at 5000.
     gene_names_arr = np.array(gene_names)
     if spearman_df is not None:
-        # Take sig genes + top 3000 by |rho| (union), cap at 5000
         sig_genes  = set(spearman_df[spearman_df.padj < PADJ_THRESH].index)
         top_genes  = set(spearman_df.nlargest(3000, "abs_rho").index)
-        keep_genes = list(sig_genes | top_genes)
-        # Intersect with what we actually have
-        keep_set   = set(keep_genes) & set(gene_names)
+        keep_set   = (sig_genes | top_genes) & set(gene_names)
         keep_idx   = np.array([i for i, g in enumerate(gene_names) if g in keep_set])
         if len(keep_idx) == 0:
-            keep_idx = np.arange(len(gene_names))
-        keep_idx = keep_idx[:5000]  # hard cap
-        counts_ts   = counts[:, keep_idx]
+            keep_idx = np.arange(min(5000, len(gene_names)))
+        keep_idx      = keep_idx[:5000]
+        counts_ts     = counts[:, keep_idx]
         gene_names_ts = gene_names_arr[keep_idx].tolist()
-        print(f"  Pre-filtered to {len(gene_names_ts)} genes for tradeSeq "
-              f"({len(sig_genes)} Spearman sig + top by |rho|, cap=5000)")
+        print(f"  Pre-filtered to {len(gene_names_ts)} genes "
+              f"({len(sig_genes)} Spearman sig + top 3000 by |rho|, cap=5000)")
     else:
         counts_ts     = counts
         gene_names_ts = gene_names
-        print(f"  No Spearman filter — running on all {len(gene_names_ts)} genes "
-              f"(consider --skip-tradeseq and running Spearman first)")
+        print(f"  No Spearman filter — using all {len(gene_names_ts)} genes")
 
-    # ── Write RDS via a small R helper script ───────────────────────────────
-    # We write counts as a sparse matrix in R using Matrix::sparseMatrix
-    # to avoid the huge CSV overhead
-    rds_path = os.path.join(ts_dir, "tradeseq_input.rds")
-    r_script = os.path.join(ts_dir, "run_tradeseq.R")
-    prep_script = os.path.join(ts_dir, "prep_rds.R")
+    # ── Write counts CSV (genes × cells) ────────────────────────────────────
+    cnt_path = os.path.join(ts_dir, "counts_genesXcells.csv")
+    pt_path  = os.path.join(ts_dir, "pseudotime.csv")
 
-    # Write counts as npz (scipy sparse), pseudotime as CSV
-    from scipy.sparse import csr_matrix, save_npz
-    sparse_counts = csr_matrix(counts_ts.T.astype(np.float32))  # genes x cells
-    npz_path = os.path.join(ts_dir, "counts_sparse.npz")
-    save_npz(npz_path, sparse_counts)
+    print(f"  Writing counts: {len(gene_names_ts)} genes × {counts_ts.shape[0]} cells ...")
+    pd.DataFrame(
+        counts_ts.T.astype(int),
+        index=gene_names_ts,
+        columns=cell_names,
+    ).to_csv(cnt_path)
 
-    # Gene names and cell names
-    pd.Series(gene_names_ts).to_csv(
-        os.path.join(ts_dir, "gene_names.csv"), index=False, header=False)
-    pd.Series(cell_names).to_csv(
-        os.path.join(ts_dir, "cell_names.csv"), index=False, header=False)
+    pd.DataFrame(
+        {"pseudotime": pseudotime.values},
+        index=pseudotime.index,
+    ).to_csv(pt_path)
 
-    pt_df = pd.DataFrame({"pseudotime": pseudotime.values}, index=pseudotime.index)
-    pt_path = os.path.join(ts_dir, "pseudotime.csv")
-    pt_df.to_csv(pt_path)
+    print(f"  counts  -> {cnt_path}  ({os.path.getsize(cnt_path) / 1e6:.0f} MB)")
+    print(f"  pt      -> {pt_path}")
+    print(f"\n  To run tradeSeq:")
+    print(f"    Rscript scripts/method_comparison/run_tradeseq.R \\")
+    print(f"        --counts  {cnt_path} \\")
+    print(f"        --pt      {pt_path} \\")
+    print(f"        --outdir  {outdir} \\")
+    print(f"        --nknots  6 \\")
+    print(f"        --nworkers 16")
 
-    # R prep script: read npz → dgCMatrix → save RDS
-    PREP_R = f"""
-suppressPackageStartupMessages({{
-    library(Matrix)
-    library(reticulate)
-}})
-cat("  Converting sparse matrix to RDS ...\n")
-scipy_sparse <- reticulate::import("scipy.sparse")
-np           <- reticulate::import("numpy")
-
-npz      <- scipy_sparse$load_npz("{npz_path}")
-mat_coo  <- scipy_sparse$coo_matrix(npz)
-counts   <- sparseMatrix(
-    i    = as.integer(mat_coo$row) + 1L,
-    j    = as.integer(mat_coo$col) + 1L,
-    x    = as.numeric(mat_coo$data),
-    dims = as.integer(mat_coo$shape)
-)
-genes      <- readLines("{os.path.join(ts_dir, 'gene_names.csv')}")
-cells      <- readLines("{os.path.join(ts_dir, 'cell_names.csv')}")
-rownames(counts) <- genes
-colnames(counts) <- cells
-
-pt_df <- read.csv("{pt_path}", row.names = 1)
-pt    <- setNames(pt_df[[1]], rownames(pt_df))
-
-saveRDS(list(counts = counts, pt = pt), "{rds_path}")
-cat("  RDS saved.\n")
-"""
-    with open(prep_script, "w") as f:
-        f.write(PREP_R)
-
-    print("  Converting to sparse RDS ...")
-    prep_result = subprocess.run(
-        ["Rscript", prep_script], capture_output=True, text=True)
-    if prep_result.stdout: print(prep_result.stdout)
-    if prep_result.returncode != 0:
-        print("  ⚠️  RDS prep failed — falling back to CSV (slow)")
-        print(prep_result.stderr)
-        # Fallback: write dense CSV (original approach)
-        cnt_path = os.path.join(ts_dir, "counts_genesXcells.csv")
-        print(f"  Writing dense CSV ({len(gene_names_ts)} genes × {counts_ts.shape[0]} cells) ...")
-        pd.DataFrame(counts_ts.T.astype(int),
-                     index=gene_names_ts,
-                     columns=cell_names).to_csv(cnt_path)
-        rds_path = cnt_path  # signal to R script to use CSV path
-
-    with open(r_script, "w") as f:
-        f.write(TRADESEQ_R)
-
-    cmd = ["Rscript", r_script, rds_path, outdir, str(N_KNOTS), str(n_threads)]
-    print(f"  Running tradeSeq: {len(gene_names_ts)} genes, "
-          f"{counts_ts.shape[0]} cells, {n_threads} threads, {N_KNOTS} knots")
-    print(f"  Estimated time: {len(gene_names_ts) * N_KNOTS // 60 // n_threads + 5}–"
-          f"{len(gene_names_ts) * N_KNOTS // 30 // n_threads + 10} min")
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.stdout: print(result.stdout)
-    if result.stderr: print(result.stderr[-3000:], file=sys.stderr)  # tail stderr
-
-    if result.returncode != 0:
-        print("  ⚠️  tradeSeq R script failed — skipping. Check stderr above.")
-        print("     Install: mamba install -c bioconda bioconductor-tradeseq")
-        return None, None
-
+    # ── Load tradeSeq results if they already exist ──────────────────────────
     assoc_path = os.path.join(outdir, "tradeseq_association.csv")
     sve_path   = os.path.join(outdir, "tradeseq_startvsend.csv")
 
-    if not os.path.exists(assoc_path):
-        print("  ⚠️  tradeSeq output not found — skipping.")
+    if os.path.exists(assoc_path) and os.path.exists(sve_path):
+        print(f"\n  Found existing tradeSeq results — loading ...")
+        assoc_df = pd.read_csv(assoc_path, index_col=0)
+        sve_df   = pd.read_csv(sve_path,   index_col=0)
+        sig_assoc = assoc_df[assoc_df.padj < PADJ_THRESH]
+        print(f"  Association test sig genes: {len(sig_assoc)}")
+        return assoc_df, sve_df
+    else:
+        print(f"\n  No tradeSeq results found yet — run the Rscript above first.")
         return None, None
-
-    assoc_df = pd.read_csv(assoc_path, index_col=0)
-    sve_df   = pd.read_csv(sve_path,   index_col=0)
-
-    sig_assoc = assoc_df[assoc_df.padj < PADJ_THRESH]
-    sig_sve   = sve_df[sve_df.padj     < PADJ_THRESH]
-
-    print(f"  Association test sig genes: {len(sig_assoc)}")
-    print(f"  Start vs end test sig genes: {len(sig_sve)}")
-
-    return assoc_df, sve_df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -831,13 +764,12 @@ def main():
     tradeseq_assoc, tradeseq_sve = None, None
     tradeseq_genes = []
     if not args.skip_tradeseq:
-        tradeseq_assoc, tradeseq_sve = run_tradeseq(
+        tradeseq_assoc, tradeseq_sve = prepare_tradeseq_inputs(
             counts_filt, gene_names,
             adata_pt.obs_names.tolist(),
             pseudotime.reindex(adata_pt.obs_names),
             args.outdir,
             spearman_df = spearman_df,
-            n_threads   = args.n_threads,
         )
         if tradeseq_assoc is not None:
             tradeseq_genes = (tradeseq_assoc[tradeseq_assoc.padj < PADJ_THRESH]
