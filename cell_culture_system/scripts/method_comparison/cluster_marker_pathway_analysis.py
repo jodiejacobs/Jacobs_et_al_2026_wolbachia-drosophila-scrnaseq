@@ -277,11 +277,73 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
                   f"pct_in={row['pct_in']:.2f}  pval_adj={row['pval_adj']:.2e}")
 
     # Save
+    # ── Per-cluster adaptive thresholds ──────────────────────────────────────
+    # Different clusters have very different transcriptional distances.
+    # Apply progressively stricter filters per cluster, targeting 30-150 markers.
+    # Clusters that cannot reach 30 markers at any threshold are kept at loosest.
+    TARGET_MIN = 30
+    TARGET_MAX = 150
+    THRESHOLDS = [
+        (0.50, 0.05, 1.2),
+        (0.75, 0.08, 1.3),
+        (1.00, 0.10, 1.5),
+        (1.25, 0.12, 1.75),
+        (1.50, 0.15, 2.0),
+        (2.00, 0.20, 2.5),
+    ]
+
+    adaptive_parts = []
+    threshold_log = []
+    for cl in marker_df['cluster'].unique():
+        cm = marker_df[marker_df['cluster'] == cl].copy()
+        cm['pct_ratio'] = cm['pct_in'] / (cm['pct_rest'] + 1e-9)
+        best_filt = None
+        best_thresh = THRESHOLDS[0]
+        for lfc, pct_min, pct_rat in THRESHOLDS:
+            filt = cm[
+                (cm['log2fc']    >= lfc) &
+                (cm['pval_adj']   < 0.05) &
+                (cm['pct_in']    >= pct_min) &
+                (cm['pct_ratio'] >= pct_rat)
+            ]
+            if best_filt is None:
+                best_filt = filt
+                best_thresh = (lfc, pct_min, pct_rat)
+            if TARGET_MIN <= len(filt) <= TARGET_MAX:
+                best_filt = filt
+                best_thresh = (lfc, pct_min, pct_rat)
+                break
+            if len(filt) >= TARGET_MIN:
+                best_filt = filt
+                best_thresh = (lfc, pct_min, pct_rat)
+        # Hard cap at TARGET_MAX by score to prevent over-representation
+        if len(best_filt) > TARGET_MAX:
+            best_filt = best_filt.nlargest(TARGET_MAX, 'score')
+        adaptive_parts.append(best_filt)
+        threshold_log.append({
+            'cluster': cl,
+            'log2fc_thresh': best_thresh[0],
+            'pct_thresh':    best_thresh[1],
+            'ratio_thresh':  best_thresh[2],
+            'n_markers':     len(best_filt),
+        })
+
+    marker_df_filtered = pd.concat(adaptive_parts, ignore_index=True)
+    thresh_df = pd.DataFrame(threshold_log).sort_values('cluster')
+
+    print("\n  Adaptive thresholds per cluster:")
+    print(f"  {'Cluster':>10} {'log2fc':>8} {'pct':>6} {'ratio':>7} {'n':>6}")
+    for _, row in thresh_df.iterrows():
+        print(f"  {int(row.cluster):>10} {row.log2fc_thresh:>8.2f} "
+              f"{row.pct_thresh:>6.2f} {row.ratio_thresh:>7.2f} {int(row.n_markers):>6}")
+
     marker_df.to_csv(os.path.join(output_dir, f'{sample_name}_markers_all.csv'), index=False)
     marker_df_filtered.to_csv(
         os.path.join(output_dir, f'{sample_name}_markers_filtered.csv'), index=False)
     marker_df_filtered.groupby('cluster').head(50).to_csv(
         os.path.join(output_dir, f'{sample_name}_markers_top50.csv'), index=False)
+    thresh_df.to_csv(
+        os.path.join(output_dir, f'{sample_name}_marker_thresholds.csv'), index=False)
 
     # Plots (top 10 from filtered set)
     sc.pl.rank_genes_groups(adata, n_genes=25,
@@ -364,6 +426,241 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
         print(f"    ERROR ({gene_set_library}): {e}")
         return None
 
+def plot_enrichment_network(sig_df, output_dir, sample_name,
+                            jaccard_thresh=0.3, top_n_per_cluster=15,
+                            min_adj_p=0.05):
+    """
+    Enrichment map network plot for GO results.
+
+    Nodes  : GO terms (top N significant per cluster)
+    Edges  : Jaccard similarity of gene sets >= jaccard_thresh
+    Color  : cluster with strongest significance for that term
+    Size   : -log10(adj p-value)
+    Layout : spring layout (Fruchterman-Reingold)
+
+    Produces:
+      GO_enrichment_network_{sample}.pdf   — full network, all clusters
+      GO_network_per_cluster_{sample}.pdf  — faceted, one panel per cluster,
+                                             highlighting that cluster's nodes
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        print("  ⚠️  networkx not installed — skipping network plot")
+        print("     mamba install -c conda-forge networkx")
+        return
+
+    print("\n  Building GO enrichment network ...")
+
+    go_sig = sig_df[
+        sig_df['library'].str.startswith('GO_') &
+        (sig_df['adj_p_value'] < min_adj_p)
+    ].copy()
+
+    if len(go_sig) == 0:
+        print("  No significant GO terms — skipping network")
+        return
+
+    go_sig['neg_log10p'] = -np.log10(go_sig['adj_p_value'] + 1e-300)
+    go_sig['term_short'] = go_sig['term'].apply(
+        lambda x: x.split('(')[0][:45].rstrip())
+
+    # ── Parse gene sets per term ──────────────────────────────────────────────
+    def _parse_genes(g):
+        if isinstance(g, list):   return set(g)
+        if isinstance(g, str):    return set(g.replace(';', ',').split(','))
+        return set()
+
+    go_sig['gene_set'] = go_sig['genes'].apply(_parse_genes)
+
+    # ── Select top N terms per cluster by significance ────────────────────────
+    top_terms = (go_sig
+                 .sort_values('adj_p_value')
+                 .groupby('cluster')
+                 .head(top_n_per_cluster)
+                 ['term'].unique())
+    go_plot = go_sig[go_sig['term'].isin(top_terms)].copy()
+
+    # One row per term: use the cluster where it is most significant
+    term_best = (go_plot
+                 .sort_values('adj_p_value')
+                 .drop_duplicates('term')
+                 [['term', 'term_short', 'neg_log10p', 'cluster', 'gene_set']]
+                 .set_index('term'))
+
+    terms = term_best.index.tolist()
+    print(f"  Terms in network: {len(terms)}")
+    if len(terms) < 3:
+        print("  Too few terms — skipping network")
+        return
+
+    # ── Build graph ───────────────────────────────────────────────────────────
+    G = nx.Graph()
+
+    for term in terms:
+        row = term_best.loc[term]
+        G.add_node(term,
+                   label     = row['term_short'],
+                   cluster   = str(row['cluster']),
+                   neg_log10p= float(row['neg_log10p']),
+                   gene_set  = row['gene_set'])
+
+    # Edges: Jaccard similarity between gene sets
+    n_edges = 0
+    for i, t1 in enumerate(terms):
+        for t2 in terms[i+1:]:
+            g1 = term_best.loc[t1, 'gene_set']
+            g2 = term_best.loc[t2, 'gene_set']
+            union = g1 | g2
+            if len(union) == 0:
+                continue
+            j = len(g1 & g2) / len(union)
+            if j >= jaccard_thresh:
+                G.add_edge(t1, t2, weight=j)
+                n_edges += 1
+
+    print(f"  Edges (Jaccard ≥ {jaccard_thresh}): {n_edges}")
+
+    # Remove isolated nodes only if we have enough connected ones
+    connected = [n for n in G.nodes if G.degree(n) > 0]
+    if len(connected) >= 5:
+        G.remove_nodes_from([n for n in G.nodes if G.degree(n) == 0])
+        print(f"  Nodes after removing isolates: {G.number_of_nodes()}")
+
+    if G.number_of_nodes() < 3:
+        print("  Too few connected nodes — lowering Jaccard threshold to 0.1")
+        jaccard_thresh = 0.1
+        for i, t1 in enumerate(terms):
+            for t2 in terms[i+1:]:
+                if G.has_edge(t1, t2):
+                    continue
+                g1 = term_best.loc[t1, 'gene_set'] if t1 in term_best.index else set()
+                g2 = term_best.loc[t2, 'gene_set'] if t2 in term_best.index else set()
+                union = g1 | g2
+                if len(union) == 0:
+                    continue
+                j = len(g1 & g2) / len(union)
+                if j >= jaccard_thresh:
+                    G.add_edge(t1, t2, weight=j)
+        print(f"  Edges after threshold relaxation: {G.number_of_edges()}")
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    np.random.seed(42)
+    if G.number_of_edges() > 0:
+        pos = nx.spring_layout(G, weight='weight', k=2.5, iterations=100, seed=42)
+    else:
+        pos = nx.circular_layout(G)
+
+    # ── Visual properties ─────────────────────────────────────────────────────
+    cmap = plt.cm.get_cmap('tab20')
+    cluster_list = sorted(set(nx.get_node_attributes(G, 'cluster').values()),
+                          key=lambda x: int(x) if str(x).isdigit() else x)
+    c_colors = {c: cmap(i % 20) for i, c in enumerate(cluster_list)}
+
+    node_colors  = [c_colors[G.nodes[n]['cluster']] for n in G.nodes]
+    node_sizes   = [G.nodes[n]['neg_log10p'] * 80 + 100  for n in G.nodes]
+    edge_weights = [G[u][v]['weight'] * 3 for u, v in G.edges]
+    labels       = {n: G.nodes[n]['label'] for n in G.nodes}
+
+    # ── Plot 1: full network ──────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(16, 14))
+
+    nx.draw_networkx_edges(G, pos, ax=ax,
+                           width=edge_weights,
+                           alpha=0.35,
+                           edge_color='#888888')
+    nx.draw_networkx_nodes(G, pos, ax=ax,
+                           node_color=node_colors,
+                           node_size=node_sizes,
+                           alpha=0.9,
+                           linewidths=0.8,
+                           edgecolors='white')
+    nx.draw_networkx_labels(G, pos, labels=labels, ax=ax,
+                            font_size=6.5, font_color='black',
+                            font_weight='bold',
+                            bbox=dict(boxstyle='round,pad=0.2',
+                                      facecolor='white',
+                                      alpha=0.6,
+                                      edgecolor='none'))
+
+    # Cluster legend
+    legend_els = [
+        plt.scatter([], [], c=[c_colors[c]], s=80, label=f'Cluster {c}', alpha=0.9)
+        for c in cluster_list
+    ]
+    # Size legend
+    for sig, label in [(5, 'p=0.01'), (10, 'p=1e-10'), (20, 'p=1e-20')]:
+        legend_els.append(
+            plt.scatter([], [], c='gray',
+                        s=sig * 80 + 100, alpha=0.6, label=label))
+
+    ax.legend(handles=legend_els, loc='upper left',
+              bbox_to_anchor=(1.01, 1), fontsize=9,
+              title='Cluster / Significance', title_fontsize=9,
+              framealpha=0.8)
+
+    ax.set_title(f'GO Enrichment Network — {sample_name}\n'
+                 f'Node color = cluster  |  Node size = −log₁₀(p)  |  '
+                 f'Edge weight = Jaccard gene overlap ≥ {jaccard_thresh}',
+                 fontsize=12, fontweight='bold')
+    ax.axis('off')
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/{sample_name}_GO_enrichment_network.pdf",
+                dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"    Saved: GO_enrichment_network.pdf")
+
+    # ── Plot 2: per-cluster highlight panels ──────────────────────────────────
+    ncols = min(3, len(cluster_list))
+    nrows = int(np.ceil(len(cluster_list) / ncols))
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(ncols * 7, nrows * 6))
+    axes = np.array(axes).flatten()
+
+    for i, cl in enumerate(cluster_list):
+        ax = axes[i]
+
+        # Gray out other clusters, highlight this one
+        hi_nodes  = [n for n in G.nodes if G.nodes[n]['cluster'] == cl]
+        lo_nodes  = [n for n in G.nodes if G.nodes[n]['cluster'] != cl]
+
+        hi_sizes  = [G.nodes[n]['neg_log10p'] * 100 + 120 for n in hi_nodes]
+        lo_sizes  = [60] * len(lo_nodes)
+
+        nx.draw_networkx_edges(G, pos, ax=ax,
+                               width=[G[u][v]['weight'] * 2 for u, v in G.edges],
+                               alpha=0.2, edge_color='#aaaaaa')
+        nx.draw_networkx_nodes(G, pos, nodelist=lo_nodes, ax=ax,
+                               node_color='#dddddd', node_size=lo_sizes,
+                               alpha=0.5)
+        nx.draw_networkx_nodes(G, pos, nodelist=hi_nodes, ax=ax,
+                               node_color=[c_colors[cl]] * len(hi_nodes),
+                               node_size=hi_sizes, alpha=0.95,
+                               linewidths=1.0, edgecolors='white')
+
+        # Only label highlighted nodes
+        hi_labels = {n: G.nodes[n]['label'] for n in hi_nodes}
+        nx.draw_networkx_labels(G, pos, labels=hi_labels, ax=ax,
+                                font_size=6, font_weight='bold',
+                                bbox=dict(boxstyle='round,pad=0.2',
+                                          facecolor='white',
+                                          alpha=0.7,
+                                          edgecolor='none'))
+        ax.set_title(f'Cluster {cl}  ({len(hi_nodes)} terms)',
+                     fontsize=10, fontweight='bold',
+                     color=c_colors[cl])
+        ax.axis('off')
+
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
+
+    plt.suptitle(f'GO Network — per-cluster highlight — {sample_name}',
+                 fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/{sample_name}_GO_network_per_cluster.pdf",
+                dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"    Saved: GO_network_per_cluster.pdf")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build background gene set
@@ -523,7 +820,11 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 print(f"    {term:<60} p_adj={row['adj_p_value']:.2e}")
 
     _plot_enrichment(sig_df, output_dir, sample_name, clusters, combine_go=combine_go)
-
+    # Network plot
+    plot_enrichment_network(
+        combined_df[combined_df['adj_p_value'] < 0.05],
+        output_dir, sample_name
+    )
     return combined_df
 
 

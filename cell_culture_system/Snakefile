@@ -874,7 +874,7 @@ rule cluster_marker_pathway:
             --output  {params.output_dir} \
             --sample  {params.sample} \
             --mapping {input.mapping} \
-            --method  {params.method}
+            --skip-enrichment 
 
         echo "Cluster marker and pathway analysis complete"
         """
