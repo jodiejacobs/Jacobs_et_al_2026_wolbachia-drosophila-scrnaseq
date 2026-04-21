@@ -873,9 +873,8 @@ rule cluster_marker_pathway:
             --input   {input.h5ad} \
             --output  {params.output_dir} \
             --sample  {params.sample} \
-            --mapping {input.mapping} \
-            --skip-enrichment 
-
+            --mapping {input.mapping} 
+            
         echo "Cluster marker and pathway analysis complete"
         """
 
