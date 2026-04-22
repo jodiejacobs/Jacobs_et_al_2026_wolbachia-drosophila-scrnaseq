@@ -408,11 +408,14 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
 # ─────────────────────────────────────────────────────────────────────────────
 # Background gene set
 # ─────────────────────────────────────────────────────────────────────────────
-
 def build_background(adata, fbgn_to_symbol, min_cells=3):
     """
-    Return gene symbols for all genes detected in >= min_cells cells,
-    excluding mt / ribo / cell_cycle / Wolbachia genes.
+    Return gene symbols for all genes detected in >= min_cells cells.
+    Only Wolbachia (GQX67_) genes are excluded — they are absent from
+    FlyEnrichr and would waste background slots.
+    mt / ribo / cell_cycle genes are intentionally KEPT in the background
+    so that enrichment p-values are correctly calibrated against the full
+    expressed transcriptome.
     """
     var_names = adata.raw.var_names if adata.raw is not None else adata.var_names
     X = adata.raw.X if adata.raw is not None else adata.X
@@ -422,24 +425,16 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
         n_cells_per_gene = (X > 0).sum(axis=0)
 
     expressed_mask = n_cells_per_gene >= min_cells
-    exclude = np.zeros(len(var_names), dtype=bool)
 
-    for flag in ('mt', 'ribo', 'cell_cycle'):
-        if flag in adata.var.columns:
-            in_raw = (pd.Series(adata.var[flag].values, index=adata.var_names)
-                      .reindex(var_names).fillna(False).values.astype(bool))
-            exclude |= in_raw
-
+    # Only exclude bacterial genes — not in FlyEnrichr, not meaningful as background
     bact_mask = pd.Series(var_names).str.startswith('GQX67_').values
-    exclude |= bact_mask
 
-    keep = expressed_mask & ~exclude
+    keep = expressed_mask & ~bact_mask
     background_fbgn = var_names[keep].tolist()
     symbols, n_unmapped = symbols_from_fbgn(background_fbgn, fbgn_to_symbol)
     print(f"  Background: {len(background_fbgn):,} genes → {len(symbols):,} symbols "
           f"({n_unmapped:,} unmapped, {int(bact_mask.sum())} bacterial excluded)")
     return symbols
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enrichment network plot

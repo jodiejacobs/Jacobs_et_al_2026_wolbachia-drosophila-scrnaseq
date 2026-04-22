@@ -24,9 +24,11 @@
 
 suppressPackageStartupMessages({
     library(tradeSeq)
+    library(SingleCellExperiment)
     library(BiocParallel)
     library(Matrix)
     library(ggplot2)
+    library(patchwork)
 })
 
 has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
@@ -135,7 +137,7 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
         geom_tile() +
         scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
                              midpoint = 0, name = "Scaled\nexpr") +
-        scale_x_continuous(expand = c(0, 0), name = "Pseudotime \u2192") +
+        scale_x_continuous(expand = c(0, 0), name = "Pseudotime ->") +
         theme_minimal(base_size = 8) +
         theme(axis.text.y  = element_text(
                   size = ifelse(length(top_genes) > 60, 4, 6)),
@@ -150,10 +152,21 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
     out <- file.path(out_dir, "tradeseq_smooth_heatmap.pdf")
     ggsave(out, p, width = 10, height = h, limitsize = FALSE)
     cat(sprintf("    Saved: %s\n", out))
+
+    # Export heatmap gene order with association stats
+    heatmap_genes_ordered <- rownames(mat_z)  # already in hclust order
+    out_csv <- file.path(out_dir, "tradeseq_heatmap_genes_ordered.csv")
+    heatmap_df <- assoc[match(heatmap_genes_ordered, assoc$gene),
+                        c("gene", "waldStat", "pvalue", "padj", "sig")]
+    heatmap_df$heatmap_rank <- seq_len(nrow(heatmap_df))
+    heatmap_df <- heatmap_df[, c("heatmap_rank", "gene", "waldStat",
+                                  "pvalue", "padj", "sig")]
+    write.csv(heatmap_df, out_csv, row.names = FALSE)
+    cat(sprintf("    Saved: %s\n", out_csv))
 }
 
 
-plot_smooth_curves <- function(assoc, sce, counts, out_dir) {
+plot_smooth_curves <- function(assoc, sce, out_dir) {
     cat("  Smooth curves for top 9 genes ...\n")
     top9 <- head(assoc$gene[assoc$sig], 9)
     if (length(top9) == 0) {
@@ -165,22 +178,30 @@ plot_smooth_curves <- function(assoc, sce, counts, out_dir) {
         return(invisible(NULL))
     }
 
-    out <- file.path(out_dir, "tradeseq_smooth_curves.pdf")
-    pdf(out, width = 12, height = 12)
-    par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
+    sce_counts <- as.matrix(assay(sce, "counts"))
+
+    plots <- list()
     for (g in top9) {
-        tryCatch(
-            plotSmoothers(sce, counts = counts, gene = g,
-                          main = g, xlab = "Pseudotime",
-                          ylab = "log-normalised expression"),
-            error = function(e) {
-                plot.new()
-                title(main = paste(g, "(failed)"))
-                cat(sprintf("    WARNING: %s failed: %s\n", g, conditionMessage(e)))
-            }
-        )
+        tryCatch({
+            p <- plotSmoothers(sce, counts = sce_counts, gene = g) +
+                labs(title = g, x = "Pseudotime",
+                     y = "log-normalised expression") +
+                theme_bw(base_size = 9) +
+                theme(legend.position = "none")
+            plots[[g]] <- p
+        }, error = function(e) {
+            cat(sprintf("    WARNING: %s failed: %s\n", g, conditionMessage(e)))
+        })
     }
-    dev.off()
+
+    if (length(plots) == 0) {
+        cat("  All genes failed — skipping\n")
+        return(invisible(NULL))
+    }
+
+    combined <- wrap_plots(plots, ncol = 3)
+    out <- file.path(out_dir, "tradeseq_smooth_curves.pdf")
+    ggsave(out, combined, width = 14, height = 14)
     cat(sprintf("    Saved: %s\n", out))
 }
 
@@ -209,7 +230,7 @@ plot_startvsend <- function(sve, out_dir) {
                                      "Dynamic"     = "#888888")) +
         labs(x     = "Wald statistic",
              y     = NULL,
-             title = "Start vs End test — top dynamic genes",
+             title = "Start vs End test - top dynamic genes",
              fill  = NULL) +
         theme_bw(base_size = 10) +
         theme(legend.position = "top")
@@ -358,10 +379,10 @@ if (!is.null(assoc)) {
 
 cat("\n[6/6] Generating plots ...\n")
 
-if (!is.null(assoc))              plot_volcano(assoc, out_dir)
+if (!is.null(assoc))                    plot_volcano(assoc, out_dir)
 if (!is.null(assoc) && !is.null(yhat)) plot_smooth_heatmap(assoc, yhat, out_dir)
-if (!is.null(assoc))              plot_smooth_curves(assoc, sce, counts, out_dir)
-if (!is.null(sve))                plot_startvsend(sve, out_dir)
+if (!is.null(assoc))                    plot_smooth_curves(assoc, sce, out_dir)
+if (!is.null(sve))                      plot_startvsend(sve, out_dir)
 
 cat("\n=== tradeSeq complete ===\n")
 cat(sprintf("Outputs written to: %s\n", out_dir))
