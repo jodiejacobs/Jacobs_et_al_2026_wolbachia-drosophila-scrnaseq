@@ -6,8 +6,8 @@ Key features:
   - DE run on .raw (log-normalised counts), NOT scaled .X
   - Per-cluster adaptive marker thresholds (targets 30-150 markers per cluster)
   - Background gene set passed to FlyEnrichr (all detected genes in dataset)
-  - Significance filter (adj_p < 0.05) applied before combined_score sorting
-  - mt/ribo/cell_cycle/bacterial genes excluded from enrichment input
+  - Significance filter (adj_p < 0.1) applied before combined_score sorting
+  - mt/ribo/cell_cycle/bacterial/TE genes excluded from enrichment input
   - Dot plot + network plot visualisation for enrichment results
 '''
 
@@ -78,6 +78,17 @@ def symbols_from_fbgn(fbgn_list, fbgn_to_symbol):
         else:
             unmapped.append(g)
     return symbols, len(unmapped)
+
+
+def _is_te(var_names_series):
+    """
+    Return boolean mask for transposable element IDs.
+    Covers FBti* IDs and *_transposable_element names.
+    """
+    return (
+        var_names_series.str.startswith('FBti') |
+        var_names_series.str.contains('transposable_element', regex=False)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +190,9 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
 
     The initial log2fc_min/pct_min/pct_ratio_min args set the floor
     (loosest threshold). Adaptive tightening starts from there.
+
+    Bacterial genes (GQX67_) and transposable elements (FBti*, *_transposable_element)
+    are excluded from DE so they don't dilute the enrichment foreground.
     """
     print("\n" + "="*60)
     print("DIFFERENTIAL GENE EXPRESSION")
@@ -201,6 +215,14 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     n_before_bact = adata_de.n_vars
     adata_de = adata_de[:, ~adata_de.var_names.str.startswith('GQX67_')].copy()
     print(f"  Removed {n_before_bact - adata_de.n_vars:,} bacterial transcripts "
+          f"({adata_de.n_vars:,} remaining)")
+
+    # Filter out transposable elements (FBti* and *_transposable_element)
+    # These cannot be mapped to FlyEnrichr GO terms and dilute marker gene lists
+    n_before_te = adata_de.n_vars
+    te_mask = _is_te(pd.Series(adata_de.var_names))
+    adata_de = adata_de[:, ~te_mask.values].copy()
+    print(f"  Removed {n_before_te - adata_de.n_vars:,} transposable elements "
           f"({adata_de.n_vars:,} remaining)")
 
     # Filter to genes expressed in >= 3 cells
@@ -256,6 +278,7 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     TARGET_MIN = 30
     TARGET_MAX = 150
     THRESHOLDS = [
+        (0.25, 0.03, 1.0),   # loosest floor
         (0.50, 0.05, 1.2),
         (0.75, 0.08, 1.3),
         (1.00, 0.10, 1.5),
@@ -276,7 +299,7 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
         for lfc, pct_min_t, pct_rat in THRESHOLDS:
             filt = cm[
                 (cm['log2fc']    >= lfc) &
-                (cm['pval_adj']   < 0.05) &
+                (cm['pval_adj']   < 0.1) &
                 (cm['pct_in']    >= pct_min_t) &
                 (cm['pct_ratio'] >= pct_rat)
             ]
@@ -408,11 +431,13 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
 # ─────────────────────────────────────────────────────────────────────────────
 # Background gene set
 # ─────────────────────────────────────────────────────────────────────────────
+
 def build_background(adata, fbgn_to_symbol, min_cells=3):
     """
     Return gene symbols for all genes detected in >= min_cells cells.
-    Only Wolbachia (GQX67_) genes are excluded — they are absent from
-    FlyEnrichr and would waste background slots.
+    Excluded from background (not in FlyEnrichr, not meaningful):
+      - Wolbachia genes (GQX67_*)
+      - Transposable elements (FBti*, *_transposable_element)
     mt / ribo / cell_cycle genes are intentionally KEPT in the background
     so that enrichment p-values are correctly calibrated against the full
     expressed transcriptome.
@@ -426,15 +451,20 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
 
     expressed_mask = n_cells_per_gene >= min_cells
 
-    # Only exclude bacterial genes — not in FlyEnrichr, not meaningful as background
-    bact_mask = pd.Series(var_names).str.startswith('GQX67_').values
+    var_series = pd.Series(var_names)
 
-    keep = expressed_mask & ~bact_mask
+    # Exclude bacterial genes and transposable elements
+    bact_mask = var_series.str.startswith('GQX67_').values
+    te_mask   = _is_te(var_series).values
+
+    keep = expressed_mask & ~bact_mask & ~te_mask
     background_fbgn = var_names[keep].tolist()
     symbols, n_unmapped = symbols_from_fbgn(background_fbgn, fbgn_to_symbol)
     print(f"  Background: {len(background_fbgn):,} genes → {len(symbols):,} symbols "
-          f"({n_unmapped:,} unmapped, {int(bact_mask.sum())} bacterial excluded)")
+          f"({n_unmapped:,} unmapped, {int(bact_mask.sum()):,} bacterial excluded, "
+          f"{int(te_mask.sum()):,} TEs excluded)")
     return symbols
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enrichment network plot
@@ -442,7 +472,7 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
 
 def plot_enrichment_network(sig_df, output_dir, sample_name,
                             jaccard_thresh=0.3, top_n_per_cluster=15,
-                            min_adj_p=0.05):
+                            min_adj_p=0.1):
     """
     Enrichment map network plot for GO results.
 
@@ -806,9 +836,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
             print(f"  Skipping: too few mapped symbols")
             continue
 
-        genes_symbols = [g for g in genes_symbols if g in set(background_symbols)]
-        print(f"  Foreground after background intersection: {len(genes_symbols)}")
-
         for lib in libraries:
             print(f"  [{lib}] ", end='', flush=True)
             result_df = flyenrichr_analysis(
@@ -817,10 +844,10 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 description=f"cluster_{cluster}",
             )
             if result_df is not None and len(result_df) > 0:
-                sig = result_df[result_df['adj_p_value'] < 0.05]
+                sig = result_df[result_df['adj_p_value'] < 0.1]
                 result_df['cluster'] = cluster
                 result_df['library'] = lib
-                print(f"{len(result_df)} terms, {len(sig)} significant")
+                print(f"{len(result_df)} terms, {len(sig)} significant (adj_p<0.1)")
                 all_results.append(result_df)
             else:
                 print("no results")
@@ -833,10 +860,10 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_all_results.csv", index=False)
 
-    sig_df = combined_df[combined_df['adj_p_value'] < 0.05].copy()
+    sig_df = combined_df[combined_df['adj_p_value'] < 0.1].copy()
     sig_df.to_csv(f"{output_dir}/{sample_name}_flyenrichr_significant.csv", index=False)
     print(f"\n  Total terms: {len(combined_df)}")
-    print(f"  Significant (adj_p < 0.05): {len(sig_df)}")
+    print(f"  Significant (adj_p < 0.1): {len(sig_df)}")
 
     if combine_go:
         go_sig = sig_df[sig_df['library'].str.startswith('GO_')].copy()

@@ -12,6 +12,14 @@
 #       --nknots   6 \
 #       --nworkers 16
 #
+#   Rscript scripts/method_comparison/run_tradeseq.R \
+#     --counts  results/pseudotime_genes/wolbachia_infection/tradeseq_inputs/counts_genesXcells.csv  \
+#     --pt      results/pseudotime_genes/wolbachia_infection/tradeseq_inputs/pseudotime.csv    \
+#     --outdir  results/pseudotime_genes/wolbachia_infection/ \
+#     --nknots  6 \
+#     --nworkers 16 \
+#     --genes results/pseudotime_genes/wolbachia_infection/tradeseq_inputs/custom_genes.csv
+#
 # Outputs (written to --outdir):
 #   tradeseq_sce.rds                    : fitted SCE (re-use without re-fitting)
 #   tradeseq_association.csv            : associationTest results
@@ -53,6 +61,7 @@ pt_file     <- parse_arg("--pt")
 out_dir     <- parse_arg("--outdir")
 n_knots     <- as.integer(parse_arg("--nknots",   "6"))
 n_workers   <- as.integer(parse_arg("--nworkers", "8"))
+genes_file <- parse_arg("--genes", default = NULL)
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -240,6 +249,69 @@ plot_startvsend <- function(sve, out_dir) {
     cat(sprintf("    Saved: %s\n", out))
 }
 
+plot_custom_gene_curves <- function(genes_df, sce, assoc, out_dir) {
+    cat("  Custom gene smooth curves ...\n")
+
+    genes_out <- file.path(out_dir, "custom_gene_curves")
+    dir.create(genes_out, showWarnings = FALSE, recursive = TRUE)
+
+    sce_counts <- as.matrix(assay(sce, "counts"))
+    available  <- rownames(sce_counts)
+
+    for (i in seq_len(nrow(genes_df))) {
+        gene_name  <- as.character(genes_df$Gene[i])
+        flybase_id <- as.character(genes_df$FlyBaseId[i])
+
+        # Match on FlyBase ID (primary key in SCE rownames)
+        idx <- match(flybase_id, available)
+
+        # Fallback: case-insensitive match on gene symbol in case SCE uses symbols
+        if (is.na(idx)) {
+            idx <- match(tolower(gene_name), tolower(available))
+        }
+
+        if (is.na(idx)) {
+            cat(sprintf("    SKIP: '%s' (%s) not found in SCE\n",
+                        gene_name, flybase_id))
+            next
+        }
+
+        matched_gene <- available[idx]
+
+        # Pull association stats for subtitle if available
+        subtitle <- NULL
+        if (!is.null(assoc) && matched_gene %in% assoc$gene) {
+            ar       <- assoc[assoc$gene == matched_gene, ]
+            subtitle <- sprintf("waldStat=%.2f  padj=%.2e  sig=%s",
+                                ar$waldStat, ar$padj,
+                                ifelse(ar$sig, "YES", "NO"))
+        }
+
+        tryCatch({
+            p <- plotSmoothers(sce, counts = sce_counts, gene = matched_gene) +
+                labs(
+                    title    = sprintf("%s (%s)", gene_name, flybase_id),
+                    subtitle = subtitle,
+                    x        = "Pseudotime",
+                    y        = "log-normalised expression"
+                ) +
+                theme_bw(base_size = 11) +
+                theme(legend.position = "none")
+
+            safe_name <- gsub("[^A-Za-z0-9_-]", "_", gene_name)
+            out_file  <- file.path(genes_out,
+                                   sprintf("%s_%s.pdf", safe_name, flybase_id))
+            ggsave(out_file, p, width = 6, height = 4)
+            cat(sprintf("    Saved: %s\n", out_file))
+        }, error = function(e) {
+            cat(sprintf("    WARNING: %s (%s) failed: %s\n",
+                        gene_name, flybase_id, conditionMessage(e)))
+        })
+    }
+
+    cat(sprintf("  Custom gene curves written to: %s\n", genes_out))
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Load data
 # ─────────────────────────────────────────────────────────────────────────────
@@ -383,6 +455,22 @@ if (!is.null(assoc))                    plot_volcano(assoc, out_dir)
 if (!is.null(assoc) && !is.null(yhat)) plot_smooth_heatmap(assoc, yhat, out_dir)
 if (!is.null(assoc))                    plot_smooth_curves(assoc, sce, out_dir)
 if (!is.null(sve))                      plot_startvsend(sve, out_dir)
+if (!is.null(genes_file) && !is.null(assoc)) {
+    cat("  Loading custom gene list ...\n")
+    genes_df <- tryCatch(
+        read.csv(genes_file, stringsAsFactors = FALSE, strip.white = TRUE),
+        error = function(e) {
+            cat(sprintf("  WARNING: Could not read genes file: %s\n",
+                        conditionMessage(e)))
+            NULL
+        }
+    )
+    if (!is.null(genes_df) && all(c("Gene", "FlyBaseId") %in% colnames(genes_df))) {
+        plot_custom_gene_curves(genes_df, sce, assoc, out_dir)
+    } else {
+        cat("  WARNING: genes file must have columns 'Gene' and 'FlyBaseId'\n")
+    }
+}
 
 cat("\n=== tradeSeq complete ===\n")
 cat(sprintf("Outputs written to: %s\n", out_dir))
