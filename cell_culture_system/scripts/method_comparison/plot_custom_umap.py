@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-plot_umap_genes.py
+plot_custom_umap.py
 
 Plot UMAP colored by gene expression for a list of genes from a config file.
 Each gene gets its own 2x2 inch PDF with gene name and FlyBase ID in the title.
 
+Supports adata objects where var_names are either:
+  - Gene symbols (e.g. "Rab7")
+  - FlyBase IDs (e.g. "FBgn0015795")
+  - Any other index, with FlyBase IDs stored in a adata.var column
+
 Usage:
-    python plot_umap_genes.py --h5ad <path.h5ad> --config <genes.tsv> --outdir <output_dir>
-    
-    python scripts/method_comparison/plot_custom_umap.py \
-        --h5ad results/integrated/integrated.h5ad \
-        --config results/pseudotime_genes/wolbachia_infection/tradeseq_inputs/custom_genes.csv \
-        --outdir results/custom_umaps/ 
+    python plot_custom_umap.py --h5ad <path.h5ad> --config <genes.csv> --outdir <output_dir>
 
 Config file format (TSV or CSV, with header):
-    gene_name   flybase_id
-    sxl         FBgn0264270
-    msl-2       FBgn0005640
+    Gene, FlyBaseId
+    Rab7, FBgn0015795
+    sxl, FBgn0264270
     ...
 """
 
 import argparse
 import os
+import re
 import sys
 import warnings
 
@@ -53,45 +54,69 @@ def parse_args():
 
 
 def load_config(config_path):
-    """Load gene config file. Accepts TSV or CSV with gene and flybase_id columns.
-
-    Handles:
-    - Space-padded CSV headers/values (e.g. 'Gene, FlyBaseId')
-    - Gene names containing spaces, dashes, or special characters
-    - Flexible column name aliases
+    """Load gene config. Accepts TSV or CSV with flexible column names.
+    Handles space-padded headers like 'Gene, FlyBaseId'.
     """
     sep = "\t" if config_path.endswith(".tsv") else ","
     df = pd.read_csv(config_path, sep=sep, skipinitialspace=True)
 
-    # Strip whitespace from all column names, normalize to lowercase_underscore
+    # Normalize column names
     df.columns = df.columns.str.strip().str.lower().str.replace(r"\s+", "_", regex=True)
 
     # Strip whitespace from all string values
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
 
-    # Accept flexible column names
     name_aliases = ["gene_name", "gene", "name", "symbol"]
-    fb_aliases = ["flybase_id", "flybaseid", "fbgn", "flybase"]
+    fb_aliases   = ["flybase_id", "flybaseid", "fbgn", "flybase"]
 
     name_col = next((c for c in name_aliases if c in df.columns), None)
-    fb_col = next((c for c in fb_aliases if c in df.columns), None)
+    fb_col   = next((c for c in fb_aliases   if c in df.columns), None)
 
     if name_col is None or fb_col is None:
         sys.exit(
             f"Config must have gene name and FlyBase ID columns.\n"
-            f"  Recognized gene name columns: {name_aliases}\n"
+            f"  Recognized gene name columns : {name_aliases}\n"
             f"  Recognized FlyBase ID columns: {fb_aliases}\n"
             f"  Found columns: {list(df.columns)}"
         )
 
-    return df[[name_col, fb_col]].rename(
-        columns={name_col: "gene_name", fb_col: "flybase_id"}
-    ).dropna()
+    return (
+        df[[name_col, fb_col]]
+        .rename(columns={name_col: "gene_name", fb_col: "flybase_id"})
+        .dropna()
+    )
+
+
+def build_fbgn_lookup(adata):
+    """Return a dict mapping FlyBase ID -> var_name, or None if not applicable.
+
+    Strategy (in order):
+    1. var_names are FBgn IDs directly
+    2. A column in adata.var contains FBgn IDs
+    3. No FBgn lookup available (fall back to gene symbol matching)
+    """
+    var_names = list(adata.var_names)
+    fbgn_pattern = re.compile(r"^FBgn\d+$")
+
+    # Strategy 1: var_names are FBgn IDs
+    if sum(bool(fbgn_pattern.match(v)) for v in var_names[:50]) > 25:
+        print("  Detected: var_names are FlyBase IDs -- will look up genes by FBgn ID")
+        return {v: v for v in var_names}
+
+    # Strategy 2: a var column holds FBgn IDs
+    for col in adata.var.columns:
+        sample = adata.var[col].dropna().astype(str).head(50)
+        if sum(bool(fbgn_pattern.match(v)) for v in sample) > 25:
+            print(f"  Detected: FlyBase IDs in adata.var['{col}'] -- building lookup")
+            return dict(zip(adata.var[col].astype(str), var_names))
+
+    print("  No FBgn column detected -- will look up genes directly by symbol in var_names")
+    return None
 
 
 def resolve_vmax(expr_values, vmax_arg):
-    """Return a numeric vmax from string or float argument."""
+    """Return a numeric vmax."""
     if isinstance(vmax_arg, str):
         if vmax_arg == "p99":
             return float(expr_values.quantile(0.99))
@@ -103,29 +128,30 @@ def resolve_vmax(expr_values, vmax_arg):
 
 
 def safe_filename(name):
-    """Replace characters unsafe for filenames with underscores."""
-    import re
+    """Replace filename-unsafe characters with underscores."""
     return re.sub(r"[^\w\-.]", "_", name)
 
 
-def plot_gene(adata, gene_name, flybase_id, outdir, umap_key, layer, cmap, vmax_arg):
-    """Generate and save a 2x2 inch PDF UMAP plot for one gene."""
+def plot_gene(adata, gene_name, flybase_id, var_key, outdir,
+              umap_key, layer, cmap, vmax_arg):
+    """Generate and save a 2x2 inch PDF UMAP for one gene.
+
+    var_key: the actual key in adata.var_names to use for slicing
+             (may be the FBgn ID or the gene symbol depending on adata)
+    """
     import scipy.sparse as sp
 
-    # Check gene exists
-    if gene_name not in adata.var_names:
-        print(f"  [WARN] '{gene_name}' not found in adata.var_names — skipping.")
+    if var_key not in adata.var_names:
+        print(f"  [WARN] '{var_key}' not found in adata.var_names -- skipping.")
         return False
 
     # Extract expression
-    if layer is not None:
-        if layer not in adata.layers:
-            print(f"  [WARN] Layer '{layer}' not found — using adata.X.")
-            expr = adata[:, gene_name].X
-        else:
-            expr = adata[:, gene_name].layers[layer]
+    if layer is not None and layer in adata.layers:
+        expr = adata[:, var_key].layers[layer]
     else:
-        expr = adata[:, gene_name].X
+        if layer is not None:
+            print(f"  [WARN] Layer '{layer}' not found -- using adata.X.")
+        expr = adata[:, var_key].X
 
     # Flatten to 1D
     if sp.issparse(expr):
@@ -153,14 +179,13 @@ def plot_gene(adata, gene_name, flybase_id, outdir, umap_key, layer, cmap, vmax_
         c=expr_series,
         cmap=cmap,
         vmin=0,
-        vmax=vmax,
+        vmax=max(vmax, 1e-6),  # avoid vmax=0 for all-zero genes
         s=0.5,
         linewidths=0,
         rasterized=True
     )
 
-    title = f"{gene_name}\n{flybase_id}"
-    ax.set_title(title, fontsize=5, pad=2)
+    ax.set_title(f"{gene_name}\n{flybase_id}", fontsize=5, pad=2)
     ax.set_xlabel("UMAP 1", fontsize=4)
     ax.set_ylabel("UMAP 2", fontsize=4)
     ax.tick_params(labelsize=3, length=2, pad=1)
@@ -172,9 +197,7 @@ def plot_gene(adata, gene_name, flybase_id, outdir, umap_key, layer, cmap, vmax_
 
     plt.tight_layout(pad=0.3)
 
-    # Save
-    safe_name = safe_filename(gene_name)
-    out_path = os.path.join(outdir, f"{safe_name}_{flybase_id}.pdf")
+    out_path = os.path.join(outdir, f"{safe_filename(gene_name)}_{flybase_id}.pdf")
     fig.savefig(out_path, format="pdf", bbox_inches="tight", dpi=300)
     plt.close(fig)
 
@@ -184,12 +207,15 @@ def plot_gene(adata, gene_name, flybase_id, outdir, umap_key, layer, cmap, vmax_
 
 def main():
     args = parse_args()
-
     os.makedirs(args.outdir, exist_ok=True)
 
     print(f"Loading h5ad: {args.h5ad}")
     adata = sc.read_h5ad(args.h5ad)
     print(f"  {adata.n_obs} cells x {adata.n_vars} genes")
+    print(f"  var_names sample: {list(adata.var_names[:5])}")
+    print(f"  adata.var columns: {list(adata.var.columns)}")
+
+    fbgn_lookup = build_fbgn_lookup(adata)
 
     print(f"Loading config: {args.config}")
     genes_df = load_config(args.config)
@@ -197,17 +223,29 @@ def main():
 
     n_plotted = 0
     n_skipped = 0
+
     for _, row in genes_df.iterrows():
         gene = str(row["gene_name"]).strip()
         fbid = str(row["flybase_id"]).strip()
-        print(f"  Plotting {gene} ({fbid})")
+
+        # Resolve the actual var_names key to use for slicing
+        if fbgn_lookup is not None:
+            var_key = fbgn_lookup.get(fbid)
+            if var_key is None:
+                print(f"  [WARN] FlyBase ID '{fbid}' ({gene}) not found in adata -- skipping.")
+                n_skipped += 1
+                continue
+        else:
+            var_key = gene
+
+        print(f"  Plotting {gene} ({fbid})  [var_key={var_key}]")
         success = plot_gene(
-            adata, gene, fbid,
+            adata, gene, fbid, var_key,
             outdir=args.outdir,
             umap_key=args.umap_key,
             layer=args.layer,
             cmap=args.cmap,
-            vmax_arg=args.vmax
+            vmax_arg=args.vmax,
         )
         if success:
             n_plotted += 1
