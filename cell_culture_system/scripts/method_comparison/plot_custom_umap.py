@@ -11,6 +11,7 @@ Supports adata objects where var_names are either:
   - Any other index, with FlyBase IDs stored in a adata.var column
 
 Use --use-raw to pull expression from adata.raw (all genes before HVG filtering).
+Use --filter-obs to subset cells before plotting (e.g. --filter-obs method==pipseq).
 UMAP coordinates and cell metadata always come from the main adata object.
 
 Usage:
@@ -20,9 +21,10 @@ Usage:
     python scripts/method_comparison/plot_custom_umap.py \
         --h5ad results/integrated/integrated.h5ad \
         --config results/pseudotime_genes/wolbachia_infection/tradeseq_inputs/custom_genes.csv \
-        --outdir results/custom_umaps/ \
+        --outdir results/custom_umaps/pipseq/ \
         --use-raw \
-        --cmap viridis
+        --cmap viridis \
+        --filter-obs method==pipseq
 
 Config file format (TSV or CSV, with header):
     Gene, FlyBaseId
@@ -63,7 +65,42 @@ def parse_args():
                         help="Colormap for expression (default: magma)")
     parser.add_argument("--vmax", default="p99",
                         help="vmax for color scale: 'p99', 'p95', or a float (default: p99)")
+    parser.add_argument("--filter-obs", default=None, metavar="COL==VALUE",
+                        help="Subset cells by an obs column before plotting. "
+                             "Format: column==value (e.g. method==pipseq). "
+                             "Case-insensitive value matching.")
     return parser.parse_args()
+
+
+def parse_filter(filter_str):
+    """Parse 'col==value' into (col, value). Exits on bad format."""
+    if filter_str is None:
+        return None, None
+    if "==" not in filter_str:
+        sys.exit(f"ERROR: --filter-obs must be in the format col==value, got: '{filter_str}'")
+    col, val = filter_str.split("==", 1)
+    return col.strip(), val.strip()
+
+
+def apply_filter(adata, col, val):
+    """Subset adata to cells where obs[col] == val (case-insensitive)."""
+    if col not in adata.obs.columns:
+        sys.exit(
+            f"ERROR: obs column '{col}' not found.\n"
+            f"  Available columns: {list(adata.obs.columns)}"
+        )
+    obs_vals = adata.obs[col].astype(str).str.strip().str.lower()
+    mask = obs_vals == val.lower()
+    n_match = mask.sum()
+    if n_match == 0:
+        unique_vals = adata.obs[col].astype(str).unique().tolist()
+        sys.exit(
+            f"ERROR: No cells found where {col}=='{val}'.\n"
+            f"  Unique values in '{col}': {unique_vals}"
+        )
+    subset = adata[mask].copy()
+    print(f"  Filtered to {n_match} cells where {col}=='{val}' (dropped {adata.n_obs - n_match})")
+    return subset
 
 
 def load_config(config_path):
@@ -149,7 +186,7 @@ def plot_gene(adata, expr_source, gene_name, flybase_id, var_key, outdir,
               umap_key, layer, use_raw, cmap, vmax_arg):
     """Generate and save a 2x2 inch PDF UMAP for one gene.
 
-    adata:       main AnnData (for UMAP coords)
+    adata:       main AnnData (for UMAP coords); may already be subset
     expr_source: adata or adata.raw (for expression)
     var_key:     key in expr_source.var_names to slice
     """
@@ -162,7 +199,6 @@ def plot_gene(adata, expr_source, gene_name, flybase_id, var_key, outdir,
 
     # Extract expression
     if use_raw:
-        # adata.raw slicing returns a Raw object; index into its X
         idx = var_names.index(var_key)
         expr = expr_source.X[:, idx]
     elif layer is not None and layer in adata.layers:
@@ -181,7 +217,7 @@ def plot_gene(adata, expr_source, gene_name, flybase_id, var_key, outdir,
     expr_series = pd.Series(expr)
     vmax = resolve_vmax(expr_series, vmax_arg)
 
-    # UMAP coordinates always from main adata
+    # UMAP coordinates always from main adata (already subset if filtered)
     if umap_key not in adata.obsm:
         sys.exit(
             f"UMAP key '{umap_key}' not found in adata.obsm. "
@@ -231,6 +267,11 @@ def main():
     print(f"Loading h5ad: {args.h5ad}")
     adata = sc.read_h5ad(args.h5ad)
     print(f"  {adata.n_obs} cells x {adata.n_vars} genes")
+
+    # Apply obs filter if requested (subsets cells, preserves UMAP coords)
+    filter_col, filter_val = parse_filter(args.filter_obs)
+    if filter_col is not None:
+        adata = apply_filter(adata, filter_col, filter_val)
 
     # Decide expression source
     if args.use_raw:

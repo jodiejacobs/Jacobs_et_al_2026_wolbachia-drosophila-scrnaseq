@@ -281,26 +281,25 @@ plot_custom_gene_curves <- function(genes_df, sce, assoc, out_dir) {
         # Pull association stats for subtitle if available
         subtitle <- NULL
         if (!is.null(assoc) && matched_gene %in% assoc$gene) {
-            ar  <- assoc[assoc$gene == matched_gene, ]
-            
-            # Format padj: avoid underflow display, cap at machine epsilon
+            ar       <- assoc[assoc$gene == matched_gene, ]
             padj_val <- ar$padj
-            padj_str <- if (is.na(padj_val)) {
-                "NA"
+
+            # Format padj safely — avoid underflow display
+            if (is.na(padj_val)) {
+                padj_str <- "NA"
             } else if (padj_val == 0 || padj_val < .Machine$double.eps) {
-                sprintf("< %.0e", .Machine$double.eps)   # e.g. "< 2e-16"
+                padj_str <- sprintf("< %.0e", .Machine$double.eps)
             } else if (padj_val < 0.001) {
-                sprintf("%.2e", padj_val)
+                padj_str <- sprintf("%.2e", padj_val)
             } else {
-                sprintf("%.4f", padj_val)
+                padj_str <- sprintf("%.4f", padj_val)
             }
-            
-            subtitle <- sprintf("waldStat = %.2f  |  padj %s%s  |  sig = %s",
-                                ar$waldStat,
-                                if (padj_val == 0 || padj_val < .Machine$double.eps) "" else "= ",
-                                padj_str,
-                                ifelse(ar$sig, "YES", "NO"))
+
+            sig_str  <- ifelse(isTRUE(ar$sig), "YES", "NO")
+            subtitle <- sprintf("waldStat = %.2f  |  padj = %s  |  sig = %s",
+                                ar$waldStat, padj_str, sig_str)
         }
+    }
 
     cat(sprintf("  Custom gene curves written to: %s\n", genes_out))
 }
