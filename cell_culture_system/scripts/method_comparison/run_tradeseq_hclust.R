@@ -26,10 +26,8 @@
 #   tradeseq_startvsend.csv             : startVsEndTest results
 #   tradeseq_smooth_predictions.csv     : predictSmooth for top 300 sig genes
 #   tradeseq_association_volcano.pdf    : waldStat vs -log10(padj)
-#   tradeseq_smooth_heatmap.pdf         : top 100 genes heatmap ordered by peak pseudotime
-#   tradeseq_heatmap_genes_ordered.csv  : heatmap genes with peak stage + stats
-#   tradeseq_smooth_curves_top9.pdf     : individual GAM curves for top 9 genes
-#   tradeseq_smooth_curves_manual.pdf   : GAM curves for --genes list (if provided)
+#   tradeseq_smooth_heatmap.pdf         : top 100 genes heatmap ordered by pseudotime
+#   tradeseq_smooth_curves.pdf          : individual GAM curves for top 9 genes
 #   tradeseq_startvsend_barplot.pdf     : top 30 start-vs-end genes by direction
 
 suppressPackageStartupMessages({
@@ -58,12 +56,12 @@ parse_arg <- function(flag, default = NULL) {
     return(args[idx + 1])
 }
 
-counts_file  <- parse_arg("--counts")
-pt_file      <- parse_arg("--pt")
-out_dir      <- parse_arg("--outdir")
-n_knots      <- as.integer(parse_arg("--nknots",   "6"))
-n_workers    <- as.integer(parse_arg("--nworkers", "8"))
-genes_file   <- parse_arg("--genes", default = NULL)
+counts_file <- parse_arg("--counts")
+pt_file     <- parse_arg("--pt")
+out_dir     <- parse_arg("--outdir")
+n_knots     <- as.integer(parse_arg("--nknots",   "6"))
+n_workers   <- as.integer(parse_arg("--nworkers", "8"))
+genes_file <- parse_arg("--genes", default = NULL)
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -74,7 +72,6 @@ cat(sprintf("  outdir   : %s\n", out_dir))
 cat(sprintf("  nknots   : %d\n", n_knots))
 cat(sprintf("  nworkers : %d\n", n_workers))
 cat(sprintf("  ggrepel  : %s\n", if (has_ggrepel) "yes" else "no (gene labels disabled)"))
-cat(sprintf("  genes    : %s\n", if (!is.null(genes_file)) genes_file else "none"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Plotting functions
@@ -132,11 +129,11 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
     mat_z <- t(scale(t(mat)))
     mat_z[is.nan(mat_z)] <- 0
 
-    # Order genes by peak pseudotime (column of max smoothed expression)
-    peak_idx   <- apply(mat_z, 1, which.max)
-    gene_order <- order(peak_idx)
-    mat_z      <- mat_z[gene_order, , drop = FALSE]
-    peak_idx   <- peak_idx[gene_order]
+    gene_order <- tryCatch(
+        hclust(dist(mat_z), method = "ward.D2")$order,
+        error = function(e) seq_len(nrow(mat_z))
+    )
+    mat_z <- mat_z[gene_order, , drop = FALSE]
 
     df_long <- data.frame(
         gene     = rep(rownames(mat_z), times = ncol(mat_z)),
@@ -149,14 +146,14 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
         geom_tile() +
         scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
                              midpoint = 0, name = "Scaled\nexpr") +
-        scale_x_continuous(expand = c(0, 0), name = "Pseudotime ->") +
+        scale_x_continuous(expand = c(0, 0), name = "Pseudotime ->") +Í
         theme_minimal(base_size = 8) +
         theme(axis.text.y  = element_text(
                   size = ifelse(length(top_genes) > 60, 4, 6)),
               axis.text.x  = element_blank(),
               axis.ticks.x = element_blank(),
               panel.grid   = element_blank()) +
-        labs(title = sprintf("Top %d dynamic genes ordered by peak pseudotime",
+        labs(title = sprintf("Top %d dynamic genes (GAM smooth)",
                              length(top_genes)),
              y = NULL)
 
@@ -165,30 +162,20 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
     ggsave(out, p, width = 10, height = h, limitsize = FALSE)
     cat(sprintf("    Saved: %s\n", out))
 
-    # Export genes in heatmap order (top to bottom = early to late peak)
-    n_pts     <- ncol(mat_z)
-    peak_frac <- peak_idx / n_pts
-    stage     <- cut(peak_frac,
-                     breaks = c(0, 1/3, 2/3, 1),
-                     labels = c("early", "middle", "late"),
-                     include.lowest = TRUE)
-
-    heatmap_df <- assoc[match(rownames(mat_z), assoc$gene),
-                        c("gene", "waldStat", "pvalue", "padj", "sig")]
-    heatmap_df$heatmap_rank  <- seq_len(nrow(heatmap_df))
-    heatmap_df$peak_pt_index <- peak_idx
-    heatmap_df$peak_pt_frac  <- round(peak_frac, 4)
-    heatmap_df$stage         <- as.character(stage)
-    heatmap_df <- heatmap_df[, c("heatmap_rank", "gene", "stage",
-                                  "peak_pt_index", "peak_pt_frac",
-                                  "waldStat", "pvalue", "padj", "sig")]
+    # Export heatmap gene order with association stats
+    heatmap_genes_ordered <- rownames(mat_z)  # already in hclust order
     out_csv <- file.path(out_dir, "tradeseq_heatmap_genes_ordered.csv")
+    heatmap_df <- assoc[match(heatmap_genes_ordered, assoc$gene),
+                        c("gene", "waldStat", "pvalue", "padj", "sig")]
+    heatmap_df$heatmap_rank <- seq_len(nrow(heatmap_df))
+    heatmap_df <- heatmap_df[, c("heatmap_rank", "gene", "waldStat",
+                                  "pvalue", "padj", "sig")]
     write.csv(heatmap_df, out_csv, row.names = FALSE)
     cat(sprintf("    Saved: %s\n", out_csv))
 }
 
 
-plot_smooth_curves <- function(assoc, sce, out_dir, manual_genes = character(0)) {
+plot_smooth_curves <- function(assoc, sce, out_dir) {
     cat("  Smooth curves for top 9 genes ...\n")
     top9 <- head(assoc$gene[assoc$sig], 9)
     if (length(top9) == 0) {
@@ -202,42 +189,29 @@ plot_smooth_curves <- function(assoc, sce, out_dir, manual_genes = character(0))
 
     sce_counts <- as.matrix(assay(sce, "counts"))
 
-    make_curve_grid <- function(genes, label) {
-        plots <- list()
-        for (g in genes) {
-            if (!g %in% rownames(sce)) {
-                cat(sprintf("    WARNING: %s not in SCE — skipping\n", g))
-                next
-            }
-            tryCatch({
-                p <- plotSmoothers(sce, counts = sce_counts, gene = g) +
-                    labs(title = g, x = "Pseudotime",
-                         y = "log-normalised expression") +
-                    theme_bw(base_size = 9) +
-                    theme(legend.position = "none")
-                plots[[g]] <- p
-            }, error = function(e) {
-                cat(sprintf("    WARNING: %s failed: %s\n", g, conditionMessage(e)))
-            })
-        }
-        if (length(plots) == 0) {
-            cat(sprintf("  All %s genes failed — skipping\n", label))
-            return(invisible(NULL))
-        }
-        combined <- wrap_plots(plots, ncol = 3)
-        out <- file.path(out_dir, sprintf("tradeseq_smooth_curves_%s.pdf", label))
-        ggsave(out, combined,
-               width  = min(3, length(plots)) * 5,
-               height = ceiling(length(plots) / 3) * 5)
-        cat(sprintf("    Saved: %s\n", out))
+    plots <- list()
+    for (g in top9) {
+        tryCatch({
+            p <- plotSmoothers(sce, counts = sce_counts, gene = g) +
+                labs(title = g, x = "Pseudotime",
+                     y = "log-normalised expression") +
+                theme_bw(base_size = 9) +
+                theme(legend.position = "none")
+            plots[[g]] <- p
+        }, error = function(e) {
+            cat(sprintf("    WARNING: %s failed: %s\n", g, conditionMessage(e)))
+        })
     }
 
-    make_curve_grid(top9, "top9")
-
-    if (length(manual_genes) > 0) {
-        cat(sprintf("  Smooth curves for %d manual genes ...\n", length(manual_genes)))
-        make_curve_grid(manual_genes, "manual")
+    if (length(plots) == 0) {
+        cat("  All genes failed — skipping\n")
+        return(invisible(NULL))
     }
+
+    combined <- wrap_plots(plots, ncol = 3)
+    out <- file.path(out_dir, "tradeseq_smooth_curves.pdf")
+    ggsave(out, combined, width = 14, height = 14)
+    cat(sprintf("    Saved: %s\n", out))
 }
 
 
@@ -275,64 +249,59 @@ plot_startvsend <- function(sve, out_dir) {
     cat(sprintf("    Saved: %s\n", out))
 }
 
-
 plot_custom_gene_curves <- function(genes_df, sce, assoc, out_dir) {
     cat("  Custom gene smooth curves ...\n")
 
-    genes_out  <- file.path(out_dir, "custom_gene_curves")
+    genes_out <- file.path(out_dir, "custom_gene_curves")
     dir.create(genes_out, showWarnings = FALSE, recursive = TRUE)
 
     sce_counts <- as.matrix(assay(sce, "counts"))
     available  <- rownames(sce_counts)
-    plots      <- list()
 
     for (i in seq_len(nrow(genes_df))) {
         gene_name  <- as.character(genes_df$Gene[i])
         flybase_id <- as.character(genes_df$FlyBaseId[i])
 
+        # Match on FlyBase ID (primary key in SCE rownames)
         idx <- match(flybase_id, available)
-        if (is.na(idx)) idx <- match(tolower(gene_name), tolower(available))
+
+        # Fallback: case-insensitive match on gene symbol in case SCE uses symbols
+        if (is.na(idx)) {
+            idx <- match(tolower(gene_name), tolower(available))
+        }
 
         if (is.na(idx)) {
-            cat(sprintf("    SKIP: '%s' (%s) not found in SCE\n", gene_name, flybase_id))
+            cat(sprintf("    SKIP: '%s' (%s) not found in SCE\n",
+                        gene_name, flybase_id))
             next
         }
 
         matched_gene <- available[idx]
 
+        # Pull association stats for subtitle if available
         subtitle <- NULL
         if (!is.null(assoc) && matched_gene %in% assoc$gene) {
             ar       <- assoc[assoc$gene == matched_gene, ]
             padj_val <- ar$padj
-            padj_str <- if (is.na(padj_val)) "NA" else if (padj_val < 0.001) sprintf("%.2e", padj_val) else sprintf("%.4f", padj_val)
+
+            # Format padj safely — avoid underflow display
+            if (is.na(padj_val)) {
+                padj_str <- "NA"
+            } else if (padj_val == 0 || padj_val < .Machine$double.eps) {
+                padj_str <- sprintf("< %.0e", .Machine$double.eps)
+            } else if (padj_val < 0.001) {
+                padj_str <- sprintf("%.2e", padj_val)
+            } else {
+                padj_str <- sprintf("%.4f", padj_val)
+            }
+
+            sig_str  <- ifelse(isTRUE(ar$sig), "YES", "NO")
             subtitle <- sprintf("waldStat = %.2f  |  padj = %s  |  sig = %s",
-                                ar$waldStat, padj_str, ifelse(isTRUE(ar$sig), "YES", "NO"))
+                                ar$waldStat, padj_str, sig_str)
         }
-
-        tryCatch({
-            p <- plotSmoothers(sce, counts = sce_counts, gene = matched_gene) +
-                labs(title    = sprintf("%s (%s)", gene_name, flybase_id),
-                     subtitle = subtitle,
-                     x = "Pseudotime", y = "log-normalised expression") +
-                theme_bw(base_size = 9) +
-                theme(legend.position = "none")
-            plots[[gene_name]] <- p
-        }, error = function(e) {
-            cat(sprintf("    WARNING: %s failed: %s\n", gene_name, conditionMessage(e)))
-        })
     }
 
-    if (length(plots) == 0) {
-        cat("  All custom genes failed or not found — skipping\n")
-        return(invisible(NULL))
-    }
-
-    combined <- wrap_plots(plots, ncol = 3)
-    out <- file.path(out_dir, "tradeseq_smooth_curves_custom.pdf")
-    ggsave(out, combined,
-           width  = min(3, length(plots)) * 5,
-           height = ceiling(length(plots) / 3) * 5)
-    cat(sprintf("    Saved: %s\n", out))
+    cat(sprintf("  Custom gene curves written to: %s\n", genes_out))
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
