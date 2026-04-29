@@ -9,6 +9,7 @@ Key features:
   - Significance filter (adj_p < 0.1) applied before combined_score sorting
   - mt/ribo/cell_cycle/bacterial/TE genes excluded from enrichment input
   - Dot plot + network plot visualisation for enrichment results
+  - Outputs: *_markers_cluster_fbgn_pval.csv and *_background_genes.csv
 '''
 
 import scanpy as sc
@@ -193,6 +194,14 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
 
     Bacterial genes (GQX67_) and transposable elements (FBti*, *_transposable_element)
     are excluded from DE so they don't dilute the enrichment foreground.
+
+    Outputs
+    -------
+    *_markers_all.csv              : all DE results pre-filter
+    *_markers_filtered.csv         : adaptive-filtered markers (full columns)
+    *_markers_top50.csv            : top 50 per cluster
+    *_marker_thresholds.csv        : per-cluster threshold log
+    *_markers_cluster_fbgn_pval.csv: cluster / flybase_id / p_value / adj_p_value
     """
     print("\n" + "="*60)
     print("DIFFERENTIAL GENE EXPRESSION")
@@ -223,7 +232,7 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     te_mask = _is_te(pd.Series(adata_de.var_names))
     adata_de = adata_de[:, ~te_mask.values].copy()
     print(f"  Removed {n_before_te - adata_de.n_vars:,} transposable elements "
-          f"({adata_de.n_vars:,} remaining)")
+          f"(FBti* / *_transposable_element) ({adata_de.n_vars:,} remaining)")
 
     # Filter to genes expressed in >= 3 cells
     n_cells_per_gene = np.array((adata_de.X > 0).sum(axis=0)).flatten()
@@ -355,13 +364,29 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
             print(f"    {row['gene']:<22} log2FC={row['log2fc']:>6.2f}  "
                   f"pct_in={row['pct_in']:.2f}  pval_adj={row['pval_adj']:.2e}")
 
-    # Save filtered results
+    # ── Save filtered results ─────────────────────────────────────────────────
     marker_df_filtered.to_csv(
         os.path.join(output_dir, f'{sample_name}_markers_filtered.csv'), index=False)
     marker_df_filtered.groupby('cluster').head(50).to_csv(
         os.path.join(output_dir, f'{sample_name}_markers_top50.csv'), index=False)
     thresh_df.to_csv(
         os.path.join(output_dir, f'{sample_name}_marker_thresholds.csv'), index=False)
+
+    # ── Slim export: cluster / FBgn ID / p-value / adj p-value ───────────────
+    marker_export = (
+        marker_df_filtered[['cluster', 'gene', 'pval', 'pval_adj']]
+        .rename(columns={
+            'gene':     'flybase_id',
+            'pval':     'p_value',
+            'pval_adj': 'adj_p_value',
+        })
+        .sort_values(['cluster', 'adj_p_value'])
+    )
+    marker_export_path = os.path.join(
+        output_dir, f'{sample_name}_markers_cluster_fbgn_pval.csv')
+    marker_export.to_csv(marker_export_path, index=False)
+    print(f"\n  Saved marker export ({len(marker_export):,} rows): "
+          f"{sample_name}_markers_cluster_fbgn_pval.csv")
 
     # Scanpy plots
     sc.pl.rank_genes_groups(adata, n_genes=25,
@@ -432,15 +457,19 @@ def flyenrichr_analysis(gene_symbols, background_symbols,
 # Background gene set
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_background(adata, fbgn_to_symbol, min_cells=3):
+def build_background(adata, fbgn_to_symbol, output_dir, sample_name, min_cells=3):
     """
-    Return gene symbols for all genes detected in >= min_cells cells.
+    Return (gene_symbols, background_fbgn) for all genes detected in >= min_cells cells.
+
     Excluded from background (not in FlyEnrichr, not meaningful):
       - Wolbachia genes (GQX67_*)
       - Transposable elements (FBti*, *_transposable_element)
+
     mt / ribo / cell_cycle genes are intentionally KEPT in the background
     so that enrichment p-values are correctly calibrated against the full
     expressed transcriptome.
+
+    Also writes *_background_genes.csv (flybase_id, gene_symbol) to output_dir.
     """
     var_names = adata.raw.var_names if adata.raw is not None else adata.var_names
     X = adata.raw.X if adata.raw is not None else adata.X
@@ -460,10 +489,22 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
     keep = expressed_mask & ~bact_mask & ~te_mask
     background_fbgn = var_names[keep].tolist()
     symbols, n_unmapped = symbols_from_fbgn(background_fbgn, fbgn_to_symbol)
+
     print(f"  Background: {len(background_fbgn):,} genes → {len(symbols):,} symbols "
           f"({n_unmapped:,} unmapped, {int(bact_mask.sum()):,} bacterial excluded, "
           f"{int(te_mask.sum()):,} TEs excluded)")
-    return symbols
+
+    # ── Write background gene file ────────────────────────────────────────────
+    bg_df = pd.DataFrame({
+        'flybase_id':  background_fbgn,
+        'gene_symbol': [fbgn_to_symbol.get(g, '') for g in background_fbgn],
+    })
+    bg_path = os.path.join(output_dir, f'{sample_name}_background_genes.csv')
+    bg_df.to_csv(bg_path, index=False)
+    print(f"  Saved background genes ({len(bg_df):,} rows): "
+          f"{sample_name}_background_genes.csv")
+
+    return symbols, background_fbgn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -801,7 +842,8 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
         return None
 
     print("\n  Building background gene set ...")
-    background_symbols = build_background(adata, fbgn_to_symbol)
+    background_symbols, _ = build_background(
+        adata, fbgn_to_symbol, output_dir, sample_name)
     if len(background_symbols) < 100:
         print("  WARNING: Very small background — check mapping file")
 
@@ -965,4 +1007,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main()s
