@@ -9,6 +9,10 @@ Key features:
   - Significance filter (adj_p < 0.1) applied before combined_score sorting
   - mt/ribo/cell_cycle/bacterial/TE genes excluded from enrichment input
   - Dot plot + network plot visualisation for enrichment results
+  - Sparse-cluster rescue for clusters with 0 adaptive markers (broad/ubiquitous clusters):
+      A. Pairwise DE vs nearest-neighbour clusters in Harmony PCA space (primary)
+      D. Tau-like specificity score across all clusters (fallback if A yields < 5 genes)
+    Rescue markers are flagged with rescue_strategy in the output CSVs.
   - Outputs: *_markers_cluster_fbgn_pval.csv and *_background_genes.csv
 '''
 
@@ -170,6 +174,330 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
     return dict(h_counts=h_counts, p_counts=p_counts,
                 h_genes=h_genes,   p_genes=p_genes,
                 eta_counts=eta_counts, eta_genes=eta_genes)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sparse-cluster rescue: Strategy A (pairwise) + Strategy D (specificity)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _nearest_neighbour_clusters(adata_de, target_cl, n_neighbours=3):
+    """
+    Return the n_neighbours clusters closest to target_cl in mean Harmony PCA space.
+    Falls back to raw PCA, then X_umap, then random selection if none available.
+    """
+    # Choose embedding: prefer Harmony PCA, then PCA, then UMAP
+    if 'X_pca_harmony' in adata_de.obsm:
+        coords_key = 'X_pca_harmony'
+    elif 'X_pca' in adata_de.obsm:
+        coords_key = 'X_pca'
+    elif 'X_umap' in adata_de.obsm:
+        coords_key = 'X_umap'
+    else:
+        coords_key = None
+
+    all_clusters = [c for c in adata_de.obs['leiden'].unique() if c != target_cl]
+
+    if coords_key is None or len(all_clusters) == 0:
+        return all_clusters[:n_neighbours]
+
+    coords = adata_de.obsm[coords_key]
+    target_mask = adata_de.obs['leiden'] == target_cl
+    target_centroid = coords[target_mask].mean(axis=0)
+
+    dists = {}
+    for cl in all_clusters:
+        mask = adata_de.obs['leiden'] == cl
+        centroid = coords[mask].mean(axis=0)
+        dists[cl] = np.linalg.norm(target_centroid - centroid)
+
+    neighbours = sorted(dists, key=dists.get)[:n_neighbours]
+    print(f"    Nearest neighbours (by {coords_key}): {neighbours}")
+    return neighbours
+
+
+def _pairwise_de(adata_de, target_cl, compare_cls, method='wilcoxon',
+                 log2fc_min=0.25, pct_in_min=0.05, adj_p_max=0.1):
+    """
+    Strategy A: run DE of target_cl vs each neighbour cluster individually,
+    then take the union of genes that pass filters in >= 1 comparison.
+    Returns a DataFrame with the same columns as the main marker_df, plus
+    'rescue_strategy' = 'pairwise_DE' and 'reference_clusters'.
+    """
+    passing = {}  # gene -> best row across comparisons
+
+    for ref_cl in compare_cls:
+        subset_mask = adata_de.obs['leiden'].isin([target_cl, ref_cl])
+        adata_sub = adata_de[subset_mask].copy()
+
+        # Need >= 2 cells in each group
+        n_target = (adata_sub.obs['leiden'] == target_cl).sum()
+        n_ref    = (adata_sub.obs['leiden'] == ref_cl).sum()
+        if n_target < 2 or n_ref < 2:
+            print(f"    Skipping vs cluster {ref_cl}: too few cells "
+                  f"(target={n_target}, ref={n_ref})")
+            continue
+
+        try:
+            sc.tl.rank_genes_groups(
+                adata_sub, 'leiden', groups=[target_cl],
+                reference=ref_cl, method=method,
+                key_added='rgg_pairwise',
+                tie_correct=True, rankby_abs=False, pts=True,
+            )
+        except Exception as e:
+            print(f"    WARNING: pairwise DE vs {ref_cl} failed: {e}")
+            continue
+
+        res = adata_sub.uns['rgg_pairwise']
+        for i in range(len(res['names'][target_cl])):
+            gene = res['names'][target_cl][i]
+            lfc  = res['logfoldchanges'][target_cl][i]
+            padj = res['pvals_adj'][target_cl][i]
+            pval = res['pvals'][target_cl][i]
+            scr  = res['scores'][target_cl][i]
+            pct_in   = res['pts'][target_cl][i]   if 'pts'      in res else np.nan
+            pct_rest = res['pts_rest'][target_cl][i] if 'pts_rest' in res else np.nan
+
+            if pd.isna(lfc) or np.isinf(lfc):
+                continue
+            if lfc < log2fc_min or pct_in < pct_in_min or padj >= adj_p_max:
+                continue
+
+            # Keep best (lowest padj) row per gene across comparisons
+            if gene not in passing or padj < passing[gene]['pval_adj']:
+                passing[gene] = dict(
+                    cluster          = target_cl,
+                    gene             = gene,
+                    log2fc           = lfc,
+                    pval             = pval,
+                    pval_adj         = padj,
+                    score            = scr,
+                    pct_in           = pct_in,
+                    pct_rest         = pct_rest,
+                    rescue_strategy  = 'pairwise_DE',
+                    reference_clusters = str(compare_cls),
+                )
+
+    if not passing:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(list(passing.values()))
+    df['pct_ratio'] = df['pct_in'] / (df['pct_rest'] + 1e-9)
+    return df.sort_values('score', ascending=False)
+
+
+def _specificity_score(adata_de, target_cl, top_n=50, pct_in_min=0.1):
+    """
+    Strategy D: tau-like specificity score.
+
+    For each gene, compute mean expression per cluster (log-normalised space).
+    Tau = (1 - x_i / x_max) summed across clusters, normalised.
+    High tau = expressed specifically in few clusters.
+
+    We then filter to genes where target_cl has the *highest* mean and
+    tau >= 0.5, returning the top_n by tau * mean_in_target.
+
+    Returns a DataFrame with the same core columns as marker_df, plus
+    'rescue_strategy' = 'specificity_tau' and 'tau' column.
+    """
+    # Dense mean expression per cluster per gene
+    X = adata_de.X
+    if scipy.sparse.issparse(X):
+        X = X.toarray()
+
+    genes   = adata_de.var_names.tolist()
+    clusters = adata_de.obs['leiden'].unique().tolist()
+
+    # Build (n_clusters x n_genes) mean matrix
+    means = np.zeros((len(clusters), len(genes)), dtype=np.float32)
+    for i, cl in enumerate(clusters):
+        mask = (adata_de.obs['leiden'] == cl).values
+        means[i] = X[mask].mean(axis=0)
+
+    # Tau: ranges 0 (ubiquitous) -> 1 (perfectly specific)
+    x_max = means.max(axis=0)
+    x_max[x_max == 0] = 1  # avoid div by zero for unexpressed genes
+    n = len(clusters)
+    tau = ((1 - means / x_max).sum(axis=0)) / (n - 1) if n > 1 else np.zeros(len(genes))
+
+    target_idx = clusters.index(target_cl)
+    mean_target = means[target_idx]
+
+    # pct expressed in target cluster
+    target_mask = (adata_de.obs['leiden'] == target_cl).values
+    X_target = X[target_mask]
+    pct_in = (X_target > 0).mean(axis=0)
+
+    # Filter: target must have highest mean AND tau >= 0.5 AND pct_in >= threshold
+    argmax_cluster = means.argmax(axis=0)
+    keep = (
+        (argmax_cluster == target_idx) &
+        (tau >= 0.5) &
+        (pct_in >= pct_in_min)
+    )
+
+    if keep.sum() == 0:
+        # Relax: just highest mean in target + tau >= 0.3
+        keep = (argmax_cluster == target_idx) & (tau >= 0.3) & (pct_in >= pct_in_min)
+
+    if keep.sum() == 0:
+        return pd.DataFrame()
+
+    kept_genes   = [genes[i]       for i in range(len(genes)) if keep[i]]
+    kept_tau     = [tau[i]         for i in range(len(genes)) if keep[i]]
+    kept_mean    = [mean_target[i] for i in range(len(genes)) if keep[i]]
+    kept_pct     = [pct_in[i]      for i in range(len(genes)) if keep[i]]
+
+    # Score = tau * mean (ranks genes that are both specific and well-expressed)
+    spec_score = np.array(kept_tau) * np.array(kept_mean)
+    order = np.argsort(spec_score)[::-1][:top_n]
+
+    rows = []
+    for idx in order:
+        rows.append(dict(
+            cluster           = target_cl,
+            gene              = kept_genes[idx],
+            log2fc            = np.log2(kept_mean[idx] + 1),  # pseudo log2FC vs 0
+            pval              = np.nan,
+            pval_adj          = np.nan,
+            score             = spec_score[idx],
+            pct_in            = kept_pct[idx],
+            pct_rest          = np.nan,
+            pct_ratio         = np.nan,
+            tau               = kept_tau[idx],
+            rescue_strategy   = 'specificity_tau',
+            reference_clusters= 'all',
+        ))
+
+    return pd.DataFrame(rows)
+
+
+def rescue_sparse_clusters(adata_de, marker_df_filtered, all_marker_df,
+                           output_dir, sample_name, method='wilcoxon',
+                           n_neighbours=3):
+    """
+    For any cluster with 0 markers after adaptive filtering, attempt rescue:
+
+    Strategy A — pairwise DE vs n_neighbours nearest clusters in PCA space.
+                 Filters: log2FC >= 0.5, pct_in >= 0.05, adj_p < 0.1.
+                 Takes union of genes significant in >= 1 pairwise comparison.
+
+    Strategy D — Tau-like specificity score across all clusters.
+                 Selects genes where this cluster has the highest mean expression
+                 and tau >= 0.5 (relaxed to 0.3 if needed), pct_in >= 0.1.
+
+    A is tried first. D is used as fallback only if A yields < 5 genes.
+    Both can contribute: if A gives >= 5 genes it is used alone; otherwise
+    D supplements A (or replaces it entirely).
+
+    Rescued markers are tagged with 'rescue_strategy' and 'reference_clusters'
+    columns. Non-rescued markers get rescue_strategy = 'adaptive'.
+
+    Returns the merged marker DataFrame and a rescue summary dict.
+    """
+    all_clusters = sorted(
+        adata_de.obs['leiden'].unique(),
+        key=lambda x: int(x) if str(x).isdigit() else x,
+    )
+    sparse_clusters = [
+        cl for cl in all_clusters
+        if cl not in marker_df_filtered['cluster'].values
+        or len(marker_df_filtered[marker_df_filtered['cluster'] == cl]) == 0
+    ]
+
+    if not sparse_clusters:
+        print("  No sparse clusters — rescue not needed.")
+        marker_df_filtered['rescue_strategy']   = 'adaptive'
+        marker_df_filtered['reference_clusters'] = 'all_others'
+        marker_df_filtered['tau']                = np.nan
+        return marker_df_filtered, {}
+
+    print(f"\n  Sparse clusters (0 adaptive markers): {sparse_clusters}")
+    rescue_summary = {}
+    rescue_parts   = []
+
+    for cl in sparse_clusters:
+        print(f"\n  {'─'*50}")
+        print(f"  Rescuing cluster {cl} ...")
+
+        # ── Strategy A: pairwise DE vs nearest neighbours ─────────────────────
+        neighbours = _nearest_neighbour_clusters(adata_de, cl, n_neighbours=n_neighbours)
+        print(f"  [A] Pairwise DE vs {neighbours} ...")
+        a_df = _pairwise_de(
+            adata_de, cl, neighbours, method=method,
+            log2fc_min=0.5, pct_in_min=0.05, adj_p_max=0.1,
+        )
+        print(f"  [A] → {len(a_df)} genes")
+
+        if len(a_df) >= 5:
+            rescue_parts.append(a_df)
+            rescue_summary[cl] = {'strategy': 'A_pairwise', 'n_genes': len(a_df),
+                                  'neighbours': neighbours}
+            print(f"  ✓ Strategy A succeeded ({len(a_df)} genes)")
+            continue
+
+        # ── Strategy D: tau-like specificity score ────────────────────────────
+        print(f"  [D] Tau specificity score (A gave only {len(a_df)} genes) ...")
+        d_df = _specificity_score(adata_de, cl, top_n=50, pct_in_min=0.1)
+        print(f"  [D] → {len(d_df)} genes")
+
+        if len(a_df) == 0 and len(d_df) == 0:
+            print(f"  ✗ Both strategies failed for cluster {cl} — "
+                  f"this cluster may be genuinely transcriptionally indistinct.")
+            rescue_summary[cl] = {'strategy': 'none', 'n_genes': 0, 'neighbours': neighbours}
+            continue
+
+        # Combine A and D if A gave > 0 genes, otherwise use D alone
+        if len(a_df) > 0 and len(d_df) > 0:
+            combined = pd.concat([a_df, d_df], ignore_index=True)
+            combined = combined.drop_duplicates(subset='gene', keep='first')
+            strategy_label = 'A_pairwise+D_tau'
+        elif len(d_df) > 0:
+            combined = d_df
+            strategy_label = 'D_tau'
+        else:
+            combined = a_df
+            strategy_label = 'A_pairwise'
+
+        rescue_parts.append(combined)
+        rescue_summary[cl] = {'strategy': strategy_label,
+                               'n_genes': len(combined),
+                               'neighbours': neighbours}
+        print(f"  ✓ Rescue: {strategy_label} ({len(combined)} genes)")
+
+    # Tag original adaptive markers
+    marker_df_filtered = marker_df_filtered.copy()
+    marker_df_filtered['rescue_strategy']    = 'adaptive'
+    marker_df_filtered['reference_clusters'] = 'all_others'
+    if 'tau' not in marker_df_filtered.columns:
+        marker_df_filtered['tau'] = np.nan
+
+    if rescue_parts:
+        rescue_df = pd.concat(rescue_parts, ignore_index=True)
+        # Ensure all columns align
+        for col in ['tau', 'reference_clusters']:
+            if col not in rescue_df.columns:
+                rescue_df[col] = np.nan
+
+        merged = pd.concat([marker_df_filtered, rescue_df], ignore_index=True)
+    else:
+        merged = marker_df_filtered
+
+    # Print rescue summary
+    print(f"\n  {'─'*50}")
+    print(f"  RESCUE SUMMARY")
+    for cl, info in rescue_summary.items():
+        print(f"    Cluster {cl}: strategy={info['strategy']}  "
+              f"n_genes={info['n_genes']}  neighbours={info.get('neighbours','')}")
+
+    # Save rescue-specific outputs
+    if rescue_parts:
+        rescue_df_all = pd.concat(rescue_parts, ignore_index=True)
+        rescue_df_all.to_csv(
+            os.path.join(output_dir, f'{sample_name}_markers_rescued.csv'), index=False)
+        print(f"\n  Saved: {sample_name}_markers_rescued.csv")
+
+    return merged, rescue_summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,17 +680,35 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
 
     print(f"\n  Total adaptive markers: {len(marker_df_filtered):,}")
 
-    # Print top 5 per cluster
+    # ── Sparse-cluster rescue (A: pairwise DE, D: tau specificity) ───────────
+    print("\n" + "="*60)
+    print("SPARSE CLUSTER RESCUE")
+    print("="*60)
+    marker_df_filtered, rescue_summary = rescue_sparse_clusters(
+        adata_de, marker_df_filtered, marker_df,
+        output_dir, sample_name, method=method,
+    )
+
+    # Print top 5 per cluster (flag rescued clusters)
     print("\n  Top 5 markers per cluster (by score):")
-    for cl in thresh_df['cluster']:
+    all_clusters_sorted = sorted(
+        marker_df_filtered['cluster'].unique(),
+        key=lambda x: int(x) if str(x).isdigit() else x,
+    )
+    for cl in all_clusters_sorted:
         sub = marker_df_filtered[marker_df_filtered['cluster'] == cl].nlargest(5, 'score')
-        print(f"\n  Cluster {cl}:")
+        strat = sub['rescue_strategy'].iloc[0] if len(sub) > 0 else 'adaptive'
+        tag = f' [rescued: {strat}]' if strat != 'adaptive' else ''
+        print(f"\n  Cluster {cl}{tag}:")
         if len(sub) == 0:
-            print("    (no markers passed filter)")
+            print("    (no markers)")
             continue
         for _, row in sub.iterrows():
+            tau_str  = f"  tau={row['tau']:.2f}" if not pd.isna(row.get('tau', np.nan)) else ''
+            padj_val = row['pval_adj']
+            padj_str = 'n/a' if pd.isna(padj_val) else f"{padj_val:.2e}"
             print(f"    {row['gene']:<22} log2FC={row['log2fc']:>6.2f}  "
-                  f"pct_in={row['pct_in']:.2f}  pval_adj={row['pval_adj']:.2e}")
+                  f"pct_in={row['pct_in']:.2f}  pval_adj={padj_str}{tau_str}")
 
     # ── Save filtered results ─────────────────────────────────────────────────
     marker_df_filtered.to_csv(
@@ -372,9 +718,12 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     thresh_df.to_csv(
         os.path.join(output_dir, f'{sample_name}_marker_thresholds.csv'), index=False)
 
-    # ── Slim export: cluster / FBgn ID / p-value / adj p-value ───────────────
+    # ── Slim export: cluster / FBgn ID / p-value / adj p-value / rescue info ─
+    export_cols = ['cluster', 'gene', 'pval', 'pval_adj', 'rescue_strategy']
+    if 'tau' in marker_df_filtered.columns:
+        export_cols.append('tau')
     marker_export = (
-        marker_df_filtered[['cluster', 'gene', 'pval', 'pval_adj']]
+        marker_df_filtered[export_cols]
         .rename(columns={
             'gene':     'flybase_id',
             'pval':     'p_value',
