@@ -147,8 +147,7 @@ plot_smooth_heatmap <- function(assoc, yhat, out_dir) {
 
     p <- ggplot(df_long, aes(x = pt_point, y = gene, fill = expr)) +
         geom_tile() +
-        scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
-                             midpoint = 0, name = "Scaled\nexpr") +
+        scale_fill_viridis_c(option = "viridis", name = "Scaled\nexpr") +
         scale_x_continuous(expand = c(0, 0), name = "Pseudotime ->") +
         theme_minimal(base_size = 8) +
         theme(axis.text.y  = element_text(
