@@ -1,0 +1,76 @@
+Starting cell cycle annotation for JW18wMel-Ctrl-3_pipseq
+Input file: results/filtered_h5ad/JW18wMel-Ctrl-3_pipseq.h5ad
+2026-03-06 10:39:38.158426: I tensorflow/core/platform/cpu_feature_guard.cc:151] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  SSE4.1 SSE4.2 AVX AVX2 FMA
+To enable them in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Auto tuning number of linear components...
+Performing PCA...
+Training Autoencoder with...
+    0 linear dimensions...
+epoch: 100/500, loss:  0.7958, time elapsed:  22.62s, time left:  90.50s
+epoch: 200/500, loss:  0.7954, time elapsed:  44.96s, time left:  67.44s
+epoch: 300/500, loss:  0.7950, time elapsed:  67.44s, time left:  44.96s
+epoch: 400/500, loss:  0.7948, time elapsed:  89.93s, time left:  22.48s
+epoch: 500/500, loss:  0.7946, time elapsed:  112.32s, time left:  0.00s
+[0.794620156288147]
+[0.7928492399404898, 0.7889727596880055, 0.7856153847936356, 0.7826816508045297, 0.7806781397187545]
+    1 linear dimensions...
+epoch: 100/500, loss:  0.7899, time elapsed:  23.40s, time left:  93.60s
+epoch: 200/500, loss:  0.7898, time elapsed:  46.44s, time left:  69.67s
+epoch: 300/500, loss:  0.7898, time elapsed:  69.50s, time left:  46.33s
+epoch: 400/500, loss:  0.7898, time elapsed:  92.64s, time left:  23.16s
+epoch: 500/500, loss:  0.7897, time elapsed:  115.57s, time left:  0.00s
+[0.794620156288147, 0.7897218465805054]
+[0.7928492399404898, 0.7889727596880055, 0.7856153847936356, 0.7826816508045297, 0.7806781397187545]
+    2 linear dimensions...
+epoch: 100/500, loss:  0.7870, time elapsed:  23.18s, time left:  92.72s
+epoch: 200/500, loss:  0.7866, time elapsed:  45.90s, time left:  68.86s
+epoch: 300/500, loss:  0.7867, time elapsed:  68.67s, time left:  45.78s
+epoch: 400/500, loss:  0.7866, time elapsed:  91.47s, time left:  22.87s
+epoch: 500/500, loss:  0.7864, time elapsed:  114.10s, time left:  0.00s
+[0.794620156288147, 0.7897218465805054, 0.786392867565155]
+[0.7928492399404898, 0.7889727596880055, 0.7856153847936356, 0.7826816508045297, 0.7806781397187545]
+Found! Use 1 linear components...
+Early stop disabled, continue to check all cases...
+    3 linear dimensions...
+epoch: 100/500, loss:  0.7848, time elapsed:  22.99s, time left:  91.96s
+epoch: 200/500, loss:  0.7847, time elapsed:  45.48s, time left:  68.22s
+epoch: 300/500, loss:  0.7844, time elapsed:  68.00s, time left:  45.33s
+epoch: 400/500, loss:  0.7844, time elapsed:  90.58s, time left:  22.65s
+epoch: 500/500, loss:  0.7845, time elapsed:  113.22s, time left:  0.00s
+[0.794620156288147, 0.7897218465805054, 0.786392867565155, 0.7845014333724976]
+[0.7928492399404898, 0.7889727596880055, 0.7856153847936356, 0.7826816508045297, 0.7806781397187545]
+epoch: 100/800, loss:  0.7892, time elapsed:  23.06s, time left:  161.39s
+epoch: 200/800, loss:  0.7891, time elapsed:  45.65s, time left:  136.94s
+epoch: 300/800, loss:  0.7889, time elapsed:  68.36s, time left:  113.93s
+epoch: 400/800, loss:  0.7889, time elapsed:  91.10s, time left:  91.10s
+epoch: 500/800, loss:  0.7889, time elapsed:  113.66s, time left:  68.19s
+epoch: 600/800, loss:  0.7889, time elapsed:  136.27s, time left:  45.42s
+epoch: 700/800, loss:  0.7889, time elapsed:  158.86s, time left:  22.69s
+epoch: 800/800, loss:  0.7889, time elapsed:  181.52s, time left:  0.00s
+Pseudotime shape: (2045, 1)
+Pseudotime range: -4.288 to 5.330
+Step 1: Converting to circular coordinates...
+Step 2: Direct angle-based assignment...
+Step 3: Light smoothing at boundaries...
+Boundary smoothing changed 1 assignments
+Step 4: Calculate confidence scores...
+Final phase distribution:
+  g0/g1: 906 cells (44.3%)
+  s: 834 cells (40.8%)
+  g2/m: 305 cells (14.9%)
+Unassigned cells: 0 (should be 0)
+
+Final cell cycle stage distribution:
+g0/g1: 906 cells (44.3%)
+g2/m: 305 cells (14.9%)
+s: 834 cells (40.8%)
+
+Added to adata.obs:
+cyclum_stage: 2045 cells
+cyclum_pseudotime: 2045 cells
+cyclum_confidence: 2045 cells
+
+Analysis complete! Results saved to: results/annotated_h5ad/JW18wMel-Ctrl-3_pipseq.h5ad
+Plots saved as: results/annotated_h5ad/JW18wMel-Ctrl-3_pipseq_cyclum_*.pdf
+Compressing filtered h5ad file
+Cell cycle annotation complete for JW18wMel-Ctrl-3_pipseq

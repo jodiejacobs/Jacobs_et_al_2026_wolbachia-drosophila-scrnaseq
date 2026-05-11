@@ -1,0 +1,19 @@
+Starting 10x processing for JW18DOX-Ctrl-2_10x
+Input files: /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-2_S68_L006_R1_001.fastq.gz, /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-2_S68_L006_R2_001.fastq.gz
+Output directory: results/10x/JW18DOX-Ctrl-2_10x
+[2025-09-22 14:41:43,319]    INFO [count] Using index /private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx to generate BUS file to results/10x/JW18DOX-Ctrl-2_10x from
+[2025-09-22 14:41:43,319]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-2_S68_L006_R1_001.fastq.gz
+[2025-09-22 14:41:43,319]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/10x_cells/Jacobs_10525_241105A9/JW18DOX-Ctrl-2_S68_L006_R2_001.fastq.gz
+[2025-09-22 14:49:39,008]    INFO [count] Sorting BUS file results/10x/JW18DOX-Ctrl-2_10x/output.bus to results/10x/JW18DOX-Ctrl-2_10x/tmp/output.s.bus
+[2025-09-22 14:50:13,862]    INFO [count] On-list not provided
+[2025-09-22 14:50:13,863]    INFO [count] Copying pre-packaged 10XV3 on-list to results/10x/JW18DOX-Ctrl-2_10x
+[2025-09-22 14:50:14,338]    INFO [count] Inspecting BUS file results/10x/JW18DOX-Ctrl-2_10x/tmp/output.s.bus
+[2025-09-22 14:50:34,767]    INFO [count] Correcting BUS records in results/10x/JW18DOX-Ctrl-2_10x/tmp/output.s.bus to results/10x/JW18DOX-Ctrl-2_10x/tmp/output.s.c.bus with on-list results/10x/JW18DOX-Ctrl-2_10x/10x_version3_whitelist.txt
+[2025-09-22 14:50:51,792]    INFO [count] Sorting BUS file results/10x/JW18DOX-Ctrl-2_10x/tmp/output.s.c.bus to results/10x/JW18DOX-Ctrl-2_10x/output.unfiltered.bus
+[2025-09-22 14:51:12,427]    INFO [count] Generating count matrix results/10x/JW18DOX-Ctrl-2_10x/counts_unfiltered/cells_x_genes from BUS file results/10x/JW18DOX-Ctrl-2_10x/output.unfiltered.bus
+[2025-09-22 14:51:28,679]    INFO [count] Writing gene names to file results/10x/JW18DOX-Ctrl-2_10x/counts_unfiltered/cells_x_genes.genes.names.txt
+[2025-09-22 14:51:28,763] WARNING [count] 7519 gene IDs do not have corresponding valid gene names. These genes will use their gene IDs instead.
+[2025-09-22 14:51:28,768]    INFO [count] Reading matrix results/10x/JW18DOX-Ctrl-2_10x/counts_unfiltered/cells_x_genes.mtx
+[2025-09-22 14:51:29,782]    INFO [count] Writing matrix to h5ad results/10x/JW18DOX-Ctrl-2_10x/counts_unfiltered/adata.h5ad
+Moving h5ad file to final location
+10x processing complete for JW18DOX-Ctrl-2_10x

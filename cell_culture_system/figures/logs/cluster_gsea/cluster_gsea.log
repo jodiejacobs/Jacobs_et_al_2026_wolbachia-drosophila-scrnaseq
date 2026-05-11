@@ -1,0 +1,36 @@
+Starting cluster GSEA analysis
+======================================================================
+CLUSTER GSEA ANALYSIS
+======================================================================
+
+1. Loading data...
+   Loaded: 65746 cells × 2000 genes
+  ✓ Detected cluster column: 'leiden'
+   Found 5 clusters
+
+2. Loading gene mapping...
+   Loaded 17870 gene mappings
+
+3. Loading gene sets...
+   Loaded 3774 gene sets
+
+4. Processing clusters...
+
+   Cluster 0
+   WARNING: Only 0 genes, skipping
+
+   Cluster 1
+   WARNING: Only 0 genes, skipping
+
+   Cluster 2
+   WARNING: Only 0 genes, skipping
+
+   Cluster 3
+   WARNING: Only 0 genes, skipping
+
+   Cluster 4
+   WARNING: Only 0 genes, skipping
+
+✓ Analysis complete!
+Results in: results/cluster_gsea
+Cluster GSEA complete

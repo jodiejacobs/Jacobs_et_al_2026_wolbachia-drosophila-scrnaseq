@@ -1,0 +1,6 @@
+Starting filtering for JW18DOX-SV-2_10x
+Input file: results/h5ad_results/JW18DOX-SV-2_10x.h5ad
+Error.  nthreads cannot be larger than environment variable "NUMEXPR_MAX_THREADS" (64)/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scrublet/helper_functions.py:323: RuntimeWarning: divide by zero encountered in divide
+  w.setdiag(float(target_total) / tots_use)
+/private/home/jomojaco/miniforge3/envs/scanpy/lib/python3.12/site-packages/scrublet/helper_functions.py:254: RuntimeWarning: invalid value encountered in sqrt
+  CV_input = np.sqrt(b);

@@ -1,0 +1,28 @@
+Plotting BLAST results for JW18wMel-SV-D56_pipseq
+Processing GQX67_05945.blast.summary...
+Processing 1 files using 192 threads...
+Processing GQX67_05945...
+Filtered GQX67_05945: 1308/3094 hits ≥95% identity
+Creating combined 3x2 bar plot layout...
+Combined bar plots saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/combined_16S_genus_bar_plots_95pct.svg
+
+Summary statistics saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/blast_summary_stats.csv
+
+Overview:
+  GQX67_05945: 8,181,377 reads, 1308 genera, top: NZ_CP046925.1 (23.3%, 100.0% ID)
+
+All plots saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/
+Processing GQX67_05945.blast.summary...
+Processing 1 files using 192 threads...
+Processing GQX67_05945...
+Filtered GQX67_05945: 1628/3670 hits ≥95% identity
+Creating combined 3x2 bar plot layout...
+Combined bar plots saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/combined_16S_genus_bar_plots_95pct.svg
+
+Summary statistics saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/blast_summary_stats.csv
+
+Overview:
+  GQX67_05945: 12,782,811 reads, 1628 genera, top: NZ_CP046925.1 (24.0%, 100.0% ID)
+
+All plots saved to results/rRNA_analysis/plots/blast_JW18wMel-SV-D56_pipseq/
+BLAST plotting complete

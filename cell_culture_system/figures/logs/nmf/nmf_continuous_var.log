@@ -1,0 +1,32 @@
+Starting NMF continuous variable analysis
+======================================================================
+NMF CONTINUOUS VARIABLE ANALYSIS
+======================================================================
+
+1. Loading data...
+
+   Using: 'wolbachia_titer'
+   Range: 0.00 - 0.50
+   Found 15 programs
+
+2. Computing correlations...
+
+3. Significant correlations (FDR < 0.05):
+   Program_12: ↑ r=0.693, FDR=0.00e+00
+   Program_0: ↑ r=0.559, FDR=0.00e+00
+   Program_9: ↑ r=0.545, FDR=0.00e+00
+   Program_4: ↑ r=0.538, FDR=0.00e+00
+   Program_2: ↓ r=-0.351, FDR=0.00e+00
+   Program_7: ↑ r=0.286, FDR=0.00e+00
+   Program_14: ↓ r=-0.256, FDR=0.00e+00
+   Program_1: ↑ r=0.148, FDR=0.00e+00
+   Program_8: ↑ r=0.138, FDR=0.00e+00
+   Program_3: ↑ r=0.108, FDR=1.07e-229
+   Program_11: ↑ r=0.058, FDR=1.89e-66
+   Program_6: ↑ r=0.053, FDR=3.12e-56
+   Program_10: ↑ r=0.033, FDR=5.82e-23
+   Program_5: ↓ r=-0.018, FDR=3.66e-08
+
+✓ Analysis complete!
+Results in: results/nmf_continuous_var
+NMF continuous variable analysis complete

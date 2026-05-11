@@ -1,0 +1,19 @@
+Starting PIPseq processing for JW18wMel-Ctrl-3_pipseq
+Input files: /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-Ctrl-3_S2_L003_R1_001.fastq.gz, /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-Ctrl-3_S2_L003_R2_001.fastq.gz
+Output directory: results/pipseq/JW18wMel-Ctrl-3_pipseq
+[2025-12-02 14:31:28,463]    INFO [count] Using index ../reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx to generate BUS file to results/pipseq/JW18wMel-Ctrl-3_pipseq from
+[2025-12-02 14:31:28,464]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-Ctrl-3_S2_L003_R1_001.fastq.gz
+[2025-12-02 14:31:28,464]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-Ctrl-3_S2_L003_R2_001.fastq.gz
+[2025-12-02 14:34:21,341]    INFO [count] Sorting BUS file results/pipseq/JW18wMel-Ctrl-3_pipseq/output.bus to results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.bus
+[2025-12-02 14:34:24,750]    INFO [count] On-list not provided
+[2025-12-02 14:34:24,750]    INFO [count] Generating on-list results/pipseq/JW18wMel-Ctrl-3_pipseq/whitelist.txt from BUS file results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.bus
+[2025-12-02 14:34:25,851]    INFO [count] Inspecting BUS file results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.bus
+[2025-12-02 14:34:27,053]    INFO [count] Correcting BUS records in results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.bus to results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.c.bus with on-list results/pipseq/JW18wMel-Ctrl-3_pipseq/whitelist.txt
+[2025-12-02 14:34:28,956]    INFO [count] Sorting BUS file results/pipseq/JW18wMel-Ctrl-3_pipseq/tmp/output.s.c.bus to results/pipseq/JW18wMel-Ctrl-3_pipseq/output.unfiltered.bus
+[2025-12-02 14:34:30,959]    INFO [count] Generating count matrix results/pipseq/JW18wMel-Ctrl-3_pipseq/counts_unfiltered/cells_x_genes from BUS file results/pipseq/JW18wMel-Ctrl-3_pipseq/output.unfiltered.bus
+[2025-12-02 14:35:11,307]    INFO [count] Writing gene names to file results/pipseq/JW18wMel-Ctrl-3_pipseq/counts_unfiltered/cells_x_genes.genes.names.txt
+[2025-12-02 14:35:11,391] WARNING [count] 7519 gene IDs do not have corresponding valid gene names. These genes will use their gene IDs instead.
+[2025-12-02 14:35:11,398]    INFO [count] Reading matrix results/pipseq/JW18wMel-Ctrl-3_pipseq/counts_unfiltered/cells_x_genes.mtx
+[2025-12-02 14:35:11,489]    INFO [count] Writing matrix to h5ad results/pipseq/JW18wMel-Ctrl-3_pipseq/counts_unfiltered/adata.h5ad
+Moving h5ad file to final location
+PIPseq processing complete for JW18wMel-Ctrl-3_pipseq

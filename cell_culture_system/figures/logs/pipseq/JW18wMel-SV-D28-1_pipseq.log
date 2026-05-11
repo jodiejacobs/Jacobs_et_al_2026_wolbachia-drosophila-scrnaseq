@@ -1,0 +1,5 @@
+Starting PIPseq processing for JW18wMel-SV-D28-1_pipseq
+Input files: /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-SV-D28-1_S5_L003_R1_001.fastq.gz, /private/groups/russelllab/jodie/sequencing_data/scRNAseq/pipseq_pilot_2/Jacobs_11374_251121B9/JW18wMel-SV-D28-1_S5_L003_R2_001.fastq.gz
+Output directory: results/pipseq/JW18wMel-SV-D28-1_pipseq
+usage: kb [-h] [--list] <CMD> ...
+kb: error: Temporary directory `results/pipseq/JW18wMel-SV-D28-1_pipseq/tmp` exists! Is another instance running? Either remove the existing directory or use `--tmp` to specify a different temporary directory.

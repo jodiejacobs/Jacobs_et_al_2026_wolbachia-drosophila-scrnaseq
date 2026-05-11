@@ -1,0 +1,4 @@
+Starting cell cycle annotation for JW18wMel-SV-D56-2_pipseq
+Input file: results/filtered_h5ad/JW18wMel-SV-D56-2_pipseq.h5ad
+2026-03-06 10:52:18.125625: I tensorflow/core/platform/cpu_feature_guard.cc:151] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  SSE4.1 SSE4.2 AVX AVX2 FMA
+To enable them in other operations, rebuild TensorFlow with the appropriate compiler flags.

@@ -1,0 +1,74 @@
+Starting cell cycle annotation for Uninfected samples
+Input file: results/integrated/integrated_uninfected.h5ad
+2026-02-26 14:05:07.234521: I tensorflow/core/platform/cpu_feature_guard.cc:151] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  SSE4.1 SSE4.2 AVX AVX2 AVX512F FMA
+To enable them in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Auto tuning number of linear components...
+Performing PCA...
+Training Autoencoder with...
+    0 linear dimensions...
+epoch: 100/500, loss:  0.9292, time elapsed:  86.39s, time left:  345.55s
+epoch: 200/500, loss:  0.9293, time elapsed:  173.56s, time left:  260.34s
+epoch: 300/500, loss:  0.9286, time elapsed:  258.78s, time left:  172.52s
+epoch: 400/500, loss:  0.9279, time elapsed:  344.60s, time left:  86.15s
+epoch: 500/500, loss:  0.9273, time elapsed:  433.72s, time left:  0.00s
+[0.9273332953453064]
+[0.9394124132769434, 0.9025303536515292, 0.8845273092273035, 0.8693096574139081, 0.8563557176396914]
+    1 linear dimensions...
+epoch: 100/500, loss:  0.8959, time elapsed:  89.27s, time left:  357.06s
+epoch: 200/500, loss:  0.8960, time elapsed:  180.71s, time left:  271.07s
+epoch: 300/500, loss:  0.8960, time elapsed:  270.68s, time left:  180.46s
+epoch: 400/500, loss:  0.8958, time elapsed:  360.75s, time left:  90.19s
+epoch: 500/500, loss:  0.8959, time elapsed:  453.70s, time left:  0.00s
+[0.9273332953453064, 0.8958773612976074]
+[0.9394124132769434, 0.9025303536515292, 0.8845273092273035, 0.8693096574139081, 0.8563557176396914]
+Found! Use 0 linear components...
+Early stop disabled, continue to check all cases...
+    2 linear dimensions...
+epoch: 100/500, loss:  0.8769, time elapsed:  91.33s, time left:  365.32s
+epoch: 200/500, loss:  0.8770, time elapsed:  182.41s, time left:  273.62s
+epoch: 300/500, loss:  0.8769, time elapsed:  274.52s, time left:  183.01s
+epoch: 400/500, loss:  0.8769, time elapsed:  364.41s, time left:  91.10s
+epoch: 500/500, loss:  0.8769, time elapsed:  457.61s, time left:  0.00s
+[0.9273332953453064, 0.8958773612976074, 0.8769108653068542]
+[0.9394124132769434, 0.9025303536515292, 0.8845273092273035, 0.8693096574139081, 0.8563557176396914]
+    3 linear dimensions...
+epoch: 100/500, loss:  0.8627, time elapsed:  89.63s, time left:  358.53s
+epoch: 200/500, loss:  0.8626, time elapsed:  178.75s, time left:  268.12s
+epoch: 300/500, loss:  0.8625, time elapsed:  271.43s, time left:  180.95s
+epoch: 400/500, loss:  0.8625, time elapsed:  360.05s, time left:  90.01s
+epoch: 500/500, loss:  0.8624, time elapsed:  450.43s, time left:  0.00s
+[0.9273332953453064, 0.8958773612976074, 0.8769108653068542, 0.8624444603919983]
+[0.9394124132769434, 0.9025303536515292, 0.8845273092273035, 0.8693096574139081, 0.8563557176396914]
+epoch: 100/800, loss:  0.9280, time elapsed:  90.29s, time left:  632.02s
+epoch: 200/800, loss:  0.9278, time elapsed:  177.29s, time left:  531.87s
+epoch: 300/800, loss:  0.9277, time elapsed:  265.47s, time left:  442.46s
+epoch: 400/800, loss:  0.9276, time elapsed:  350.19s, time left:  350.19s
+epoch: 500/800, loss:  0.9277, time elapsed:  435.56s, time left:  261.34s
+epoch: 600/800, loss:  0.9275, time elapsed:  523.63s, time left:  174.54s
+epoch: 700/800, loss:  0.9276, time elapsed:  607.61s, time left:  86.80s
+epoch: 800/800, loss:  0.9275, time elapsed:  691.87s, time left:  0.00s
+Pseudotime shape: (11431, 1)
+Pseudotime range: -2.882 to 3.662
+Step 1: Converting to circular coordinates...
+Step 2: Direct angle-based assignment...
+Step 3: Light smoothing at boundaries...
+Boundary smoothing changed 2 assignments
+Step 4: Calculate confidence scores...
+Final phase distribution:
+  g0/g1: 3695 cells (32.3%)
+  s: 5233 cells (45.8%)
+  g2/m: 2503 cells (21.9%)
+Unassigned cells: 0 (should be 0)
+
+Final cell cycle stage distribution:
+g0/g1: 3695 cells (32.3%)
+g2/m: 2503 cells (21.9%)
+s: 5233 cells (45.8%)
+
+Added to adata.obs:
+cyclum_stage: 11431 cells
+cyclum_pseudotime: 11431 cells
+cyclum_confidence: 11431 cells
+
+Analysis complete! Results saved to: results/integrated/integrated_uninfected_with_cellcycle.h5ad
+Plots saved as: results/integrated/integrated_uninfected_with_cellcycle_cyclum_*.pdf

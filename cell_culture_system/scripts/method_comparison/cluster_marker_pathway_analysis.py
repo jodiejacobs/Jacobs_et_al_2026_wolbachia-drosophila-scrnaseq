@@ -4,12 +4,12 @@ Uses FlyEnrichr API for automated pathway analysis with FlyBase annotations
 
 Key features:
   - DE run on adata.X (log-normalised counts), NOT scaled or raw
-  - Per-cluster adaptive marker thresholds (targets 30-150 markers per cluster)
   - Background gene set passed to FlyEnrichr (all detected genes in dataset)
-  - Significance filter (adj_p < 0.1) applied before combined_score sorting
-  - mt/ribo/cell_cycle/bacterial/TE genes excluded from enrichment input
+  - Top 50 upregulated markers (log2fc > 0) per cluster passed to FlyEnrichr
+  - Bacterial/TE genes excluded from DE and enrichment input
   - Dot plot + network plot visualisation for enrichment results
   - Scanpy marker gene plots use FBgn IDs directly (symbol conversion for FlyEnrichr only)
+  - Workaround for scanpy 1.10.x rankby_abs bug: re-ranks by signed score after extraction
 '''
 
 import scanpy as sc
@@ -165,6 +165,7 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
     if 'X_umap' in adata.obsm:
         sc.pl.umap(adata, color=['leiden', 'n_counts', 'n_genes'],
                    save=f'_{sample_name}_transcriptional_activity.pdf',
+                   show=False,
                    cmap='viridis', ncols=3)
 
     return dict(h_counts=h_counts, p_counts=p_counts,
@@ -173,13 +174,12 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Marker genes — per-cluster adaptive thresholds
+# Marker genes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
-                      log2fc_min=0.25, pct_min=0.05, pct_ratio_min=1.0):
+def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon'):
     """
-    Find cluster marker genes using per-cluster adaptive thresholds.
+    Find cluster marker genes.
 
     DE is run on adata.X (log-normalised, NOT scaled). use_raw=False.
 
@@ -188,18 +188,19 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
       - FBtr transcripts (var_names starting with 'FBtr')
       - Transposable elements (FBti*, *_transposable_element)
 
-    Adaptive thresholds:
-      Progressively stricter filters are applied per cluster, targeting
-      30-150 markers. This prevents large/distinct clusters from flooding
-      the enrichment analysis with thousands of generic markers, while
-      preserving sensitivity for small/similar clusters.
+    Workaround for scanpy 1.10.x rankby_abs bug:
+      After extraction, genes are re-ranked by signed score so that
+      upregulated genes sort to the top per cluster.
     """
     print("\n" + "="*60)
     print("DIFFERENTIAL GENE EXPRESSION")
     print("="*60)
     print(f"  Method: {method}")
     print(f"  Using adata.X (log-normalised, use_raw=False)")
-    print(f"  Adaptive thresholds: targeting 30-150 markers per cluster")
+    print(f"  Scanpy version: {sc.__version__} — applying signed score re-rank workaround")
+
+    sc.settings.figdir = output_dir
+    os.makedirs(output_dir, exist_ok=True)
 
     # ── Gene filtering ────────────────────────────────────────────────────────
     var_series = pd.Series(adata.var_names)
@@ -209,14 +210,10 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
     te_mask   = _is_te(var_series).values
     exclude   = bact_mask | fbtr_mask | te_mask
 
-    n_bact = bact_mask.sum()
-    n_fbtr = fbtr_mask.sum()
-    n_te   = te_mask.sum()
-
     adata_de = adata[:, ~exclude].copy()
-    print(f"  Removed {n_bact:,} bacterial genes (G*), "
-          f"{n_fbtr:,} FBtr transcripts, "
-          f"{n_te:,} transposable elements")
+    print(f"  Removed {bact_mask.sum():,} bacterial genes (G*), "
+          f"{fbtr_mask.sum():,} FBtr transcripts, "
+          f"{te_mask.sum():,} transposable elements")
     print(f"  Genes remaining for DE: {adata_de.n_vars:,}")
 
     # Filter to genes expressed in >= 3 cells
@@ -240,44 +237,57 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
         use_raw=False,
         key_added='rank_genes_groups',
         tie_correct=True,
-        rankby_abs=False,
         pts=True,
     )
 
-    # Store results back on original adata for scanpy plots
+    # Store results back on original adata
     adata.uns['rank_genes_groups'] = adata_de.uns['rank_genes_groups']
 
-    # ── Scanpy marker plots (FBgn IDs, viridis) ───────────────────────────────
+    # ── Scanpy marker plots ───────────────────────────────────────────────────
     print("\n  Saving scanpy marker gene plots ...")
+    print(f"  Plots will be saved to: {output_dir}/")
+
     sc.pl.rank_genes_groups(
-        adata_de, n_genes=25,
+        adata_de,
+        n_genes=25,
         save=f'_{sample_name}_ranked_genes.pdf',
         key='rank_genes_groups',
+        show=False,
     )
-    try:
-        sc.pl.rank_genes_groups_heatmap(
-            adata_de, n_genes=10,
-            save=f'_{sample_name}_top10_heatmap.pdf',
-            show_gene_labels=True,
-            cmap='viridis',
-            key='rank_genes_groups',
-        )
-        sc.pl.rank_genes_groups_dotplot(
-            adata_de, n_genes=5,
-            save=f'_{sample_name}_top5_dotplot.pdf',
-            key='rank_genes_groups',
-            groupby='leiden',
-            color_map='viridis',
-        )
-        sc.pl.rank_genes_groups_matrixplot(
-            adata_de, n_genes=5,
-            save=f'_{sample_name}_top5_matrixplot.pdf',
-            key='rank_genes_groups',
-            groupby='leiden',
-            cmap='viridis',
-        )
-    except Exception as e:
-        print(f"  WARNING: Some scanpy marker plots failed: {e}")
+    print(f"  Saved: ranked_genes_{sample_name}.pdf")
+
+    sc.pl.rank_genes_groups_heatmap(
+        adata_de,
+        n_genes=10,
+        save=f'_{sample_name}_top10_heatmap.pdf',
+        show_gene_labels=True,
+        cmap='viridis',
+        key='rank_genes_groups',
+        show=False,
+    )
+    print(f"  Saved: top10_heatmap_{sample_name}.pdf")
+
+    sc.pl.rank_genes_groups_dotplot(
+        adata_de,
+        n_genes=5,
+        save=f'_{sample_name}_top5_dotplot.pdf',
+        key='rank_genes_groups',
+        groupby='leiden',
+        color_map='viridis',
+        show=False,
+    )
+    print(f"  Saved: top5_dotplot_{sample_name}.pdf")
+
+    sc.pl.rank_genes_groups_matrixplot(
+        adata_de,
+        n_genes=5,
+        save=f'_{sample_name}_top5_matrixplot.pdf',
+        key='rank_genes_groups',
+        groupby='leiden',
+        cmap='viridis',
+        show=False,
+    )
+    print(f"  Saved: top5_matrixplot_{sample_name}.pdf")
 
     # ── Extract full DE results ───────────────────────────────────────────────
     result = adata_de.uns['rank_genes_groups']
@@ -304,99 +314,45 @@ def find_marker_genes(adata, output_dir, sample_name, method='wilcoxon',
             ))
 
     marker_df = pd.DataFrame(rows)
-    marker_df['pct_ratio'] = marker_df['pct_in'] / (marker_df['pct_rest'] + 1e-9)
-    print(f"  Raw DE results: {len(marker_df):,} gene×cluster entries")
 
-    # Save all unfiltered DE results
-    marker_df.to_csv(
-        os.path.join(output_dir, f'{sample_name}_markers_all.csv'), index=False)
+    # ── Workaround for scanpy 1.10.x rankby_abs bug ───────────────────────────
+    # Re-rank by signed score so upregulated genes sort to top per cluster
+    marker_df['signed_score'] = np.where(
+        marker_df['log2fc'] > 0,
+         marker_df['score'],
+        -marker_df['score'],
+    )
+    marker_df = marker_df.sort_values(
+        ['cluster', 'signed_score'], ascending=[True, False]
+    ).drop(columns='signed_score')
 
-    # ── Per-cluster adaptive thresholds ──────────────────────────────────────
-    TARGET_MIN = 30
-    TARGET_MAX = 150
-    THRESHOLDS = [
-        (0.25, 0.03, 1.0),
-        (0.50, 0.05, 1.2),
-        (0.75, 0.08, 1.3),
-        (1.00, 0.10, 1.5),
-        (1.25, 0.12, 1.75),
-        (1.50, 0.15, 2.0),
-        (2.00, 0.20, 2.5),
-    ]
+    print(f"\n  Raw DE results: {len(marker_df):,} gene×cluster entries")
 
-    adaptive_parts = []
-    threshold_log  = []
-
+    # Print top 5 upregulated per cluster
+    print("\n  Top 5 upregulated markers per cluster (by signed score):")
     for cl in sorted(marker_df['cluster'].unique(),
                      key=lambda x: int(x) if str(x).isdigit() else x):
-        cm = marker_df[marker_df['cluster'] == cl].copy()
-        best_filt   = None
-        best_thresh = THRESHOLDS[0]
-
-        for lfc, pct_min_t, pct_rat in THRESHOLDS:
-            filt = cm[
-                (cm['log2fc']    >= lfc) &
-                (cm['pval_adj']   < 0.1) &
-                (cm['pct_in']    >= pct_min_t) &
-                (cm['pct_ratio'] >= pct_rat)
-            ]
-            if best_filt is None:
-                best_filt   = filt
-                best_thresh = (lfc, pct_min_t, pct_rat)
-            if TARGET_MIN <= len(filt) <= TARGET_MAX:
-                best_filt   = filt
-                best_thresh = (lfc, pct_min_t, pct_rat)
-                break
-            if len(filt) >= TARGET_MIN:
-                best_filt   = filt
-                best_thresh = (lfc, pct_min_t, pct_rat)
-
-        if len(best_filt) > TARGET_MAX:
-            best_filt = best_filt.nlargest(TARGET_MAX, 'score')
-
-        adaptive_parts.append(best_filt)
-        threshold_log.append({
-            'cluster':       cl,
-            'log2fc_thresh': best_thresh[0],
-            'pct_thresh':    best_thresh[1],
-            'ratio_thresh':  best_thresh[2],
-            'n_markers':     len(best_filt),
-        })
-
-    marker_df_filtered = pd.concat(adaptive_parts, ignore_index=True)
-    thresh_df = pd.DataFrame(threshold_log)
-
-    print(f"\n  Adaptive thresholds per cluster:")
-    print(f"  {'Cluster':>10} {'log2fc':>8} {'pct':>6} {'ratio':>7} {'n_markers':>10}")
-    for _, row in thresh_df.iterrows():
-        flag = ' ✓' if TARGET_MIN <= row.n_markers <= TARGET_MAX else ' ⚠'
-        print(f"  {int(row.cluster):>10} {row.log2fc_thresh:>8.2f} "
-              f"{row.pct_thresh:>6.2f} {row.ratio_thresh:>7.2f} "
-              f"{int(row.n_markers):>10}{flag}")
-
-    print(f"\n  Total adaptive markers: {len(marker_df_filtered):,}")
-
-    # Print top 5 per cluster
-    print("\n  Top 5 markers per cluster (by score):")
-    for cl in thresh_df['cluster']:
-        sub = marker_df_filtered[marker_df_filtered['cluster'] == cl].nlargest(5, 'score')
+        sub = marker_df[
+            (marker_df['cluster'] == cl) &
+            (marker_df['log2fc']   > 0)
+        ].head(5)
         print(f"\n  Cluster {cl}:")
         if len(sub) == 0:
-            print("    (no markers passed filter)")
+            print("    (no upregulated markers found)")
             continue
         for _, row in sub.iterrows():
             print(f"    {row['gene']:<22} log2FC={row['log2fc']:>6.2f}  "
                   f"pct_in={row['pct_in']:.2f}  pval_adj={row['pval_adj']:.2e}")
 
-    # Save filtered results
-    marker_df_filtered.to_csv(
-        os.path.join(output_dir, f'{sample_name}_markers_filtered.csv'), index=False)
-    marker_df_filtered.groupby('cluster').head(50).to_csv(
+    # Save results
+    marker_df.to_csv(
+        os.path.join(output_dir, f'{sample_name}_markers_all.csv'), index=False)
+    marker_df[marker_df['log2fc'] > 0].groupby('cluster').head(50).to_csv(
         os.path.join(output_dir, f'{sample_name}_markers_top50.csv'), index=False)
-    thresh_df.to_csv(
-        os.path.join(output_dir, f'{sample_name}_marker_thresholds.csv'), index=False)
+    print(f"\n  Saved: {sample_name}_markers_all.csv")
+    print(f"  Saved: {sample_name}_markers_top50.csv")
 
-    return marker_df_filtered
+    return marker_df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -485,15 +441,6 @@ def build_background(adata, fbgn_to_symbol, min_cells=3):
 def plot_enrichment_network(sig_df, output_dir, sample_name,
                             jaccard_thresh=0.3, top_n_per_cluster=15,
                             min_adj_p=0.1):
-    """
-    Enrichment map network plot for GO results.
-
-    Nodes  : GO terms (top N significant per cluster)
-    Edges  : Jaccard similarity of gene sets >= jaccard_thresh
-    Color  : cluster with strongest significance for that term
-    Size   : -log10(adj p-value)
-    Layout : spring layout (Fruchterman-Reingold)
-    """
     if not NETWORKX_AVAILABLE:
         print("  ⚠️  networkx not installed — skipping network plot")
         print("     mamba install -c conda-forge networkx")
@@ -520,13 +467,11 @@ def plot_enrichment_network(sig_df, output_dir, sample_name,
 
     go_sig['gene_set'] = go_sig['genes'].apply(_parse_genes)
 
-    # Top N terms per cluster by significance
     top_terms = (go_sig.sort_values('adj_p_value')
                        .groupby('cluster')
                        .head(top_n_per_cluster)['term'].unique())
     go_plot = go_sig[go_sig['term'].isin(top_terms)].copy()
 
-    # One row per term: use cluster where it is most significant
     term_best = (go_plot.sort_values('adj_p_value')
                         .drop_duplicates('term')
                         [['term', 'term_short', 'neg_log10p', 'cluster', 'gene_set']]
@@ -538,7 +483,6 @@ def plot_enrichment_network(sig_df, output_dir, sample_name,
         print("  Too few terms — skipping network")
         return
 
-    # Build graph
     G = nx.Graph()
     for term in terms:
         row = term_best.loc[term]
@@ -563,13 +507,11 @@ def plot_enrichment_network(sig_df, output_dir, sample_name,
 
     print(f"  Edges (Jaccard ≥ {jaccard_thresh}): {n_edges}")
 
-    # Remove isolates if enough connected nodes remain
     connected = [n for n in G.nodes if G.degree(n) > 0]
     if len(connected) >= 5:
         G.remove_nodes_from([n for n in list(G.nodes) if G.degree(n) == 0])
         print(f"  Nodes after removing isolates: {G.number_of_nodes()}")
 
-    # Relax threshold if too sparse
     if G.number_of_nodes() < 3:
         print("  Too few connected nodes — lowering Jaccard threshold to 0.1")
         jaccard_thresh = 0.1
@@ -672,7 +614,6 @@ def plot_enrichment_network(sig_df, output_dir, sample_name,
     plt.close()
     print(f"    Saved: GO_network_per_cluster.pdf")
 
-    # ── Save graph for external use ───────────────────────────────────────────
     nx.write_graphml(G, f"{output_dir}/{sample_name}_GO_enrichment_network.graphml")
     print(f"    Saved: GO_enrichment_network.graphml")
 
@@ -823,9 +764,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
 
     libraries = [
         'GO_Biological_Process_2018',
-        'GO_Molecular_Function_2018',
-        'GO_Cellular_Component_2018',
-        'KEGG_2019',
         'WikiPathways_2018',
     ]
 
@@ -835,14 +773,22 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
 
     for cluster in clusters:
         print(f"\n{'='*50}\n  Cluster {cluster}\n{'='*50}")
-        cmarkers = (marker_df[marker_df['cluster'] == cluster]
-                    .sort_values('score', ascending=False))
+
+        # Top 50 upregulated markers per cluster
+        cmarkers = (
+            marker_df[
+                (marker_df['cluster'] == cluster) &
+                (marker_df['log2fc']   > 0)
+            ]
+            .head(50)
+        )
+
+        print(f"  Top 50 upregulated markers (log2fc>0): {len(cmarkers)}")
 
         if len(cmarkers) < 5:
-            print(f"  Skipping: only {len(cmarkers)} markers (need ≥ 5)")
+            print(f"  Skipping: too few markers (need ≥ 5)")
             continue
 
-        print(f"  Using {len(cmarkers)} markers for enrichment")
         genes_fbgn = cmarkers['gene'].tolist()
         genes_symbols, n_unmapped = symbols_from_fbgn(genes_fbgn, fbgn_to_symbol)
         print(f"  {len(genes_fbgn)} FBgn IDs → {len(genes_symbols)} symbols "
@@ -890,7 +836,6 @@ def enrichment_analysis_per_cluster(adata, marker_df, fbgn_to_symbol,
                 f"{output_dir}/{sample_name}_GO_combined_top20_per_cluster.csv", index=False)
             print(f"  Significant GO terms: {len(go_sig)}")
 
-    # Summary to stdout
     print(f"\n{'='*60}\nENRICHMENT SUMMARY\n{'='*60}")
     for lib in libraries:
         lib_sig = sig_df[sig_df['library'] == lib]
@@ -928,18 +873,14 @@ def main():
                         help='transcripts_to_genes.txt (FBgn -> symbol)')
     parser.add_argument('--method',  '-m', default='wilcoxon',
                         choices=['wilcoxon', 't-test', 'logreg'])
-    parser.add_argument('--log2fc-min', type=float, default=0.25,
-                        help='Floor log2FC for adaptive threshold sweep (default: 0.25)')
-    parser.add_argument('--pct-min',   type=float, default=0.05,
-                        help='Floor pct_in for adaptive threshold sweep (default: 0.05)')
-    parser.add_argument('--pct-ratio', type=float, default=1.0,
-                        help='Floor pct_ratio for adaptive threshold sweep (default: 1.0)')
     parser.add_argument('--skip-enrichment', action='store_true')
     parser.add_argument('--no-combine-go',   action='store_true')
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
+
     sc.settings.figdir = args.output
+    print(f"  sc.settings.figdir = {sc.settings.figdir}")
 
     print("="*60)
     print("LOADING DATA")
@@ -959,9 +900,6 @@ def main():
     marker_df = find_marker_genes(
         adata, args.output, args.sample,
         method=args.method,
-        log2fc_min=args.log2fc_min,
-        pct_min=args.pct_min,
-        pct_ratio_min=args.pct_ratio,
     )
 
     if not args.skip_enrichment:

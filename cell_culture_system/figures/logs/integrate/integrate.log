@@ -1,0 +1,154 @@
+Starting integration
+/private/groups/russelllab/jodie/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_highly_variable_genes.py:72: UserWarning: `flavor='seurat_v3'` expects raw count data, but non-integers were found.
+  warnings.warn(
+WARNING: saving figure to file results/integrated/figures/umap_wolbachia_infection_before_correction.pdf
+2026-04-15 15:38:46,627 - harmonypy - INFO - Computing initial centroids with sklearn.KMeans...
+2026-04-15 15:38:56,639 - harmonypy - INFO - sklearn.KMeans initialization complete.
+2026-04-15 15:38:56,806 - harmonypy - INFO - Iteration 1 of 20
+2026-04-15 15:39:08,003 - harmonypy - INFO - Iteration 2 of 20
+2026-04-15 15:39:19,244 - harmonypy - INFO - Converged after 2 iterations
+WARNING: saving figure to file results/integrated/figures/umap_wolbachia_infection_after_correction.pdf
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/integrate_v2.py:274: FutureWarning: In the future, the default backend for leiden will be igraph instead of leidenalg.
+
+ To achieve the future defaults please pass: flavor="igraph" and n_iterations=2.  directed must also be False to work with igraph's implementation.
+  sc.tl.leiden(adata, resolution=res, random_state=random_state,
+WARNING: saving figure to file results/integrated/figures/umap_wolbachia_infection_clusters.pdf
+WARNING: saving figure to file results/integrated/figures/umap_wolbachia_infection_titer.pdf
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/integrate_v2.py:649: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  stats = obs_titer.groupby("leiden")["wolbachia_titer"].agg(
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/integrate_v2.py:687: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  pct_infected = obs_titer.groupby("leiden").apply(
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/integrate_v2.py:687: DeprecationWarning: DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+  pct_infected = obs_titer.groupby("leiden").apply(
+/private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/cell_culture_system/scripts/method_comparison/integrate_v2.py:705: FutureWarning: The default value of observed=False is deprecated and will change to observed=True in a future version of pandas. Specify observed=False to silence this warning and retain the current behavior
+  mean_titer = obs_titer.pivot_table(
+Loading files …
+
+Loaded 137,191 cells from 24 files
+Condition breakdown:
+bio_condition
+JW18DOX-SV-D1      43235
+JW18wMel-SV-D1     31464
+JW18DOX-Ctrl       24950
+JW18wMel-Ctrl      24154
+JW18wMel-SV-D56     4991
+JW18wMel-SV-D28     4747
+JW18wMel-SV-D7      3650
+
+============================================================
+JOINT CLUSTERING — all conditions, method correction only
+============================================================
+
+Total cells: 137191
+Condition breakdown:
+bio_condition
+JW18DOX-SV-D1      43235
+JW18wMel-SV-D1     31464
+JW18DOX-Ctrl       24950
+JW18wMel-Ctrl      24154
+JW18wMel-SV-D56     4991
+JW18wMel-SV-D28     4747
+JW18wMel-SV-D7      3650
+
+Method breakdown:
+method
+10x       104993
+pipseq     32198
+  Removing 1260 bacterial transcripts (GQX67* + 16S_*) before PCA
+  After filtering: 88140 cells, 15876 genes
+  QC gene flags: mt=0, ribo=0
+  Median pct_counts_mt:   0.0%
+  Median pct_counts_ribo: 0.0%
+  HVGs before exclusion: 2000
+  HVGs masked (mt/ribo/cc): 5
+  HVGs used for PCA: 1995
+  Cell cycle genes found: S=19/24, G2M=12/17
+  Phase distribution: {'S': 63099, 'G2M': 21661, 'G1': 3380}
+
+After preprocessing: 88140 cells, 1995 genes
+
+Running BBKNN (batch_key='method') …
+
+Sweeping 7 resolutions …
+  res=0.20  n_clusters=  5  silhouette=0.1345  ari=0.9569
+  res=0.30  n_clusters=  6  silhouette=0.0811  ari=0.8731
+  res=0.40  n_clusters=  9  silhouette=0.0770  ari=0.9535
+  res=0.50  n_clusters= 10  silhouette=0.0804  ari=0.9294
+  res=0.60  n_clusters= 10  silhouette=0.0808  ari=0.9247
+  res=0.80  n_clusters= 14  silhouette=0.0720  ari=0.8393
+  res=1.00  n_clusters= 17  silhouette=0.0764  ari=0.7608
+
+Best resolution: 0.2
+  Saved: results/integrated/figures/resolution_metrics_wolbachia_infection.pdf
+  Saved: results/integrated/figures/resolution_umap_panel_wolbachia_infection.pdf
+  Saved: results/integrated/figures/resolution_composite_wolbachia_infection.pdf
+
+Clustering at resolution=0.2 …
+Clusters: 5
+leiden
+0    30729
+1    19971
+2    13803
+3    12661
+4    10976
+
+============================================================
+CONDITION ENRICHMENT ANALYSIS
+============================================================
+
+Chi-square: chi2=151989.83  p=0.00e+00  dof=24
+Cramer's V: 0.657
+  Saved: results/integrated/figures/cluster_composition_by_condition_wolbachia_infection.pdf
+  Saved: results/integrated/figures/condition_composition_by_cluster_wolbachia_infection.pdf
+  Saved: results/integrated/figures/cluster_enrichment_heatmap_wolbachia_infection.pdf
+  Saved: results/integrated/figures/umap_by_condition_wolbachia_infection.pdf
+
+  Saved enrichment tables and plots to results/integrated/figures/
+
+============================================================
+WOLBACHIA TITER BY CLUSTER
+============================================================
+
+Kruskal-Wallis: H=23227.40  p=0.00e+00
+Titer {'SIGNIFICANTLY' if p_kw < 0.05 else 'does NOT'} differ across clusters
+
+Titer summary per cluster:
+            mean    median       std  count
+leiden                                     
+0       0.080020  0.000000  0.088467  30729
+1       0.029214  0.000000  0.063463  19971
+2       0.177437  0.173729  0.051111  13803
+3       0.080652  0.000000  0.091454  12661
+4       0.125275  0.142857  0.099851  10976
+  Saved: results/integrated/figures/titer_boxplot_by_cluster_wolbachia_infection.pdf
+  Saved: results/integrated/figures/titer_violin_by_cluster_wolbachia_infection.pdf
+  Saved: results/integrated/figures/infection_pct_by_cluster_wolbachia_infection.pdf
+  Saved: results/integrated/figures/titer_heatmap_cluster_condition_wolbachia_infection.pdf
+  Saved: results/integrated/figures/titer_by_cluster_timepoint_wolbachia_infection.pdf
+
+============================================================
+EXPORTING SCEPTIC INPUTS
+============================================================
+SCEPTIC cells: 63091
+Timepoint breakdown:
+timepoint_numeric
+0     15920
+1     22747
+7      3530
+28     1152
+56     4761
+99    14981
+  Matrix     -> results/integrated/figures/sceptic_matrix_wolbachia_infection.csv  shape=(63091, 30)
+  Labels     -> results/integrated/figures/sceptic_labels_wolbachia_infection.csv
+  Label list -> results/integrated/figures/sceptic_label_list_wolbachia_infection.csv  values=[ 0  1  7 28 56 99]
+  Metadata   -> results/integrated/figures/sceptic_metadata_wolbachia_infection.csv
+
+Saved: results/integrated/integrated.h5ad
+
+============================================================
+COMPLETE
+============================================================
+Integrated object -> results/integrated/integrated.h5ad
+Figures           -> results/integrated/figures/
+Cells: 88,140  |  Clusters: 5  at resolution=0.2
+Integration complete

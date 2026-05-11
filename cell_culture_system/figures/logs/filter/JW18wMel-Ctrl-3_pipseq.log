@@ -1,0 +1,11 @@
+Starting filtering for JW18wMel-Ctrl-3_pipseq
+Input file: results/h5ad_results/JW18wMel-Ctrl-3_pipseq.h5ad
+Error.  nthreads cannot be larger than environment variable "NUMEXPR_MAX_THREADS" (64)WARNING: saving figure to file results/filtered_h5ad/JW18wMel-Ctrl-3_pipseq/scatter.pdf
+WARNING: saving figure to file results/filtered_h5ad/JW18wMel-Ctrl-3_pipseq/violin.pdf
+/private/groups/russelllab/jodie/miniforge3/envs/scanpy/lib/python3.12/site-packages/scanpy/preprocessing/_highly_variable_genes.py:222: UserWarning: If you pass `n_top_genes`, all cutoffs are ignored.
+  warnings.warn(msg, UserWarning)
+Using cached mitochondrial gene list: /private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/snakemake_scripts/filtering/dmel_mito_genes_cache.tsv
+Analysing JW18wMel-Ctrl-3_pipseq: results/h5ad_results/JW18wMel-Ctrl-3_pipseq.h5ad
+Completed JW18wMel-Ctrl-3_pipseq
+Compressing original h5ad file
+Filtering complete for JW18wMel-Ctrl-3_pipseq

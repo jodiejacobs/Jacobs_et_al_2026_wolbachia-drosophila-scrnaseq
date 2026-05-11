@@ -1,0 +1,19 @@
+Starting PIPseq processing for JW18DOX-SV-1_pipseq
+Input files: /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-SV-1_S37_L003_R1_001.fastq.gz, /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-SV-1_S37_L003_R2_001.fastq.gz
+Output directory: results/pipseq/JW18DOX-SV-1_pipseq
+[2025-09-22 14:47:45,885]    INFO [count] Using index /private/groups/russelllab/jodie/scRNAseq/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq/reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx to generate BUS file to results/pipseq/JW18DOX-SV-1_pipseq from
+[2025-09-22 14:47:45,885]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-SV-1_S37_L003_R1_001.fastq.gz
+[2025-09-22 14:47:45,885]    INFO [count]         /private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9/JW18DOX-SV-1_S37_L003_R2_001.fastq.gz
+[2025-09-22 14:54:42,169]    INFO [count] Sorting BUS file results/pipseq/JW18DOX-SV-1_pipseq/output.bus to results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.bus
+[2025-09-22 14:54:46,980]    INFO [count] On-list not provided
+[2025-09-22 14:54:46,980]    INFO [count] Generating on-list results/pipseq/JW18DOX-SV-1_pipseq/whitelist.txt from BUS file results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.bus
+[2025-09-22 14:54:48,083]    INFO [count] Inspecting BUS file results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.bus
+[2025-09-22 14:54:49,285]    INFO [count] Correcting BUS records in results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.bus to results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.c.bus with on-list results/pipseq/JW18DOX-SV-1_pipseq/whitelist.txt
+[2025-09-22 14:54:50,788]    INFO [count] Sorting BUS file results/pipseq/JW18DOX-SV-1_pipseq/tmp/output.s.c.bus to results/pipseq/JW18DOX-SV-1_pipseq/output.unfiltered.bus
+[2025-09-22 14:54:52,792]    INFO [count] Generating count matrix results/pipseq/JW18DOX-SV-1_pipseq/counts_unfiltered/cells_x_genes from BUS file results/pipseq/JW18DOX-SV-1_pipseq/output.unfiltered.bus
+[2025-09-22 14:55:03,361]    INFO [count] Writing gene names to file results/pipseq/JW18DOX-SV-1_pipseq/counts_unfiltered/cells_x_genes.genes.names.txt
+[2025-09-22 14:55:03,474] WARNING [count] 7519 gene IDs do not have corresponding valid gene names. These genes will use their gene IDs instead.
+[2025-09-22 14:55:03,482]    INFO [count] Reading matrix results/pipseq/JW18DOX-SV-1_pipseq/counts_unfiltered/cells_x_genes.mtx
+[2025-09-22 14:55:03,550]    INFO [count] Writing matrix to h5ad results/pipseq/JW18DOX-SV-1_pipseq/counts_unfiltered/adata.h5ad
+Moving h5ad file to final location
+PIPseq processing complete for JW18DOX-SV-1_pipseq
