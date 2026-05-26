@@ -124,7 +124,10 @@ rule all:
         expand("results/pseudotime_genes/{sample}/.done",
             sample=["wolbachia_infection"]),
         expand("results/pseudotime_genes/{sample}/tradeseq.done",
-            sample=["wolbachia_infection"])
+            sample=["wolbachia_infection"]),
+        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
+               sample_id=SAMPLE_IDS,
+               gene=config.get("target_genes", ["GQX67_05945"]))
 
 # Establish rule precedencex
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -1193,3 +1196,59 @@ python scripts/method_comparison/cell_cycle_association.py \
     --force-retrain \
     --save-output
 """
+
+# Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample
+rule count_16s_reads:
+    input:
+        r2  = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        ref = config["ref_fasta"]
+    output:
+        counts = "results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt"
+    wildcard_constraints:
+        # Only allow sample_ids that currently exist in the dataframe
+        sample_id = "|".join(SAMPLE_IDS)
+    params:
+        region = config.get("rRNA_16S_region", "GQX67_05945::NZ_CP046925.1:1167785-1169290")
+    log:
+        "logs/count_16s/{sample_id}_{gene}.log"
+    threads: 8
+    resources:
+        slurm_partition = "medium",
+        mem_mb          = 16000,
+        slurm_time      = "2:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Counting 16S vs total reads for {wildcards.sample_id} - {wildcards.gene}"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate sra-tools
+
+        mkdir -p results/rRNA_analysis/read_counts/{wildcards.sample_id}
+
+        SORTED=results/rRNA_analysis/read_counts/{wildcards.sample_id}/all_aligned.bam
+
+        # Align R2 to the combined Dmel + wMel rRNA reference, sort, index
+        bwa mem -t {threads} {input.ref} {input.r2} | \
+            samtools view -Sb | \
+            samtools sort -@ {threads} -o $SORTED
+        samtools index $SORTED
+
+        # Reads mapped to the 16S region (primary alignments only, excludes
+        # unmapped/secondary/supplementary via -F 0x904)
+        SIXTEEN_S=$(samtools view -c -F 0x904 $SORTED "{params.region}")
+
+        # Total reads in the input (all records in the BAM)
+        TOTAL=$(samtools view -c $SORTED)
+
+        # Mapped reads only (optional denominator if you prefer mapped over total)
+        MAPPED=$(samtools view -c -F 0x4 $SORTED)
+
+        # Write tab-delimited summary
+        printf "sample\\tgene\\tregion\\tsixteenS_reads\\ttotal_reads\\tmapped_reads\\n" > {output.counts}
+        printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \
+            "{wildcards.sample_id}" "{wildcards.gene}" "{params.region}" \
+            "$SIXTEEN_S" "$TOTAL" "$MAPPED" >> {output.counts}
+
+        echo "Done. 16S=$SIXTEEN_S  total=$TOTAL  mapped=$MAPPED"
+        """
