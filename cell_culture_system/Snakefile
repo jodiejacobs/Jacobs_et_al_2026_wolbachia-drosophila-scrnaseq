@@ -103,6 +103,10 @@ rule all:
         # Cell cycle for uninfected samples
         "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
         "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
+        # Validate PIPseq and 10X clustering
+        "results/validate_pipseq/label_transfer_confusion_matrix.csv",
+        "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
+        "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
         # Cell cycle
         "results/cellcycle/.done",
         "results/integrated/integrated_by_cellcycle.h5ad",
@@ -128,6 +132,7 @@ rule all:
         expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
                sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"]))
+
 
 # Establish rule precedencex
 ruleorder: map_pipseq > combine_files_by_condition_platform
@@ -1251,4 +1256,52 @@ rule count_16s_reads:
             "$SIXTEEN_S" "$TOTAL" "$MAPPED" >> {output.counts}
 
         echo "Done. 16S=$SIXTEEN_S  total=$TOTAL  mapped=$MAPPED"
+        """
+
+rule validate_platform_concordance:
+    input:
+        h5ad = "results/integrated/integrated.h5ad"
+    output:
+        confusion  = "results/validate_pipseq/label_transfer_confusion_matrix.csv",
+        jaccard    = "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
+        pseudobulk = "results/validate_pipseq/pseudobulk_spearman_correlation.csv"
+    params:
+        script          = config.get("validate_platform_script",
+                              "snakemake_scripts/analysis/validate_platform_concordance.py"),
+        outdir          = "results/validate_pipseq",
+        embedding       = config.get("validate_platform_embedding", "X_pca_harmony"),
+        cluster_key     = config.get("validate_platform_cluster_key", "leiden"),
+        platform_key    = config.get("validate_platform_method_key", "method"),
+        n_markers       = config.get("validate_platform_n_markers", 50),
+        n_neighbors_knn = config.get("validate_platform_knn_neighbors", 15),
+        counts_source   = config.get("validate_platform_counts_source", "raw")
+    log:
+        "logs/validate_platform/validate_platform_concordance.log"
+    threads:
+        config.get("validate_platform_threads", 8)
+    resources:
+        slurm_partition = config.get("validate_platform_partition", "medium"),
+        mem_mb          = config.get("validate_platform_mem", 64000),
+        slurm_time      = config.get("validate_platform_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting platform concordance validation"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        mkdir -p {params.outdir}
+
+        python {params.script} \
+            --h5ad {input.h5ad} \
+            --outdir {params.outdir} \
+            --embedding {params.embedding} \
+            --cluster_key {params.cluster_key} \
+            --platform_key {params.platform_key} \
+            --n_markers {params.n_markers} \
+            --n_neighbors_knn {params.n_neighbors_knn} \
+            --counts_source {params.counts_source}
+
+        echo "Platform concordance validation complete"
         """
