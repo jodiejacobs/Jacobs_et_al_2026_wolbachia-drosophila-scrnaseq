@@ -1,7 +1,7 @@
 """
-titer_vs_cellcycle.py
+integrate_by_ref.py
 =====================
-Tests the relationship between wMel titer and cell cycle in infected Drosophila JW18 cells.
+Integrates query datasets with a reference dataset.
 
 Strategy
 --------
@@ -19,7 +19,7 @@ Strategy
 
 Run with:
     mamba activate scanpy
-    python scripts/method_comparison/titer_vs_cellcycle.py \
+    python scripts/method_comparison/integrate_by_ref.py \
         --ref   results/integrated/integrated_uninfected_with_cellcycle.h5ad \
         --query results/filtered_h5ad/JW18wMel-SV*_pipseq.h5ad \
                 results/filtered_h5ad/JW18wMel-SV*_10x.h5ad \
@@ -127,6 +127,59 @@ def bh_adjust_log10(log10_p_raw_array):
         np.log10(np.maximum(p_adj, np.finfo(float).tiny)),
     )
     return p_adj, log10_p_adj
+
+
+def identify_reference_markers(ref_full, fig_dir, sample,
+                               groupby="leiden", n_top=5,
+                               method="wilcoxon"):
+    print(f"\n-- Reference marker genes ({groupby}) --")
+
+    if groupby not in ref_full.obs.columns:
+        raise ValueError(f"'{groupby}' not found in reference obs")
+
+    groups = ref_full.obs[groupby].dropna().astype(str).unique().tolist()
+    if len(groups) < 2:
+        print(f"   SKIP: need at least two {groupby} groups to compute markers")
+        return None
+
+    adata = ref_full.copy()
+    adata.obs[groupby] = adata.obs[groupby].astype("category")
+
+    sc.tl.rank_genes_groups(
+        adata,
+        groupby=groupby,
+        method=method,
+        use_raw=False,
+    )
+
+    sc.pl.rank_genes_groups_dotplot(
+        adata,
+        groupby=groupby,
+        n_genes=n_top,
+        standard_scale="var",
+        show=False,
+        save=f"_{sample}_{groupby}_markers_dotplot.pdf",
+    )
+
+    marker_rows = []
+    for group in adata.uns["rank_genes_groups"]["names"].dtype.names:
+        df = sc.get.rank_genes_groups_df(adata, group=group).head(n_top).copy()
+        if df.empty:
+            continue
+        df.insert(0, "cluster", group)
+        df.insert(1, "rank", np.arange(1, len(df) + 1))
+        marker_rows.append(df)
+        print(f"   Cluster {group}: {', '.join(df['names'].astype(str).tolist())}")
+
+    if marker_rows:
+        marker_df = pd.concat(marker_rows, ignore_index=True)
+        out_csv = os.path.join(fig_dir, f"{sample}_{groupby}_markers.csv")
+        marker_df.to_csv(out_csv, index=False)
+        print(f"   -> {out_csv}")
+    else:
+        marker_df = pd.DataFrame()
+
+    return adata, marker_df
 
 
 # -----------------------------------------------------------------------------
@@ -1307,6 +1360,9 @@ def run(ref_path, query_paths, out_path, fig_dir, sample,
         print(f"  {p}")
 
     ref_raw, ref_full = load_reference(ref_path, stage_col, pseudotime_col)
+    ref_full, marker_df = identify_reference_markers(
+        ref_full, fig_dir, sample, groupby="leiden", n_top=25
+    )
 
     print(f"\n-- Loading query files --")
     query_raw = load_query_files(

@@ -1,2 +1,2 @@
 test,chi2,dof,p_value,log10_p,n_bins,n_cells,interpretation
-chi2_titer_bins,13548.137735878332,6,0.0,-inf,4,73126,Chi-squared tests whether CC phase proportions differ across 4 quantile bins of wMel titer
+chi2_titer_bins,4733.541475483335,8,0.0,-inf,5,44852,Chi-squared tests whether CC phase proportions differ across 5 quantile bins of wMel titer

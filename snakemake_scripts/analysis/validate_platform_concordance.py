@@ -213,6 +213,10 @@ recovery_df.index.name = 'cluster'
 print("\nPer-cluster recovery (precision/recall/f1):")
 print(recovery_df.round(3))
 
+# Define well_sampled here so it's available for permutation test in step 2
+# and summary section
+well_sampled = recovery_df[recovery_df['n_pipseq'] >= 10].index.tolist()
+
 # Confusion matrix (row = PIPseq true, col = 10x predicted, row-normalized)
 confusion = pd.crosstab(
     pd.Series(y_test, name='PIPseq_true'),
@@ -325,8 +329,220 @@ print("\nDirected marker gene overlap (PIPseq recall of 10x markers):")
 print(overlap_df.round(3))
 print(f"\nMedian recall: {overlap_df['recall'].median():.3f}")
 
-overlap_df.to_csv(f"{args.outdir}/directed_marker_overlap.csv")
-print(f"Overlap table -> {args.outdir}/directed_marker_overlap.csv")
+# ── Hypergeometric test for Jaccard significance ──────────────────────────
+# For each cluster, test whether the observed overlap between 10x and PIPseq
+# marker gene sets exceeds chance.
+# Model: drawing n_pipseq_markers genes from N HVGs without replacement,
+# given that n_10x_markers of those N genes are "successes" (10x markers).
+# P-value = P(X >= k) where X ~ Hypergeometric(N, K, n)
+#   N = total HVG space
+#   K = number of 10x markers (successes in population)
+#   n = number of PIPseq markers drawn
+#   k = observed overlap
+# Expected overlap by chance = n * K / N
+
+from mpmath import mp, mpf, factorial, nstr as mpnstr
+mp.dps = 50
+
+def mpbinom(n, k):
+    """Binomial coefficient at arbitrary precision."""
+    n, k = int(n), int(k)
+    if k < 0 or k > n:
+        return mpf(0)
+    return factorial(n) / (factorial(k) * factorial(n - k))
+
+def hypergeom_sf_mpmath(k, N, K, n):
+    """
+    P(X >= k) for X ~ Hypergeometric(N, K, n) at arbitrary precision.
+    Computed as sum of PMFs from k to min(K, n).
+    PMF(i) = C(K,i)*C(N-K,n-i)/C(N,n)
+    """
+    N, K, n, k = int(N), int(K), int(n), int(k)
+    denom = mpbinom(N, n)
+    total = mpf(0)
+    for i in range(k, min(K, n) + 1):
+        total += mpbinom(K, i) * mpbinom(N - K, n - i)
+    return total / denom
+
+n_hvg = tenx_ln.n_vars
+print(f"\nHypergeometric test (N={n_hvg} HVGs, K=n_10x=50, n=n_pipseq=50):")
+print(f"  Expected overlap by chance = {args.n_markers}^2 / {n_hvg} = "
+      f"{args.n_markers**2/n_hvg:.2f} genes")
+print(f"  Expected Jaccard by chance = "
+      f"{args.n_markers**2/n_hvg / (2*args.n_markers - args.n_markers**2/n_hvg):.4f}")
+
+hyper_results = {}
+for cluster in overlap_df.index:
+    K = int(overlap_df.loc[cluster, 'n_10x_markers'])    # successes in population
+    n = int(overlap_df.loc[cluster, 'n_pipseq_markers']) # draws
+    k = int(overlap_df.loc[cluster, 'n_shared'])         # observed successes
+    if K == 0 or n == 0:
+        hyper_results[cluster] = {'expected': np.nan, 'pval': np.nan, 'pval_str': 'NA'}
+        continue
+    expected = n * K / n_hvg
+    pval_mp  = hypergeom_sf_mpmath(k, n_hvg, K, n)
+    pval_flt = float(pval_mp)   # may underflow to 0.0 for very small values
+    pval_str = mpnstr(pval_mp, 4) if pval_flt == 0.0 else f"{pval_flt:.4e}"
+    hyper_results[cluster] = {'expected': expected, 'pval': pval_flt,
+                               'pval_str': pval_str}
+
+hyper_df = pd.DataFrame(hyper_results).T
+hyper_df.index.name = 'cluster'
+overlap_df['expected_overlap'] = hyper_df['expected']
+overlap_df['pval_hypergeom']   = hyper_df['pval']
+overlap_df['pval_str']         = hyper_df['pval_str']
+
+# Benjamini-Hochberg correction using mpmath to avoid float underflow.
+# BH formula: padj[i] = min(1, p[i] * m / rank[i]) applied in rank order,
+# then enforced to be monotone increasing from smallest to largest p.
+valid_clusters = [c for c in overlap_df.index
+                  if hyper_results[c].get('pval_str', 'NA') != 'NA'
+                  and hyper_results[c]['pval_str'] != 'NA']
+
+# Rebuild mpmath p-values from stored strings for BH
+pval_mp_dict = {}
+for cluster in valid_clusters:
+    pval_mp_dict[cluster] = hypergeom_sf_mpmath(
+        int(overlap_df.loc[cluster, 'n_shared']),
+        n_hvg,
+        int(overlap_df.loc[cluster, 'n_10x_markers']),
+        int(overlap_df.loc[cluster, 'n_pipseq_markers'])
+    )
+
+m = len(pval_mp_dict)
+sorted_clusters = sorted(pval_mp_dict, key=lambda c: pval_mp_dict[c])
+padj_mp = {}
+running_min = mpf(1)
+for rank, cluster in enumerate(reversed(sorted_clusters), 1):
+    padj_raw = pval_mp_dict[cluster] * mpf(m) / mpf(m - rank + 1)
+    running_min = min(running_min, padj_raw)
+    padj_mp[cluster] = running_min
+
+overlap_df['padj_str'] = 'NA'
+for cluster in valid_clusters:
+    p = padj_mp[cluster]
+    p_flt = float(p)
+    overlap_df.loc[cluster, 'padj_str'] = (
+        mpnstr(p, 4) if p_flt == 0.0 else f"{p_flt:.4e}"
+    )
+
+# Display table
+display_df = overlap_df[['n_shared', 'expected_overlap', 'jaccard',
+                          'pval_str', 'padj_str']].copy()
+display_df.columns = ['n_shared', 'expected_overlap', 'jaccard',
+                      'pval_hypergeom', 'padj_hypergeom']
+print("\nHypergeometric test results per cluster:")
+print(display_df)
+
+well_jac    = overlap_df.loc[overlap_df.index.isin(well_sampled), 'jaccard'].dropna()
+n_sig       = sum(
+    1 for c in well_sampled
+    if c in padj_mp and float(padj_mp[c]) < 0.05
+)
+exp_jaccard = args.n_markers**2 / n_hvg / (2*args.n_markers - args.n_markers**2/n_hvg)
+
+print(f"\nSummary (well-sampled clusters, n={len(well_jac)}):")
+print(f"  Median Jaccard:        {well_jac.median():.3f}")
+print(f"  Expected by chance:    {exp_jaccard:.4f}")
+print(f"  Significant (FDR<5%):  {n_sig}/{len(well_sampled)} clusters")
+print(f"\n  Manuscript: median Jaccard index = {well_jac.median():.3f} vs. "
+      f"{exp_jaccard:.3f} expected by chance for random gene sets of equivalent "
+      f"size (n={args.n_markers}) drawn from the same HVG space (n={n_hvg} genes); "
+      f"{n_sig}/{len(well_sampled)} clusters significant after "
+      f"Benjamini-Hochberg correction (FDR < 5%), hypergeometric test)")
+
+
+# Plot: Jaccard per cluster dot plot with cluster numbers as labels
+fig, ax = plt.subplots(figsize=(9, 5))
+
+jaccard_vals = overlap_df['jaccard'].astype(float)
+null_line    = args.n_markers**2 / n_hvg / (2*args.n_markers - args.n_markers**2/n_hvg)
+
+# Determine significance and sampling status per cluster
+all_clusters_ordered = sorted(overlap_df.index.tolist(), key=lambda x: int(x))
+x_pos = np.arange(len(all_clusters_ordered))
+
+for i, cluster in enumerate(all_clusters_ordered):
+    jac   = jaccard_vals.get(cluster, np.nan)
+    n_pip = recovery_df.loc[cluster, 'n_pipseq'] if cluster in recovery_df.index else 0
+    padj  = overlap_df.loc[cluster, 'padj_str'] if 'padj_str' in overlap_df.columns else 'NA'
+
+    if np.isnan(jac) or n_pip == 0:
+        color, zorder, alpha = '#d3d1c7', 1, 0.5
+    elif n_pip < 10:
+        color, zorder, alpha = '#d3d1c7', 2, 0.7
+    elif padj == 'NA' or (padj not in ('NA',) and float(padj) >= 0.05):
+        color, zorder, alpha = '#898781', 3, 0.9
+    else:
+        color, zorder, alpha = '#2a78d6', 4, 1.0
+
+    # Draw circle
+    ax.scatter(i, jac, s=520, color=color, zorder=zorder,
+               alpha=alpha, linewidths=1.2,
+               edgecolors='#185fa5' if color == '#2a78d6' else '#5f5e5a')
+    # Cluster number inside dot
+    ax.text(i, jac, str(cluster), ha='center', va='center',
+            fontsize=7.5, fontweight='500', color='white' if color == '#2a78d6' else '#444441',
+            zorder=zorder + 1)
+
+# Null expectation line
+ax.axhline(null_line, color='#e34948', linewidth=1.5,
+           linestyle='--', label=f'Expected by chance ({null_line:.3f})', zorder=0)
+
+# Median line (well-sampled clusters only)
+well_jac_vals = [float(jaccard_vals[c]) for c in well_sampled
+                 if c in jaccard_vals.index and not np.isnan(float(jaccard_vals[c]))]
+obs_median = np.median(well_jac_vals)
+ax.axhline(obs_median, color='#2a78d6', linewidth=1.5,
+           linestyle=':', label=f'Median (well-sampled, {obs_median:.3f})', zorder=0)
+
+ax.set_xticks([])
+ax.set_ylabel("Jaccard index", fontsize=11)
+ax.set_xlabel("Cluster (number shown in dot)", fontsize=11)
+ax.set_xlim(-0.8, len(all_clusters_ordered) - 0.2)
+ax.set_ylim(-0.03, max(jaccard_vals.dropna()) * 1.2)
+ax.spines[['top', 'right']].set_visible(False)
+
+# Legend
+from matplotlib.lines import Line2D
+legend_elements = [
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='#2a78d6',
+           markersize=10, label='Significant (FDR < 5%)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='#898781',
+           markersize=10, label='Not significant'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='#d3d1c7',
+           markersize=10, label=f'Low cell count (< 10 PIPseq cells)'),
+    Line2D([0], [0], color='#e34948', linewidth=1.5, linestyle='--',
+           label=f'Expected by chance ({null_line:.3f})'),
+    Line2D([0], [0], color='#2a78d6', linewidth=1.5, linestyle=':',
+           label=f'Median ({obs_median:.3f})'),
+]
+ax.legend(handles=legend_elements, fontsize=8, frameon=False,
+          loc='upper left', bbox_to_anchor=(0, 1))
+
+ax.set_title(f"Marker gene Jaccard index: 10x vs PIPseq\n"
+             f"(top {args.n_markers} markers per cluster, {n_hvg} HVG space; "
+             f"{len([c for c in well_sampled if overlap_df.loc[c,'padj_str'] not in ('NA',) and float(overlap_df.loc[c,'padj_str']) < 0.05])}/"
+             f"{len(well_sampled)} well-sampled clusters FDR < 5%)",
+             fontsize=10, pad=10)
+
+plt.tight_layout()
+for ext in ('pdf', 'png'):
+    fig.savefig(f"{args.outdir}/jaccard_per_cluster_dotplot.{ext}",
+                dpi=300, bbox_inches='tight')
+    print(f"Saved: {args.outdir}/jaccard_per_cluster_dotplot.{ext}")
+plt.close()
+
+# Also save display version with string p-values for supplement
+display_df_out = overlap_df[['n_10x_markers','n_pipseq_markers','n_shared',
+                              'recall','jaccard','expected_overlap',
+                              'pval_str','padj_str']].copy()
+display_df_out.columns = ['n_10x_markers','n_pipseq_markers','n_shared',
+                           'recall','jaccard','expected_overlap',
+                           'pval_hypergeom','padj_hypergeom']
+display_df_out.to_csv(f"{args.outdir}/directed_marker_overlap_with_pvals.csv")
+print(f"Overlap table (with string p-values) -> "
+      f"{args.outdir}/directed_marker_overlap_with_pvals.csv")
 
 # Plot: recall per cluster
 fig, ax = plt.subplots(figsize=(8, 4))
@@ -355,60 +571,68 @@ print("Saved: directed_marker_overlap.pdf/.png")
 # ══════════════════════════════════════════════════════════════════════════════
 
 print("\n" + "=" * 70)
-print("STEP 3: Pseudobulk Spearman Correlation (marker genes only)")
+print("STEP 3: Pseudobulk Spearman Correlation (per-cluster marker genes)")
 print("=" * 70)
 
-pb_10x    = pseudobulk(tenx,   args.cluster_key, args.counts_source, args.counts_layer)
-pb_pipseq = pseudobulk(pipseq, args.cluster_key, args.counts_source, args.counts_layer)
+# Use mean log-normalized expression per cluster (from the already-built
+# lognorm matrices) rather than summed raw counts. Mean log-norm avoids
+# highly expressed genes dominating the pseudobulk vector and better
+# reflects per-cell transcriptional state.
+#
+# For each matched cluster pair, correlate only on that cluster's OWN
+# 10x marker genes rather than the full union. This ensures the correlation
+# reflects cluster-specific signal, not shared housekeeping expression.
 
-shared_genes = pb_10x.index.intersection(pb_pipseq.index)
-pb_10x    = pb_10x.loc[shared_genes]
-pb_pipseq = pb_pipseq.loc[shared_genes]
+def mean_expr_per_cluster(adata_ln, cluster_col):
+    """Mean log-normalized expression per gene per cluster -> genes x clusters."""
+    result = {}
+    for cluster in adata_ln.obs[cluster_col].cat.categories:
+        mask = (adata_ln.obs[cluster_col] == cluster).values
+        if mask.sum() == 0:
+            result[cluster] = np.zeros(adata_ln.n_vars)
+        else:
+            result[cluster] = np.asarray(adata_ln.X[mask].mean(axis=0)).flatten()
+    return pd.DataFrame(result, index=adata_ln.var_names)
 
-# Restrict to union of marker genes (cluster-discriminating genes only)
-marker_union = set()
-for gs in markers_10x.values():    marker_union |= gs
-for gs in markers_pipseq.values(): marker_union |= gs
-marker_genes_in_pb = pb_10x.index.intersection(list(marker_union))
-print(f"Restricting pseudobulk to {len(marker_genes_in_pb)} marker genes "
-      f"({len(marker_union)} in union, {len(shared_genes)} shared total)")
-pb_10x    = pb_10x.loc[marker_genes_in_pb]
-pb_pipseq = pb_pipseq.loc[marker_genes_in_pb]
+me_10x    = mean_expr_per_cluster(tenx_ln,   args.cluster_key)
+me_pipseq = mean_expr_per_cluster(pipseq_ln, args.cluster_key)
 
-# CPM + log1p normalize
-def lognorm_pb(pb):
-    cpm = pb / pb.sum(axis=0) * 1e6
-    return np.log1p(cpm)
-
-pb_10x    = lognorm_pb(pb_10x)
-pb_pipseq = lognorm_pb(pb_pipseq)
-
-n_genes = len(marker_genes_in_pb)
 shared_clusters = sorted(
-    set(pb_10x.columns) & set(pb_pipseq.columns),
+    set(me_10x.columns) & set(me_pipseq.columns),
     key=lambda x: int(x)
 )
 
-# Full N×N matrix
+# Full N×N matrix: for off-diagonal, use the row cluster's (10x) marker genes
+# For diagonal (matched pair), use that cluster's own 10x marker genes
 print("Computing full cluster x cluster Spearman matrix ...")
 rho_matrix = pd.DataFrame(index=shared_clusters, columns=shared_clusters, dtype=float)
+n_genes_diag = {}
 for c_10x in shared_clusters:
+    gene_set = list(markers_10x.get(c_10x, set()) & set(me_10x.index) & set(me_pipseq.index))
+    if len(gene_set) < 2:
+        for c_pip in shared_clusters:
+            rho_matrix.loc[c_10x, c_pip] = np.nan
+        n_genes_diag[c_10x] = 0
+        continue
+    n_genes_diag[c_10x] = len(gene_set)
     for c_pip in shared_clusters:
-        rho, _ = spearmanr(pb_10x[c_10x], pb_pipseq[c_pip])
+        rho, _ = spearmanr(me_10x.loc[gene_set, c_10x],
+                           me_pipseq.loc[gene_set, c_pip])
         rho_matrix.loc[c_10x, c_pip] = rho
 
-# Diagonal (matched pairs) with p-values
+# Diagonal with p-values
 correlations = {}
 for cluster in shared_clusters:
     rho  = float(rho_matrix.loc[cluster, cluster])
-    pval = spearman_pval(rho, n_genes)
-    correlations[cluster] = {'rho': rho, 'pval': pval}
+    n    = n_genes_diag.get(cluster, 0)
+    pval = spearman_pval(rho, n) if n >= 3 and not np.isnan(rho) else np.nan
+    correlations[cluster] = {'rho': rho, 'pval': pval, 'n_genes': n}
 
 corr_df = pd.DataFrame(correlations).T
-print(f"\nMedian diagonal Spearman rho: {corr_df['rho'].median():.3f}")
-print(f"Range: {corr_df['rho'].min():.3f} - {corr_df['rho'].max():.3f}")
-print(f"Lowest cluster: {corr_df['rho'].idxmin()} "
-      f"(rho={corr_df['rho'].min():.3f})")
+valid   = corr_df['rho'].dropna()
+print(f"\nMedian diagonal Spearman rho: {valid.median():.3f}")
+print(f"Range: {valid.min():.3f} - {valid.max():.3f}")
+print(f"Lowest cluster: {valid.idxmin()} (rho={valid.min():.3f})")
 print(corr_df)
 
 rho_matrix.to_csv(f"{args.outdir}/pseudobulk_spearman_matrix.csv")
@@ -514,19 +738,81 @@ print(f"Clusters (PIPseq): {n_clusters_pipseq}")
 print(f"  10x has {n_clusters_10x - n_clusters_pipseq} more clusters than PIPseq")
 
 def genes_per_cluster(adata, cluster_key, gene_col='n_genes'):
-    return adata.obs.groupby(cluster_key)[gene_col].median()
+    return adata.obs.groupby(cluster_key, observed=False)[gene_col].median()
 
 gpc_10x    = genes_per_cluster(tenx,   args.cluster_key)
 gpc_pipseq = genes_per_cluster(pipseq, args.cluster_key)
-print(f"\nMedian genes/cell per cluster:")
-print(f"  10x:    median={gpc_10x.median():.0f}, "
-      f"range={gpc_10x.min():.0f}-{gpc_10x.max():.0f}")
-print(f"  PIPseq: median={gpc_pipseq.median():.0f}, "
-      f"range={gpc_pipseq.min():.0f}-{gpc_pipseq.max():.0f}")
 
-gpc_df = pd.DataFrame({'10x': gpc_10x, 'pipseq': gpc_pipseq})
+# Drop clusters with no cells in either platform
+gpc_shared = pd.DataFrame({'10x': gpc_10x, 'pipseq': gpc_pipseq}).dropna()
+
+from scipy.stats import mannwhitneyu
+mwu_stat, mwu_pval = mannwhitneyu(
+    gpc_shared['10x'], gpc_shared['pipseq'],
+    alternative='two-sided'
+)
+
+print(f"\nMedian genes/cell per cluster:")
+print(f"  10x:    median={gpc_shared['10x'].median():.0f}, "
+      f"range={gpc_shared['10x'].min():.0f}-{gpc_shared['10x'].max():.0f}")
+print(f"  PIPseq: median={gpc_shared['pipseq'].median():.0f}, "
+      f"range={gpc_shared['pipseq'].min():.0f}-{gpc_shared['pipseq'].max():.0f}")
+print(f"  Mann-Whitney U: U={mwu_stat:.0f}, p={mwu_pval:.4e} "
+      f"(two-sided, n={len(gpc_shared)} shared clusters)")
+print(f"\n  Manuscript: median {gpc_shared['10x'].median():.0f} genes/cell for 10x "
+      f"vs. {gpc_shared['pipseq'].median():.0f} for PIPseq "
+      f"(Mann-Whitney U={mwu_stat:.0f}, p={mwu_pval:.2e})")
+
+gpc_df = gpc_shared.copy()
 gpc_df.to_csv(f"{args.outdir}/genes_per_cluster.csv")
 print(f"Genes per cluster -> {args.outdir}/genes_per_cluster.csv")
+
+# Plot: boxplot of genes per cluster per platform
+fig, ax = plt.subplots(figsize=(4, 5))
+gpc_long = gpc_shared.reset_index().melt(
+    id_vars=args.cluster_key, var_name='platform', value_name='median_genes'
+)
+platform_order = ['10x', 'pipseq']
+colors = ['#4878CF', '#D65F5F']
+for i, (platform, color) in enumerate(zip(platform_order, colors)):
+    vals = gpc_long[gpc_long['platform'] == platform]['median_genes'].dropna()
+    bp = ax.boxplot(
+        vals, positions=[i], widths=0.4,
+        patch_artist=True,
+        boxprops=dict(facecolor=color, alpha=0.7),
+        medianprops=dict(color='black', linewidth=2),
+        whiskerprops=dict(color='black'),
+        capprops=dict(color='black'),
+        flierprops=dict(marker='o', markerfacecolor=color, markersize=5, alpha=0.7)
+    )
+    # Overlay individual cluster points
+    ax.scatter(
+        np.random.normal(i, 0.05, size=len(vals)),
+        vals, color=color, alpha=0.6, s=20, zorder=3
+    )
+
+# Significance bracket
+y_max = gpc_shared.values.max()
+y_bracket = y_max * 1.08
+ax.plot([0, 0, 1, 1], [y_bracket, y_bracket * 1.02,
+                        y_bracket * 1.02, y_bracket], color='black', lw=1)
+pval_label = (f"p = {mwu_pval:.2e}" if mwu_pval >= 1e-4
+              else f"p = {mwu_pval:.2e}")
+ax.text(0.5, y_bracket * 1.03, pval_label,
+        ha='center', va='bottom', fontsize=9)
+
+ax.set_xticks([0, 1])
+ax.set_xticklabels(['10x Chromium', 'PIPseq T2'], fontsize=11)
+ax.set_ylabel("Median genes detected per cell\n(per cluster)", fontsize=10)
+ax.set_title("Genes per cluster by platform", fontsize=11, pad=10)
+ax.spines[['top', 'right']].set_visible(False)
+
+plt.tight_layout()
+for ext in ('pdf', 'png'):
+    fig.savefig(f"{args.outdir}/genes_per_cluster_boxplot.{ext}",
+                dpi=300, bbox_inches='tight')
+    print(f"Saved: {args.outdir}/genes_per_cluster_boxplot.{ext}")
+plt.close()
 
 print(f"\nPseudo-bulk Spearman rho (diagonal, marker genes):")
 print(f"  Median: {corr_df['rho'].median():.3f}")
@@ -561,8 +847,7 @@ outliers = recovery_df[
     (recovery_df['n_pipseq'] > 50)
 ].index.tolist()
 
-# Well-sampled = at least 10 PIPseq cells
-well_sampled = recovery_df[recovery_df['n_pipseq'] >= 10].index.tolist()
+# well_sampled already defined after recovery_df above
 well_no_out  = [c for c in well_sampled if c not in outliers]
 
 lt_all   = lt_recall_s[well_sampled]
