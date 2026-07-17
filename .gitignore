@@ -20,3 +20,4 @@ rRNA_analysis/
 cell_culture_system/figures
 cell_culture_system/scripts/
 library_qc/
+snakemake_scripts/analysis/mei_P26_wMel_scripts/

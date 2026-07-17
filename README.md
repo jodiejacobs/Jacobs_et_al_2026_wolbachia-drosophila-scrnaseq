@@ -93,10 +93,6 @@ A rendered rule graph is in `cell_culture_system/snakevision/pipeline_rulegraph.
 
 `parsing_scripts/notes_for_16S.txt` documents the manual workflow for pulling *Wolbachia* 16S reads out of a BUS file (`bustools capture` → `bustools text` → `filter_fastq.py`) for downstream QC/mapping outside the main Snakemake DAG. Titer quantification scripts live in `parsing_scripts/analysis/wolbachia_titer_analysis.py` and its batch wrappers.
 
-## Gene program × titer sub-analysis
-
-`snakemake_scripts/analysis/mei_P26_wMel_scripts/readme` documents a four-step standalone workflow (`gsea_clusters.py` → `nmf_gsea_classification.py` → `nmf_titer_analysis.py` → `nmf_titer_interpretation.py` → `nmf_summary.py`) correlating discovered NMF gene programs with *Wolbachia* titer.
-
 ## Citation
 
 If you use this pipeline, please cite Jacobs et al. 2026 (citation details to be added on publication).
