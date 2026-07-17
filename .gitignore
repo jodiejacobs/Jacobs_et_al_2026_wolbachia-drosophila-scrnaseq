@@ -18,3 +18,4 @@ library_qc/qc_plots/*
 reference/
 rRNA_analysis/
 cell_culture_system/figures
+cell_culture_system/scripts/

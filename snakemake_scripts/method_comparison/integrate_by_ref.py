@@ -1068,6 +1068,105 @@ def q2_phase_distribution_vs_titer(obs, fig_dir, sample,
     plt.close()
     print(f"   -> {out}")
 
+# -----------------------------------------------------------------------------
+# Q5 -- JW18DOX-Ctrl vs JW18DOX-SV only (procedure effect, no infection)
+# -----------------------------------------------------------------------------
+
+def q5_ctrl_vs_svctrl_barplot(
+    query_obs,
+    ref_full,
+    fig_dir,
+    sample,
+    stage_col="cyclum_stage",
+    query_stage_col="cc_stage",
+):
+    """
+    Two-bar comparison: JW18DOX-Ctrl (reference) vs JW18DOX-SV (shell vial
+    control, contaminated pipseq rep excluded upstream). Isolates the effect
+    of the shell vial injection procedure itself, independent of infection.
+    """
+    print(f"\n-- Q5: JW18DOX-Ctrl vs JW18DOX-SV --")
+    os.makedirs(fig_dir, exist_ok=True)
+
+    if "is_sv_ctrl" not in query_obs.columns:
+        print("   SKIP: 'is_sv_ctrl' not in query obs -- run load_query_files "
+              "with the current version of this script"); return
+
+    pal = _cc_palette(CC_ORDER)
+
+    ctrl = ref_full.obs[[stage_col]].copy()
+    ctrl["_cc_stage"] = ctrl[stage_col].astype(str).str.strip().str.lower()
+    ctrl["_label"] = "JW18DOX-Ctrl"
+
+    sv = query_obs.loc[query_obs["is_sv_ctrl"].astype(bool), [query_stage_col]].copy()
+    sv["_cc_stage"] = sv[query_stage_col].astype(str).str.strip().str.lower()
+    sv["_label"] = "JW18DOX-SV"
+
+    if len(sv) == 0:
+        print("   SKIP: no JW18DOX-SV cells found in query obs"); return
+
+    rows = pd.concat([ctrl[["_label", "_cc_stage"]], sv[["_label", "_cc_stage"]]],
+                      ignore_index=True)
+    rows = rows[rows["_cc_stage"].notna() &
+                (rows["_cc_stage"] != "nan") & (rows["_cc_stage"] != "NA")]
+
+    stages = [s for s in CC_ORDER if s in rows["_cc_stage"].unique()]
+    stages += [s for s in rows["_cc_stage"].unique() if s not in stages]
+
+    labels = ["JW18DOX-Ctrl", "JW18DOX-SV"]
+    ct = pd.crosstab(rows["_cc_stage"], rows["_label"]).reindex(
+        index=stages, columns=labels, fill_value=0)
+    ct["ALL"] = ct.sum(axis=1)
+    ct.to_csv(os.path.join(fig_dir, f"q5_ctrl_vs_svctrl_counts_{sample}.csv"))
+
+    col_totals = ct[labels].sum(axis=0)
+
+    chi2_stat, _, dof, _ = chi2_contingency(ct[labels].values)
+    p_val, log10_p = chi2_p_exact(chi2_stat, dof)
+    p_str = format_p(p_val, log10_p)
+    print(f"   chi2={chi2_stat:.3f}, df={dof}, {p_str}")
+
+    pd.DataFrame({
+        "comparison": ["JW18DOX-Ctrl vs JW18DOX-SV"],
+        "chi2":       [chi2_stat],
+        "dof":        [dof],
+        "p_value":    [p_val],
+        "log10_p":    [log10_p],
+        "n_ctrl":     [col_totals["JW18DOX-Ctrl"]],
+        "n_sv":       [col_totals["JW18DOX-SV"]],
+    }).to_csv(os.path.join(fig_dir, f"q5_ctrl_vs_svctrl_chisq_{sample}.csv"), index=False)
+
+    prop = ct[labels].div(col_totals, axis=1) * 100
+
+    fig, ax = plt.subplots(figsize=(4.5, 5))
+    bottom = np.zeros(2)
+    for stage in stages:
+        vals = prop.loc[stage, labels].values.astype(float)
+        ax.bar(np.arange(2), vals, bottom=bottom,
+               color=pal.get(stage, "#aaaaaa"), label=stage, width=0.6)
+        for xi, (v, b) in enumerate(zip(vals, bottom)):
+            if v > 5:
+                ax.text(xi, b + v / 2, f"{v:.0f}%", ha="center", va="center",
+                        fontsize=8, color="white", fontweight="bold")
+        bottom += vals
+
+    ax.set_xticks(np.arange(2))
+    ax.set_xticklabels(
+        [f"{lbl}\n(n={col_totals[lbl]})" for lbl in labels], fontsize=9)
+    ax.set_ylabel("% of cells")
+    ax.set_ylim(0, 108)
+    ax.set_title(
+        f"CC phase: JW18DOX-Ctrl vs JW18DOX-SV\n{p_str}, chi2={chi2_stat:.2f}, df={dof}",
+        fontweight="bold")
+    ax.legend(title="CC stage", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=9)
+
+    plt.tight_layout()
+    out = os.path.join(fig_dir, f"q5_ctrl_vs_svctrl_{sample}.pdf")
+    plt.savefig(out, bbox_inches="tight", dpi=150)
+    plt.close()
+    print(f"   -> {out}")
+
+    return prop
 
 # -----------------------------------------------------------------------------
 # Standalone publication-sized UMAP helpers (2.75 x 2.032 in)
@@ -1395,6 +1494,7 @@ def run(ref_path, query_paths, out_path, fig_dir, sample,
     obs  = query.obs.copy()
     umap = query.obsm.get("X_umap", None)
 
+
     q4_cc_distribution_by_sample(
         query_obs=obs,
         ref_full=ref_full,
@@ -1405,6 +1505,15 @@ def run(ref_path, query_paths, out_path, fig_dir, sample,
         titer_col=titer_col,
         sample_label_col=sample_label_col,
         n_titer_bins=n_titer_bins,
+    )
+    
+    q5_ctrl_vs_svctrl_barplot(
+        query_obs=obs,
+        ref_full=ref_full,
+        fig_dir=fig_dir,
+        sample=sample,
+        stage_col=stage_col,
+        query_stage_col="cc_stage",
     )
 
     q1_titer_vs_pseudotime(
