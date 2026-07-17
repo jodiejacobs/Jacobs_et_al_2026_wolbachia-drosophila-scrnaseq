@@ -1,0 +1,5 @@
+reference/**/*.sa filter=lfs diff=lfs merge=lfs -text
+reference/**/SA filter=lfs diff=lfs merge=lfs -text
+reference/**/SAindex filter=lfs diff=lfs merge=lfs -text
+reference/**/Genome filter=lfs diff=lfs merge=lfs -text
+reference/** filter=lfs diff=lfs merge=lfs -text

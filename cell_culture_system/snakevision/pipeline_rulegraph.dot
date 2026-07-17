@@ -1,0 +1,58 @@
+Conditions with both methods for comparison: ['JW18DOX-Ctrl', 'JW18DOX-SV-D1', 'JW18wMel-Ctrl', 'JW18wMel-SV-D1']
+Conditions: ['JW18DOX-Ctrl', 'JW18DOX-SV-D1', 'JW18wMel-Ctrl', 'JW18wMel-SV-D1', 'JW18wMel-SV-D7', 'JW18wMel-SV-D28', 'JW18wMel-SV-D56']
+Replicates: [1, 2, 3]
+Sequencing Platforms: ['pipseq', '10x']
+Sample IDs: ['JW18DOX-Ctrl-1_pipseq', 'JW18DOX-Ctrl-2_pipseq', 'JW18DOX-SV-D1-1_pipseq', 'JW18DOX-SV-D1-2_pipseq', 'JW18wMel-Ctrl-1_pipseq', 'JW18wMel-Ctrl-2_pipseq', 'JW18wMel-SV-D1-1_pipseq', 'JW18wMel-SV-D1-2_pipseq', 'JW18DOX-Ctrl-1_10x', 'JW18DOX-Ctrl-2_10x', 'JW18DOX-SV-D1-1_10x', 'JW18DOX-SV-D1-2_10x', 'JW18wMel-Ctrl-1_10x', 'JW18wMel-Ctrl-2_10x', 'JW18wMel-SV-D1-1_10x', 'JW18wMel-SV-D1-2_10x', 'JW18DOX-Ctrl-3_pipseq', 'JW18wMel-Ctrl-3_pipseq', 'JW18wMel-SV-D7-1_pipseq', 'JW18wMel-SV-D7-2_pipseq', 'JW18wMel-SV-D28-1_pipseq', 'JW18wMel-SV-D28-2_pipseq', 'JW18wMel-SV-D56-1_pipseq', 'JW18wMel-SV-D56-2_pipseq']
+Condition-Platform combinations: [('JW18DOX-Ctrl', 'pipseq'), ('JW18DOX-SV-D1', 'pipseq'), ('JW18wMel-Ctrl', 'pipseq'), ('JW18wMel-SV-D1', 'pipseq'), ('JW18DOX-Ctrl', '10x'), ('JW18DOX-SV-D1', '10x'), ('JW18wMel-Ctrl', '10x'), ('JW18wMel-SV-D1', '10x'), ('JW18wMel-SV-D7', 'pipseq'), ('JW18wMel-SV-D28', 'pipseq'), ('JW18wMel-SV-D56', 'pipseq')]
+digraph snakemake_dag {
+    graph[bgcolor=white, margin=0];
+    node[shape=box, style=rounded, fontname=sans,                 fontsize=10, penwidth=2];
+    edge[penwidth=2, color=grey];
+	0[label = "all", color = "0.03 0.6 0.85", style="rounded"];
+	1[label = "filter_h5ad", color = "0.27 0.6 0.85", style="rounded"];
+	2[label = "map_pipseq", color = "0.37 0.6 0.85", style="rounded"];
+	3[label = "align_gene_reads", color = "0.00 0.6 0.85", style="rounded"];
+	4[label = "calculate_coverage", color = "0.10 0.6 0.85", style="rounded"];
+	5[label = "summarize_blast", color = "0.63 0.6 0.85", style="rounded"];
+	6[label = "blast_16s", color = "0.07 0.6 0.85", style="rounded"];
+	7[label = "extract_16s_sequences", color = "0.20 0.6 0.85", style="rounded"];
+	8[label = "plot_coverage_by_group", color = "0.57 0.6 0.85", style="rounded"];
+	9[label = "plot_blast_by_group", color = "0.53 0.6 0.85", style="rounded"];
+	10[label = "integrate", color = "0.30 0.6 0.85", style="rounded"];
+	11[label = "cell_cycle_analysis", color = "0.13 0.6 0.85", style="rounded"];
+	12[label = "cluster_marker_pathway", color = "0.17 0.6 0.85", style="rounded"];
+	13[label = "run_sceptic", color = "0.60 0.6 0.85", style="rounded"];
+	14[label = "nmf_programs", color = "0.50 0.6 0.85", style="rounded"];
+	15[label = "nmf_continuous_var", color = "0.47 0.6 0.85", style="rounded"];
+	16[label = "nmf_categorical_var", color = "0.43 0.6 0.85", style="rounded"];
+	17[label = "nmf_annotate_programs", color = "0.40 0.6 0.85", style="rounded"];
+	11 -> 0
+	4 -> 0
+	9 -> 0
+	13 -> 0
+	15 -> 0
+	8 -> 0
+	3 -> 0
+	5 -> 0
+	10 -> 0
+	14 -> 0
+	12 -> 0
+	16 -> 0
+	17 -> 0
+	1 -> 0
+	2 -> 1
+	3 -> 4
+	6 -> 5
+	7 -> 6
+	3 -> 7
+	4 -> 8
+	5 -> 9
+	1 -> 10
+	10 -> 11
+	11 -> 12
+	14 -> 13
+	11 -> 14
+	14 -> 15
+	14 -> 16
+	14 -> 17
+}            
