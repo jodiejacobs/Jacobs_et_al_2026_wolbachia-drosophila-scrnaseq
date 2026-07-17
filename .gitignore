@@ -1,4 +1,4 @@
-
+in_vivo_translation/
 cell_culture_system/.snakemake/
 .snakemake/
 cell_culture_system/results*
@@ -16,3 +16,5 @@ in_vivo_translation/logs/
 reference/fbgn_annotation_ID_fb_2025_04.tsv.gz
 library_qc/qc_plots/*
 reference/
+rRNA_analysis/
+
