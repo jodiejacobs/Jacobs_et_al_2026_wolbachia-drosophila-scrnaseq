@@ -16,7 +16,6 @@ Snakemake pipeline and analysis scripts for single-cell RNA-seq profiling of *w*
   - `quality_control/` — QC plots and metrics on aligned/filtered data.
   - `method_comparison/` — integration across 10x/PIP-seq platforms, cell cycle scoring, cluster marker and pathway analysis, pseudotime (tradeSeq), NMF program discovery/annotation, SCEPTIC, and platform concordance validation.
   - `analysis/` — cell cycle (Cyclum) analysis, NMF program annotation, GSEA, Wolbachia titer analysis.
-  - `analysis/mei_P26_wMel_scripts/` — a focused sub-analysis correlating NMF gene programs with *Wolbachia* titer (see its `readme` for the run order and headline result).
   - `plotting/` — summary statistics and QC histogram plotting.
 - `parsing_scripts/` — standalone scripts for extracting/summarizing 16S and *Wolbachia* titer reads from raw data, independent of the main Snakemake run (`analysis/`, `data_processing/`, `extract_by_barcode_list.py`, `notes_for_16S.txt`).
 - `blast_db/` — prebuilt BLAST database (16S ribosomal RNA + *Wolbachia*) used to classify captured 16S reads.
