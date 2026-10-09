@@ -9,7 +9,7 @@ import os
 configfile: "config/config.yaml"
 SCANPY_ENV = config["scanpy_env"]
 CYCLUM_ENV = config["cyclum_env"]
-
+CONDA_BASE = os.path.dirname(os.path.dirname(SCANPY_ENV))
 
 # Load samples information
 samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
@@ -170,8 +170,10 @@ rule map_pipseq:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate kallisto_bustools
+        set -u
 
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
@@ -222,8 +224,10 @@ rule map_10x:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate kallisto_bustools
+        set -u        
         
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
@@ -263,8 +267,10 @@ rule filter_h5ad:
         echo "Starting filtering for {wildcards.sample_id}"
         echo "Input file: {input}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input} \
@@ -297,8 +303,10 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
         echo "Starting cell cycle annotation for {wildcards.sample_id}"
         echo "Input file: {input.h5ad}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -331,8 +339,11 @@ rule combine_files_by_condition_platform:
         slurm_time = config["combine_time"]
     shell:
         """
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
+
         python {params.combine_script} --files {input.input_files} --out_path {output.combined} --fig_dir {params.fig_dir} --sample {params.sample} --batch_key batch --min_cells 3 --min_genes 200
         """
 
@@ -361,8 +372,10 @@ rule align_gene_reads:
         # exec > {log} 2>&1
         echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
 
         # Make the directory
         mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
@@ -409,9 +422,11 @@ rule calculate_coverage:
         exec > {log} 2>&1
         echo "Calculating coverage for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
-        
+        set -u
+
         samtools depth {input.bam} > {output.cov}
         
         echo "Coverage calculation complete"
@@ -436,8 +451,10 @@ rule extract_16s_sequences:
         exec > {log} 2>&1
         echo "Extracting 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         # Extract reads mapping to 16S region
         samtools fasta {input.bam} > {output.fasta}
@@ -465,8 +482,10 @@ rule blast_16s:
         exec > {log} 2>&1
         echo "Running BLAST for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         blastn -db {params.db} \
             -query {input.fasta} \
@@ -532,8 +551,10 @@ rule plot_coverage_by_group:
         exec > {log} 2>&1
         echo "Plotting coverage for {wildcards.condition}_{wildcards.seq_platform}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         mkdir -p {output.plot_dir}
         
@@ -572,8 +593,10 @@ rule plot_blast_by_group:
         exec > {log} 2>&1
         echo "Plotting BLAST results for {wildcards.condition}_{wildcards.seq_platform}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         mkdir -p {output.plot_dir}
         
@@ -609,8 +632,10 @@ rule extract_abundant_16s:
         exec > {log} 2>&1
         echo "Extracting abundant 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         # Extract IDs with at least min_reads reads
         awk -v min={params.min_reads} '$1 >= min {{print $2}}' {input.summary} > {output.ids}
@@ -651,9 +676,11 @@ rule integrate_uninfected:
         """
         exec > {log} 2>&1
         echo "Starting integration of uninfected samples"
-
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --files {params.files} \
@@ -696,8 +723,10 @@ rule integrate:
         exec > {log} 2>&1
         echo "Starting integration"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --files {input.files} \
@@ -734,9 +763,11 @@ rule cell_cycle_analysis_uninfected:
         echo "Starting cell cycle annotation for Uninfected samples"
         echo "Input file: {input.h5ad}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
-
+        set -u
+        
         python {params.script} \
             --input {input.h5ad} \
             --output {output.annotated_h5ad}
@@ -770,8 +801,10 @@ rule cyclum_analysis_uninfected:
         echo "Starting cell cycle annotation for Uninfected samples"
         echo "Input file: {input.h5ad}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -806,8 +839,10 @@ rule cell_cycle_analysis:
         exec > {log} 2>&1
         echo "Starting cell cycle analysis"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input        {input.h5ad} \
@@ -841,7 +876,10 @@ rule project_to_cell_cycle:
         exec > {log} 2>&1
         echo "Starting cell cycle projection"   
 
-        mamba activate scanpy 
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --query {input.query_h5ad} \
@@ -874,8 +912,10 @@ rule cluster_marker_pathway:
         exec > {log} 2>&1
         echo "Starting cluster marker and pathway analysis for {params.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input   {input.h5ad} \
@@ -914,8 +954,10 @@ rule run_sceptic:
         exec > {log} 2>&1
         echo "Starting SCEPTIC analysis for sample: {wildcards.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --h5ad          {input.h5ad} \
@@ -957,8 +999,10 @@ rule pseudotime_gene_importance:
         exec > {log} 2>&1
         echo "Starting pseudotime gene importance for {wildcards.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --h5ad        {input.h5ad} \
@@ -1001,8 +1045,10 @@ rule nmf_programs:
         exec > {log} 2>&1
         echo "Starting NMF program discovery"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -1043,8 +1089,10 @@ rule nmf_continuous_var:
         exec > {log} 2>&1
         echo "Starting NMF continuous variable analysis"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
         
         python {params.script} \
             --input {input.adata_with_programs} \
@@ -1079,8 +1127,10 @@ rule nmf_categorical_var:
         exec > {log} 2>&1
         echo "Starting NMF categorical variable analysis"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
         
         python {params.script} \
             --input {input.adata_with_programs} \
@@ -1123,8 +1173,10 @@ rule nmf_annotate_programs:
         exec > {log} 2>&1
         echo "Starting NMF program annotation"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input        {input.adata_with_programs} \
@@ -1167,8 +1219,10 @@ rule run_tradeseq:
         exec > {log} 2>&1
         echo "Starting tradeSeq for {wildcards.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         Rscript {params.script} \
             --counts   {input.counts} \
@@ -1226,8 +1280,10 @@ rule count_16s_reads:
         exec > {log} 2>&1
         echo "Counting 16S vs total reads for {wildcards.sample_id} - {wildcards.gene}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u  
 
         mkdir -p results/rRNA_analysis/read_counts/{wildcards.sample_id}
 
@@ -1288,8 +1344,10 @@ rule validate_platform_concordance:
         exec > {log} 2>&1
         echo "Starting platform concordance validation"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         mkdir -p {params.outdir}
 
