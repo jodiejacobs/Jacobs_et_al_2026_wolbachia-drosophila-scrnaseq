@@ -6,6 +6,7 @@ cell_culture_system/logs/
 cell_culture_system/results_v0/
 in_vivo_translation/results/
 in_vivo_translation/logs/
+cell_culture_system/figures*
 *.bam
 *.bam.bai
 *.sam
