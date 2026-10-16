@@ -1,6 +1,7 @@
 # Snakefile for processing scRNA-seq data with Snakemake and kallisto bustools
 # mamba activate snakemake #Needs snakemake>=9.0
-# snakemake --executor slurm --default-resources slurm_partition=medium slurm_time="2:00:00" runtime=120 mem_mb=8000 -j 16 -n 
+# snakemake --executor slurm --default-resources slurm_partition=medium runtime=120 mem_mb=8000 -j 16 -n
+# (rules set their own "runtime" resource in minutes via hms_to_minutes; slurm_time is not read by the SLURM executor plugin)
 
 import pandas as pd
 import os
@@ -72,6 +73,15 @@ def get_replicates_for_combo(condition, seq_platform):
     key = (condition, seq_platform)
     return CONDITION_PLATFORM_REPS.get(key, [])
 
+# snakemake-executor-plugin-slurm reads wall time only from "runtime"
+# (integer minutes); "slurm_time" is ignored. Convert "H:MM:SS" / "M:SS".
+def hms_to_minutes(time_str):
+    parts = [int(p) for p in str(time_str).split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    hours, minutes, seconds = parts
+    return max(hours * 60 + minutes + (1 if seconds else 0), 1)
+
 # Main rule that defines the final output
 rule all:
     input:
@@ -134,7 +144,7 @@ rule all:
                gene=config.get("target_genes", ["GQX67_05945"]))
 
 
-# Establish rule precedencex
+# Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
 ruleorder: map_10x > combine_files_by_condition_platform
 
@@ -162,7 +172,7 @@ rule map_pipseq:
     resources:
         slurm_partition = config["pipseeker_partition"],
         mem_mb = config["pipseeker_mem"],
-        slurm_time = config["pipseeker_time"]
+        runtime = hms_to_minutes(config["pipseeker_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -216,7 +226,7 @@ rule map_10x:
     resources:
         slurm_partition = config["cellranger_partition"],
         mem_mb = config["cellranger_mem"],
-        slurm_time = config["cellranger_time"]
+        runtime = hms_to_minutes(config["cellranger_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -241,7 +251,7 @@ rule map_10x:
             {input.read1} {input.read2} 
 
         echo "Moving h5ad file to final location"
-        # Move the h5ad file to the expected locatio
+        # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
         echo "10x processing complete for {params.sample_id}"
         """
@@ -260,7 +270,7 @@ rule filter_h5ad:
     resources:
         slurm_partition = config["filter_partition"],
         mem_mb = config["filter_mem"],
-        slurm_time = config["filter_time"]
+        runtime = hms_to_minutes(config["filter_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -296,7 +306,7 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
+        runtime = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -312,6 +322,9 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
             --input {input.h5ad} \
             --output {output.annotated_h5ad}
         
+        # NOTE: this gzips results/filtered_h5ad/{wildcards.sample_id}.h5ad, which
+        # integrate / integrate_uninfected also read. Dormant while nothing in
+        # rule all requests annotated_h5ad, but will trigger reruns if re-enabled.
         echo "Compressing filtered h5ad file"
         gzip {input.h5ad}
         echo "Cell cycle annotation complete for {wildcards.sample_id}"
@@ -336,7 +349,7 @@ rule combine_files_by_condition_platform:
     resources:
         slurm_partition = config["combine_partition"],
         mem_mb = config["combine_mem"],
-        slurm_time = config["combine_time"]
+        runtime = hms_to_minutes(config["combine_time"])
     shell:
         """
         set +u
@@ -366,7 +379,7 @@ rule align_gene_reads:
     resources:
         slurm_partition = "medium",
         mem_mb = 16000,
-        slurm_time = "2:00:00"
+        runtime = hms_to_minutes("2:00:00")
     shell:
         """
         # exec > {log} 2>&1
@@ -416,7 +429,7 @@ rule calculate_coverage:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
@@ -445,7 +458,7 @@ rule extract_16s_sequences:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
@@ -476,7 +489,7 @@ rule blast_16s:
     resources:
         slurm_partition = "medium",
         mem_mb = 32000,
-        slurm_time = "4:00:00"
+        runtime = hms_to_minutes("4:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -510,7 +523,7 @@ rule summarize_blast:
     resources:
         slurm_partition = "medium",
         mem_mb = 2000,
-        slurm_time = "15:00"
+        runtime = hms_to_minutes("15:00")
     shell:
         """
         exec > {log} 2>&1
@@ -545,7 +558,7 @@ rule plot_coverage_by_group:
     resources:
         slurm_partition = "medium",
         mem_mb = 8000,
-        slurm_time = "1:00:00"
+        runtime = hms_to_minutes("1:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -587,7 +600,7 @@ rule plot_blast_by_group:
     resources:
         slurm_partition = "medium",
         mem_mb = 8000,
-        slurm_time = "1:00:00"
+        runtime = hms_to_minutes("1:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -626,7 +639,7 @@ rule extract_abundant_16s:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
@@ -654,11 +667,12 @@ rule extract_abundant_16s:
 
 rule integrate_uninfected:
     input:
-        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "DOX" in s and "SV" not in s]),
+        # Matches the *DOX-Ctrl* glob the script previously read, so the
+        # declared inputs and the files actually integrated are the same set
+        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "DOX-Ctrl" in s]),
     output:
         integrated = "results/integrated/integrated_uninfected.h5ad",
     params:
-        files        = "results/filtered_h5ad/*DOX-Ctrl*.h5ad",
         script       = config["integrate_script"],
         sample       = "JW18DOX-Ctrl",
         fig_dir      = "results/integrated/figures_uninfected",
@@ -671,7 +685,7 @@ rule integrate_uninfected:
     resources:
         slurm_partition = config.get("integrate_partition", "medium"),
         mem_mb          = config.get("integrate_mem", 128000),
-        slurm_time      = config.get("integrate_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("integrate_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -683,7 +697,7 @@ rule integrate_uninfected:
         set -u
 
         python {params.script} \
-            --files {params.files} \
+            --files {input.files} \
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
@@ -691,8 +705,7 @@ rule integrate_uninfected:
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} \
-            --resolution {params.resolution} 
+            --fig_dir {params.fig_dir}
             
         echo "Integration of uninfected samples complete"
         """
@@ -703,7 +716,6 @@ rule integrate:
     output:
         integrated = "results/integrated/integrated.h5ad"
     params:
-        files         = "results/filtered_h5ad/*.h5ad",   
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
@@ -717,7 +729,7 @@ rule integrate:
     resources:
         slurm_partition = config.get("integrate_partition", "medium"),
         mem_mb          = config.get("integrate_mem", 128000),
-        slurm_time      = config.get("integrate_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("integrate_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -756,7 +768,7 @@ rule cell_cycle_analysis_uninfected:
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
+        runtime = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -788,13 +800,13 @@ rule cyclum_analysis_uninfected:
         n_top_genes  = config.get("cyclum_n_top_genes", 5),
         n_umap_genes = config.get("cyclum_n_umap_genes", 6),
     log:
-        "logs/cellcycle/cyclum_uninfected.log"
+        "logs/cellcycle/cyclum_uninfected_analysis.log"
     threads:
         config["cell_cycle_threads"]
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb          = config["cell_cycle_mem"],
-        slurm_time      = config["cell_cycle_time"]
+        runtime         = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -833,7 +845,7 @@ rule cell_cycle_analysis:
     resources:
         slurm_partition = config.get("cellcycle_partition", "medium"),
         mem_mb          = config.get("cellcycle_mem", 32000),
-        slurm_time      = config.get("cellcycle_time", "2:00:00")
+        runtime         = hms_to_minutes(config.get("cellcycle_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -870,7 +882,7 @@ rule project_to_cell_cycle:
     resources:
         slurm_partition = config.get("cellcycle_projection_partition", "medium"),
         mem_mb          = config.get("cellcycle_projection_mem", 32000),
-        slurm_time      = config.get("cellcycle_projection_time", "2:00:00")
+        runtime         = hms_to_minutes(config.get("cellcycle_projection_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -896,7 +908,9 @@ rule cluster_marker_pathway:
     params:
         script     = config["cluster_marker_pathway_script"],
         output_dir = "results/cluster_marker_pathway",
-        sample     = "wolbachia_infection",          # ← add this
+        sample     = "wolbachia_infection",
+        # NOTE: method and top_n are not passed to the script below, so the
+        # cluster_marker_de_method / cluster_marker_top_n config keys have no effect
         method     = config.get("cluster_marker_de_method", "wilcoxon"),
         top_n      = config.get("cluster_marker_top_n", 100)
     log:
@@ -906,7 +920,7 @@ rule cluster_marker_pathway:
     resources:
         slurm_partition = config.get("cluster_marker_partition", "medium"),
         mem_mb          = config.get("cluster_marker_mem", 64000),
-        slurm_time      = config.get("cluster_marker_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("cluster_marker_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -948,7 +962,7 @@ rule run_sceptic:
     resources:
         slurm_partition = config.get("sceptic_partition", "medium"),
         mem_mb          = config.get("sceptic_mem", 64000),
-        slurm_time      = config.get("sceptic_time", "4:00:00")
+        runtime         = hms_to_minutes(config.get("sceptic_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -970,6 +984,7 @@ rule run_sceptic:
 
         echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
+
 rule pseudotime_gene_importance:
     input:
         h5ad        = "results/sceptic/{sample}/sceptic_{sample}.h5ad",
@@ -993,7 +1008,7 @@ rule pseudotime_gene_importance:
     resources:
         slurm_partition = config.get("pseudotime_gene_partition", "medium"),
         mem_mb          = config.get("pseudotime_gene_mem", 64000),
-        slurm_time      = config.get("pseudotime_gene_time", "2:00:00")
+        runtime         = hms_to_minutes(config.get("pseudotime_gene_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1039,7 +1054,7 @@ rule nmf_programs:
     resources:
         slurm_partition = config.get("nmf_partition", "medium"),
         mem_mb          = config.get("nmf_mem", 64000),
-        slurm_time      = config.get("nmf_time", "4:00:00")
+        runtime         = hms_to_minutes(config.get("nmf_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1083,7 +1098,7 @@ rule nmf_continuous_var:
     resources:
         slurm_partition = config.get("nmf_continuous_partition", "medium"),
         mem_mb = config.get("nmf_continuous_mem", 32000),
-        slurm_time = config.get("nmf_continuous_time", "2:00:00")
+        runtime = hms_to_minutes(config.get("nmf_continuous_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1121,7 +1136,7 @@ rule nmf_categorical_var:
     resources:
         slurm_partition = config.get("nmf_categorical_partition", "medium"),
         mem_mb = config.get("nmf_categorical_mem", 32000),
-        slurm_time = config.get("nmf_categorical_time", "2:00:00")
+        runtime = hms_to_minutes(config.get("nmf_categorical_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1167,7 +1182,7 @@ rule nmf_annotate_programs:
     resources:
         slurm_partition = config.get("nmf_annotate_partition", "medium"),
         mem_mb          = config.get("nmf_annotate_mem",       32000),
-        slurm_time      = config.get("nmf_annotate_time",      "4:00:00")
+        runtime         = hms_to_minutes(config.get("nmf_annotate_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1193,6 +1208,7 @@ rule nmf_annotate_programs:
 
         echo "NMF program annotation complete"
         """
+
 rule run_tradeseq:
     input:
         counts = "results/pseudotime_genes/{sample}/tradeseq_inputs/counts_genesXcells.csv",
@@ -1213,7 +1229,7 @@ rule run_tradeseq:
     resources:
         slurm_partition = config.get("tradeseq_partition", "medium"),
         mem_mb          = config.get("tradeseq_mem", 128000),
-        slurm_time      = config.get("tradeseq_time", "12:00:00")
+        runtime         = hms_to_minutes(config.get("tradeseq_time", "12:00:00"))
     shell:
         """
         exec > {log} 2>&1
@@ -1274,7 +1290,7 @@ rule count_16s_reads:
     resources:
         slurm_partition = "medium",
         mem_mb          = 16000,
-        slurm_time      = "2:00:00"
+        runtime         = hms_to_minutes("2:00:00")
     shell:
         """
         exec > {log} 2>&1
@@ -1322,6 +1338,8 @@ rule validate_platform_concordance:
         jaccard    = "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
         pseudobulk = "results/validate_pipseq/pseudobulk_spearman_correlation.csv"
     params:
+        # NOTE: default lacks the "../" prefix the nmf_* defaults use; check it
+        # resolves from this directory if validate_platform_script isn't in config
         script          = config.get("validate_platform_script",
                               "snakemake_scripts/analysis/validate_platform_concordance.py"),
         outdir          = "results/validate_pipseq",
@@ -1338,7 +1356,7 @@ rule validate_platform_concordance:
     resources:
         slurm_partition = config.get("validate_platform_partition", "medium"),
         mem_mb          = config.get("validate_platform_mem", 64000),
-        slurm_time      = config.get("validate_platform_time", "4:00:00")
+        runtime         = hms_to_minutes(config.get("validate_platform_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1

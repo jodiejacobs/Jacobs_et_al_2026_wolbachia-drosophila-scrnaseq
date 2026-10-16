@@ -176,7 +176,7 @@ def identify_doublets(adata, fig_dir):
         min_gene_variability_pctl=85,
         n_prin_comps=n_components,
     )
-    scrub.call_doublets()
+    predicted_doublets = scrub.call_doublets(threshold=0.4)
     
     # Histogram only — scrublet UMAP removed (slow, not used downstream)
     print("Plotting scrublet histogram")
