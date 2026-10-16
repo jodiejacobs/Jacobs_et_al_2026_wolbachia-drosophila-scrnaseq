@@ -1,6 +1,7 @@
 # Snakefile for processing scRNA-seq data with Snakemake and kallisto bustools
 # mamba activate snakemake #Needs snakemake>=9.0
-# snakemake --executor slurm --default-resources slurm_partition=medium slurm_time="2:00:00" runtime=120 mem_mb=8000 -j 16 -n 
+# snakemake --executor slurm --default-resources slurm_partition=medium runtime=120 mem_mb=8000 -j 16 -n
+# (rules set their own "runtime" resource in minutes via hms_to_minutes; slurm_time is not read by the SLURM executor plugin)
 
 import pandas as pd
 import os
@@ -9,7 +10,7 @@ import os
 configfile: "config/config.yaml"
 SCANPY_ENV = config["scanpy_env"]
 CYCLUM_ENV = config["cyclum_env"]
-
+CONDA_BASE = os.path.dirname(os.path.dirname(SCANPY_ENV))
 
 # Load samples information
 samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
@@ -72,6 +73,15 @@ def get_replicates_for_combo(condition, seq_platform):
     key = (condition, seq_platform)
     return CONDITION_PLATFORM_REPS.get(key, [])
 
+# snakemake-executor-plugin-slurm reads wall time only from "runtime"
+# (integer minutes); "slurm_time" is ignored. Convert "H:MM:SS" / "M:SS".
+def hms_to_minutes(time_str):
+    parts = [int(p) for p in str(time_str).split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    hours, minutes, seconds = parts
+    return max(hours * 60 + minutes + (1 if seconds else 0), 1)
+
 # Main rule that defines the final output
 rule all:
     input:
@@ -81,35 +91,40 @@ rule all:
         #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
         #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
         # Use actual sample IDs for rRNA analysis
-        expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
-               sample_id=SAMPLE_IDS,
-               gene=config.get("target_genes", ["GQX67_05945"])),
-        expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
-               sample_id=SAMPLE_IDS,
-               gene=config.get("target_genes", ["GQX67_05945"])),
-        expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
-               sample_id=SAMPLE_IDS,
-               gene=config.get("target_genes", ["GQX67_05945"])),
-        expand("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}",
-               zip,
-               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
-               zip,
-               condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-               seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
         # Integration
         "results/integrated/integrated.h5ad",
         # Cell cycle for uninfected samples
         "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
         "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
+        # Validate PIPseq and 10X clustering
+        "results/validate_pipseq/label_transfer_confusion_matrix.csv",
+        "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
+        "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
         # Cell cycle
         "results/cellcycle/.done",
+        "results/integrated/integrated_by_cellcycle.h5ad",
         # Cluster marker + pathway analysis
-        expand("results/cluster_marker_pathway/{sample}/.done",
-               sample=["wolbachia_infection"]),
-        # SCEPTIC
+        "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
         expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/sceptic/{sample}/sceptic_{sample}.h5ad", 
             sample=["wolbachia_infection"]),
         expand("results/sceptic/{sample}/.done",
             sample=["wolbachia_infection"]),
@@ -117,9 +132,19 @@ rule all:
         "results/nmf_programs/.done",
         "results/nmf_continuous_var/.done",
         "results/nmf_categorical_var/.done",
-        "results/nmf_annotate_programs/program_cellcycle_overlap.csv"
+        "results/nmf_annotate_programs/program_cellcycle_overlap.csv",
+        expand("results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/.done",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/tradeseq.done",
+            sample=["wolbachia_infection"]),
+        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
+               sample_id=SAMPLE_IDS,
+               gene=config.get("target_genes", ["GQX67_05945"]))
 
-# Establish rule precedencex
+
+# Establish rule precedence
 ruleorder: map_pipseq > combine_files_by_condition_platform
 ruleorder: map_10x > combine_files_by_condition_platform
 
@@ -147,7 +172,7 @@ rule map_pipseq:
     resources:
         slurm_partition = config["pipseeker_partition"],
         mem_mb = config["pipseeker_mem"],
-        slurm_time = config["pipseeker_time"]
+        runtime = hms_to_minutes(config["pipseeker_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -155,15 +180,17 @@ rule map_pipseq:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate kallisto_bustools
+        set -u
 
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
             -i {params.kallisto_index} \
             --keep-tmp \
             -g {params.transcripts_to_genes} \
-            -x 0,0,16:0,16,28:1,0,0 \
+            -x 0,0,8,0,11,17,0,20,26,0,31,39:0,39,51:1,0,0 \
             -o {params.outdir} \
             -t {threads} \
             --h5ad \
@@ -199,7 +226,7 @@ rule map_10x:
     resources:
         slurm_partition = config["cellranger_partition"],
         mem_mb = config["cellranger_mem"],
-        slurm_time = config["cellranger_time"]
+        runtime = hms_to_minutes(config["cellranger_time"])
     shell:
         """
         exec > {log} 2>&1
@@ -207,8 +234,10 @@ rule map_10x:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate kallisto_bustools
+        set -u        
         
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
@@ -222,7 +251,7 @@ rule map_10x:
             {input.read1} {input.read2} 
 
         echo "Moving h5ad file to final location"
-        # Move the h5ad file to the expected locatio
+        # Move the h5ad file to the expected location
         mv {params.outdir}/counts_unfiltered/adata.h5ad {output.h5ad}
         echo "10x processing complete for {params.sample_id}"
         """
@@ -241,15 +270,17 @@ rule filter_h5ad:
     resources:
         slurm_partition = config["filter_partition"],
         mem_mb = config["filter_mem"],
-        slurm_time = config["filter_time"]
+        runtime = hms_to_minutes(config["filter_time"])
     shell:
         """
         exec > {log} 2>&1
         echo "Starting filtering for {wildcards.sample_id}"
         echo "Input file: {input}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input} \
@@ -275,20 +306,25 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
+        runtime = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
         echo "Starting cell cycle annotation for {wildcards.sample_id}"
         echo "Input file: {input.h5ad}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
             --output {output.annotated_h5ad}
         
+        # NOTE: this gzips results/filtered_h5ad/{wildcards.sample_id}.h5ad, which
+        # integrate / integrate_uninfected also read. Dormant while nothing in
+        # rule all requests annotated_h5ad, but will trigger reruns if re-enabled.
         echo "Compressing filtered h5ad file"
         gzip {input.h5ad}
         echo "Cell cycle annotation complete for {wildcards.sample_id}"
@@ -313,11 +349,14 @@ rule combine_files_by_condition_platform:
     resources:
         slurm_partition = config["combine_partition"],
         mem_mb = config["combine_mem"],
-        slurm_time = config["combine_time"]
+        runtime = hms_to_minutes(config["combine_time"])
     shell:
         """
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
+
         python {params.combine_script} --files {input.input_files} --out_path {output.combined} --fig_dir {params.fig_dir} --sample {params.sample} --batch_key batch --min_cells 3 --min_genes 200
         """
 
@@ -340,14 +379,16 @@ rule align_gene_reads:
     resources:
         slurm_partition = "medium",
         mem_mb = 16000,
-        slurm_time = "2:00:00"
+        runtime = hms_to_minutes("2:00:00")
     shell:
         """
         # exec > {log} 2>&1
         echo "Starting BWA alignment for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
 
         # Make the directory
         mkdir -p results/rRNA_analysis/alignment/{wildcards.sample_id}
@@ -388,15 +429,17 @@ rule calculate_coverage:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Calculating coverage for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
-        
+        set -u
+
         samtools depth {input.bam} > {output.cov}
         
         echo "Coverage calculation complete"
@@ -415,14 +458,16 @@ rule extract_16s_sequences:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Extracting 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         # Extract reads mapping to 16S region
         samtools fasta {input.bam} > {output.fasta}
@@ -444,14 +489,16 @@ rule blast_16s:
     resources:
         slurm_partition = "medium",
         mem_mb = 32000,
-        slurm_time = "4:00:00"
+        runtime = hms_to_minutes("4:00:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Running BLAST for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         blastn -db {params.db} \
             -query {input.fasta} \
@@ -476,7 +523,7 @@ rule summarize_blast:
     resources:
         slurm_partition = "medium",
         mem_mb = 2000,
-        slurm_time = "15:00"
+        runtime = hms_to_minutes("15:00")
     shell:
         """
         exec > {log} 2>&1
@@ -511,14 +558,16 @@ rule plot_coverage_by_group:
     resources:
         slurm_partition = "medium",
         mem_mb = 8000,
-        slurm_time = "1:00:00"
+        runtime = hms_to_minutes("1:00:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Plotting coverage for {wildcards.condition}_{wildcards.seq_platform}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         mkdir -p {output.plot_dir}
         
@@ -551,14 +600,16 @@ rule plot_blast_by_group:
     resources:
         slurm_partition = "medium",
         mem_mb = 8000,
-        slurm_time = "1:00:00"
+        runtime = hms_to_minutes("1:00:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Plotting BLAST results for {wildcards.condition}_{wildcards.seq_platform}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         mkdir -p {output.plot_dir}
         
@@ -588,14 +639,16 @@ rule extract_abundant_16s:
     resources:
         slurm_partition = "medium",
         mem_mb = 4000,
-        slurm_time = "30:00"
+        runtime = hms_to_minutes("30:00")
     shell:
         """
         exec > {log} 2>&1
         echo "Extracting abundant 16S sequences for {wildcards.sample_id} - {wildcards.gene}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate sra-tools
+        set -u
         
         # Extract IDs with at least min_reads reads
         awk -v min={params.min_reads} '$1 >= min {{print $2}}' {input.summary} > {output.ids}
@@ -614,16 +667,17 @@ rule extract_abundant_16s:
 
 rule integrate_uninfected:
     input:
-        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "DOX" in s and "SV" not in s]),
+        # Matches the *DOX-Ctrl* glob the script previously read, so the
+        # declared inputs and the files actually integrated are the same set
+        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "DOX-Ctrl" in s]),
     output:
         integrated = "results/integrated/integrated_uninfected.h5ad",
     params:
-        files        = "results/filtered_h5ad/*DOX-Ctrl*.h5ad",
         script       = config["integrate_script"],
         sample       = "JW18DOX-Ctrl",
         fig_dir      = "results/integrated/figures_uninfected",
         out_path     = "results/integrated/integrated_uninfected.h5ad",
-        resolution   = '1.0',
+        resolution   = '0.3',
     log:
         "logs/integrate/integrate_uninfected.log"   
     threads:
@@ -631,17 +685,19 @@ rule integrate_uninfected:
     resources:
         slurm_partition = config.get("integrate_partition", "medium"),
         mem_mb          = config.get("integrate_mem", 128000),
-        slurm_time      = config.get("integrate_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("integrate_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting integration of uninfected samples"
-
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
-            --files {params.files} \
+            --files {input.files} \
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
@@ -649,8 +705,7 @@ rule integrate_uninfected:
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} \
-            --resolution {params.resolution} 
+            --fig_dir {params.fig_dir}
             
         echo "Integration of uninfected samples complete"
         """
@@ -661,12 +716,11 @@ rule integrate:
     output:
         integrated = "results/integrated/integrated.h5ad"
     params:
-        files         = "results/filtered_h5ad/*.h5ad",   
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
         out_path      = "results/integrated/integrated.h5ad",
-        resolution    = config.get("integrate_resolution", 0.2),
+        resolution    = 0.2,
         bio_condition = config.get("integrate_bio_condition", "")
     log:
         "logs/integrate/integrate.log"
@@ -675,21 +729,23 @@ rule integrate:
     resources:
         slurm_partition = config.get("integrate_partition", "medium"),
         mem_mb          = config.get("integrate_mem", 128000),
-        slurm_time      = config.get("integrate_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("integrate_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting integration"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --files {input.files} \
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
-            --min_genes 200 \
+            --min_genes 700 \
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
@@ -712,16 +768,18 @@ rule cell_cycle_analysis_uninfected:
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
+        runtime = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
         echo "Starting cell cycle annotation for Uninfected samples"
         echo "Input file: {input.h5ad}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
-
+        set -u
+        
         python {params.script} \
             --input {input.h5ad} \
             --output {output.annotated_h5ad}
@@ -742,21 +800,23 @@ rule cyclum_analysis_uninfected:
         n_top_genes  = config.get("cyclum_n_top_genes", 5),
         n_umap_genes = config.get("cyclum_n_umap_genes", 6),
     log:
-        "logs/cellcycle/cyclum_uninfected.log"
+        "logs/cellcycle/cyclum_uninfected_analysis.log"
     threads:
         config["cell_cycle_threads"]
     resources:
         slurm_partition = config["cell_cycle_partition"],
         mem_mb          = config["cell_cycle_mem"],
-        slurm_time      = config["cell_cycle_time"]
+        runtime         = hms_to_minutes(config["cell_cycle_time"])
     shell:
         """
         exec > {log} 2>&1
         echo "Starting cell cycle annotation for Uninfected samples"
         echo "Input file: {input.h5ad}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -785,14 +845,16 @@ rule cell_cycle_analysis:
     resources:
         slurm_partition = config.get("cellcycle_partition", "medium"),
         mem_mb          = config.get("cellcycle_mem", 32000),
-        slurm_time      = config.get("cellcycle_time", "2:00:00")
+        runtime         = hms_to_minutes(config.get("cellcycle_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting cell cycle analysis"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input        {input.h5ad} \
@@ -804,44 +866,77 @@ rule cell_cycle_analysis:
         echo "Cell cycle analysis complete"
         """
 
+rule project_to_cell_cycle:
+    input:
+        query_h5ad = "results/integrated/integrated_with_cellcycle.h5ad",
+        ref_h5ad   = "results/integrated/integrated_uninfected_with_cellcycle.h5ad"
+    output:
+        projected_h5ad = "results/integrated/integrated_by_cellcycle.h5ad",
+        flag           = touch("results/cellcycle_projection/.done")
+    params:
+        script = config["project_cell_cycle_script"]
+    log:
+       "logs/cellcycle/projection.log"
+    threads:
+        config.get("cellcycle_projection_threads", 4)
+    resources:
+        slurm_partition = config.get("cellcycle_projection_partition", "medium"),
+        mem_mb          = config.get("cellcycle_projection_mem", 32000),
+        runtime         = hms_to_minutes(config.get("cellcycle_projection_time", "2:00:00"))
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting cell cycle projection"   
+
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        set -u
+
+        python {params.script} \
+            --query {input.query_h5ad} \
+            --ref {input.ref_h5ad} \
+            --out_path {output.projected_h5ad}
+        """
+
 rule cluster_marker_pathway:
     input:
         h5ad    = "results/integrated/integrated_with_cellcycle.h5ad",
         mapping = config["transcripts_to_genes"]
     output:
-        # Only markers are guaranteed — enrichment CSVs depend on having enough sig markers
-        markers_full  = "results/cluster_marker_pathway/{sample}_marker_genes_full.csv",
-        markers_top50 = "results/cluster_marker_pathway/{sample}_marker_genes_top50.csv",
-        flag          = touch("results/cluster_marker_pathway/{sample}/.done")
+        markers_top50 = "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
     params:
         script     = config["cluster_marker_pathway_script"],
         output_dir = "results/cluster_marker_pathway",
+        sample     = "wolbachia_infection",
+        # NOTE: method and top_n are not passed to the script below, so the
+        # cluster_marker_de_method / cluster_marker_top_n config keys have no effect
         method     = config.get("cluster_marker_de_method", "wilcoxon"),
         top_n      = config.get("cluster_marker_top_n", 100)
     log:
-        "logs/cluster_marker_pathway/{sample}.log"
+        "logs/cluster_marker_pathway.log"
     threads:
         config.get("cluster_marker_threads", 8)
     resources:
         slurm_partition = config.get("cluster_marker_partition", "medium"),
         mem_mb          = config.get("cluster_marker_mem", 64000),
-        slurm_time      = config.get("cluster_marker_time", "8:00:00")
+        runtime         = hms_to_minutes(config.get("cluster_marker_time", "8:00:00"))
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting cluster marker and pathway analysis for {wildcards.sample}"
+        echo "Starting cluster marker and pathway analysis for {params.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input   {input.h5ad} \
             --output  {params.output_dir} \
-            --sample  {wildcards.sample} \
-            --mapping {input.mapping} \
-            --method  {params.method} \
-            --top-n   {params.top_n}
-
+            --sample  {params.sample} \
+            --mapping {input.mapping} 
+            
         echo "Cluster marker and pathway analysis complete"
         """
 
@@ -851,6 +946,7 @@ rule run_sceptic:
     output:
         results = "results/sceptic/{sample}/sceptic_results_{sample}.csv",
         stats   = "results/sceptic/{sample}/sceptic_stats_{sample}.csv",
+        h5ad    = "results/sceptic/{sample}/sceptic_{sample}.h5ad", 
         flag    = touch("results/sceptic/{sample}/.done")
     params:
         script        = config["sceptic_script"],
@@ -866,14 +962,16 @@ rule run_sceptic:
     resources:
         slurm_partition = config.get("sceptic_partition", "medium"),
         mem_mb          = config.get("sceptic_mem", 64000),
-        slurm_time      = config.get("sceptic_time", "4:00:00")
+        runtime         = hms_to_minutes(config.get("sceptic_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting SCEPTIC analysis for sample: {wildcards.sample}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --h5ad          {input.h5ad} \
@@ -886,6 +984,49 @@ rule run_sceptic:
 
         echo "SCEPTIC analysis complete for {wildcards.sample}"
         """
+
+rule pseudotime_gene_importance:
+    input:
+        h5ad        = "results/sceptic/{sample}/sceptic_{sample}.h5ad",
+        done        = "results/sceptic/{sample}/.done",
+        program_dir = "results/nmf_programs/.done"
+    output:
+        summary  = "results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
+        spearman = "results/pseudotime_genes/{sample}/spearman_sig.csv",
+        counts   = "results/pseudotime_genes/{sample}/tradeseq_inputs/counts_genesXcells.csv",
+        pt       = "results/pseudotime_genes/{sample}/tradeseq_inputs/pseudotime.csv",
+        flag     = touch("results/pseudotime_genes/{sample}/.done")
+    params:
+        script      = config.get("pseudotime_gene_script",
+                          "scripts/method_comparison/pseudotime_gene_importance.py"),
+        outdir      = "results/pseudotime_genes/{sample}",
+        program_dir = "results/nmf_programs",
+    log:
+        "logs/pseudotime_genes/{sample}.log"
+    threads:
+        config.get("pseudotime_gene_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_gene_partition", "medium"),
+        mem_mb          = config.get("pseudotime_gene_mem", 64000),
+        runtime         = hms_to_minutes(config.get("pseudotime_gene_time", "2:00:00"))
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting pseudotime gene importance for {wildcards.sample}"
+
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        set -u
+
+        python {params.script} \
+            --h5ad        {input.h5ad} \
+            --outdir      {params.outdir} \
+            --program-dir {params.program_dir}
+
+        echo "Pseudotime gene importance complete for {wildcards.sample}"
+        """
+
 
 ##################################################################
 # Gene program and pathway analysis rules
@@ -913,14 +1054,16 @@ rule nmf_programs:
     resources:
         slurm_partition = config.get("nmf_partition", "medium"),
         mem_mb          = config.get("nmf_mem", 64000),
-        slurm_time      = config.get("nmf_time", "4:00:00")
+        runtime         = hms_to_minutes(config.get("nmf_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting NMF program discovery"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -955,14 +1098,16 @@ rule nmf_continuous_var:
     resources:
         slurm_partition = config.get("nmf_continuous_partition", "medium"),
         mem_mb = config.get("nmf_continuous_mem", 32000),
-        slurm_time = config.get("nmf_continuous_time", "2:00:00")
+        runtime = hms_to_minutes(config.get("nmf_continuous_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting NMF continuous variable analysis"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
         
         python {params.script} \
             --input {input.adata_with_programs} \
@@ -991,14 +1136,16 @@ rule nmf_categorical_var:
     resources:
         slurm_partition = config.get("nmf_categorical_partition", "medium"),
         mem_mb = config.get("nmf_categorical_mem", 32000),
-        slurm_time = config.get("nmf_categorical_time", "2:00:00")
+        runtime = hms_to_minutes(config.get("nmf_categorical_time", "2:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting NMF categorical variable analysis"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
         
         python {params.script} \
             --input {input.adata_with_programs} \
@@ -1035,14 +1182,16 @@ rule nmf_annotate_programs:
     resources:
         slurm_partition = config.get("nmf_annotate_partition", "medium"),
         mem_mb          = config.get("nmf_annotate_mem",       32000),
-        slurm_time      = config.get("nmf_annotate_time",      "4:00:00")
+        runtime         = hms_to_minutes(config.get("nmf_annotate_time", "4:00:00"))
     shell:
         """
         exec > {log} 2>&1
         echo "Starting NMF program annotation"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input        {input.adata_with_programs} \
@@ -1058,6 +1207,47 @@ rule nmf_annotate_programs:
             {params.skip_fly}
 
         echo "NMF program annotation complete"
+        """
+
+rule run_tradeseq:
+    input:
+        counts = "results/pseudotime_genes/{sample}/tradeseq_inputs/counts_genesXcells.csv",
+        pt     = "results/pseudotime_genes/{sample}/tradeseq_inputs/pseudotime.csv",
+    output:
+        assoc  = "results/pseudotime_genes/{sample}/tradeseq_association.csv",
+        sve    = "results/pseudotime_genes/{sample}/tradeseq_startvsend.csv",
+        sce    = "results/pseudotime_genes/{sample}/tradeseq_sce.rds",
+        flag   = touch("results/pseudotime_genes/{sample}/tradeseq.done")
+    params:
+        script = "scripts/method_comparison/run_tradeseq.R",
+        outdir = "results/pseudotime_genes/{sample}",
+        nknots = config.get("tradeseq_nknots", 6),
+    log:
+        "logs/tradeseq/{sample}.log"
+    threads:
+        config.get("tradeseq_threads", 16)
+    resources:
+        slurm_partition = config.get("tradeseq_partition", "medium"),
+        mem_mb          = config.get("tradeseq_mem", 128000),
+        runtime         = hms_to_minutes(config.get("tradeseq_time", "12:00:00"))
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting tradeSeq for {wildcards.sample}"
+
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        set -u
+
+        Rscript {params.script} \
+            --counts   {input.counts} \
+            --pt       {input.pt} \
+            --outdir   {params.outdir} \
+            --nknots   {params.nknots} \
+            --nworkers {threads}
+
+        echo "tradeSeq complete for {wildcards.sample}"
         """
 
 """
@@ -1081,3 +1271,113 @@ python scripts/method_comparison/cell_cycle_association.py \
     --force-retrain \
     --save-output
 """
+
+# Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample
+rule count_16s_reads:
+    input:
+        r2  = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        ref = config["ref_fasta"]
+    output:
+        counts = "results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt"
+    wildcard_constraints:
+        # Only allow sample_ids that currently exist in the dataframe
+        sample_id = "|".join(SAMPLE_IDS)
+    params:
+        region = config.get("rRNA_16S_region", "GQX67_05945::NZ_CP046925.1:1167785-1169290")
+    log:
+        "logs/count_16s/{sample_id}_{gene}.log"
+    threads: 8
+    resources:
+        slurm_partition = "medium",
+        mem_mb          = 16000,
+        runtime         = hms_to_minutes("2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Counting 16S vs total reads for {wildcards.sample_id} - {wildcards.gene}"
+
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate sra-tools
+        set -u  
+
+        mkdir -p results/rRNA_analysis/read_counts/{wildcards.sample_id}
+
+        SORTED=results/rRNA_analysis/read_counts/{wildcards.sample_id}/all_aligned.bam
+
+        # Align R2 to the combined Dmel + wMel rRNA reference, sort, index
+        bwa mem -t {threads} {input.ref} {input.r2} | \
+            samtools view -Sb | \
+            samtools sort -@ {threads} -o $SORTED
+        samtools index $SORTED
+
+        # Reads mapped to the 16S region (primary alignments only, excludes
+        # unmapped/secondary/supplementary via -F 0x904)
+        SIXTEEN_S=$(samtools view -c -F 0x904 $SORTED "{params.region}")
+
+        # Total reads in the input (all records in the BAM)
+        TOTAL=$(samtools view -c $SORTED)
+
+        # Mapped reads only (optional denominator if you prefer mapped over total)
+        MAPPED=$(samtools view -c -F 0x4 $SORTED)
+
+        # Write tab-delimited summary
+        printf "sample\\tgene\\tregion\\tsixteenS_reads\\ttotal_reads\\tmapped_reads\\n" > {output.counts}
+        printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \
+            "{wildcards.sample_id}" "{wildcards.gene}" "{params.region}" \
+            "$SIXTEEN_S" "$TOTAL" "$MAPPED" >> {output.counts}
+
+        echo "Done. 16S=$SIXTEEN_S  total=$TOTAL  mapped=$MAPPED"
+        """
+
+rule validate_platform_concordance:
+    input:
+        h5ad = "results/integrated/integrated.h5ad"
+    output:
+        confusion  = "results/validate_pipseq/label_transfer_confusion_matrix.csv",
+        jaccard    = "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
+        pseudobulk = "results/validate_pipseq/pseudobulk_spearman_correlation.csv"
+    params:
+        # NOTE: default lacks the "../" prefix the nmf_* defaults use; check it
+        # resolves from this directory if validate_platform_script isn't in config
+        script          = config.get("validate_platform_script",
+                              "snakemake_scripts/analysis/validate_platform_concordance.py"),
+        outdir          = "results/validate_pipseq",
+        embedding       = config.get("validate_platform_embedding", "X_pca_harmony"),
+        cluster_key     = config.get("validate_platform_cluster_key", "leiden"),
+        platform_key    = config.get("validate_platform_method_key", "method"),
+        n_markers       = config.get("validate_platform_n_markers", 50),
+        n_neighbors_knn = config.get("validate_platform_knn_neighbors", 15),
+        counts_source   = config.get("validate_platform_counts_source", "raw")
+    log:
+        "logs/validate_platform/validate_platform_concordance.log"
+    threads:
+        config.get("validate_platform_threads", 8)
+    resources:
+        slurm_partition = config.get("validate_platform_partition", "medium"),
+        mem_mb          = config.get("validate_platform_mem", 64000),
+        runtime         = hms_to_minutes(config.get("validate_platform_time", "4:00:00"))
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting platform concordance validation"
+
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+        set -u
+
+        mkdir -p {params.outdir}
+
+        python {params.script} \
+            --h5ad {input.h5ad} \
+            --outdir {params.outdir} \
+            --embedding {params.embedding} \
+            --cluster_key {params.cluster_key} \
+            --platform_key {params.platform_key} \
+            --n_markers {params.n_markers} \
+            --n_neighbors_knn {params.n_neighbors_knn} \
+            --counts_source {params.counts_source}
+
+        echo "Platform concordance validation complete"
+        """
