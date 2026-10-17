@@ -1,0 +1,25 @@
+# Scribe-py is not pip-installable (legacy flit metadata). After creating this env:
+#   git clone https://github.com/aristoteleo/Scribe-py ../tools/Scribe-py
+# The Snakemake rules add that clone to PYTHONPATH (config: scribe_repo).
+# Tested import + causal_net_dynamics_coupling on Python 3.13, numpy 1.26, pandas 2.2, anndata 0.11.
+name: scribe
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy<2
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - statsmodels
+  - networkx
+  - anndata
+  - scanpy
+  - tqdm
+  - cvxopt
+  - loompy
+  - pip
+  - pip:
+      - pyccm

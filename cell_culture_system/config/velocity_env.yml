@@ -1,0 +1,19 @@
+name: velocity
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - numpy<2
+  - pandas
+  - scipy
+  - scanpy
+  - anndata
+  - matplotlib
+  - harmonypy
+  - scikit-misc
+  - igraph
+  - leidenalg
+  - pip
+  - pip:
+      - scvelo>=0.3.2

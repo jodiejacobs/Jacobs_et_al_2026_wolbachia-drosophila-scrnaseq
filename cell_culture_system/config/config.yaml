@@ -169,3 +169,26 @@ pseudotime_gene_threads: 16
 pseudotime_gene_mem: 128000   # tradeSeq is memory hungry — ~4GB per thread
 pseudotime_gene_time: "8:00:00"
 pseudotime_gene_time_partition: "medium"
+# ── RNA velocity (kb nac) + Scribe ── rules/velocity_scribe.smk
+# Same genome + GTF that built kallisto_index (snakemake_scripts/alignment/kb_notes.txt), so gene IDs match
+nac_genome_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.fa"
+nac_gtf: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.gtf"
+nac_ref_dir: "../reference/KB_Dmel_wMel_nac"
+nac_kallisto: "/private/home/jomojaco/kallisto/build/src/kallisto"  # needs kallisto >=0.50.1 for nac
+velocity_env: "/private/groups/russelllab/jodie/miniforge3/envs/velocity"
+velocity_platforms: ["pipseq", "10x"]
+velocity_neighbor_rep: "X_pca_harmony"   # or "recompute" (PCA + Harmony on spliced layer)
+velocity_mem: 256000
+velocity_time: "12:00:00"
+velocity_sceptic_sample: "wolbachia_infection"
+velocity_script_dir: "../snakemake_scripts/velocity"
+scribe_env: "/private/groups/russelllab/jodie/miniforge3/envs/scribe"
+scribe_repo: "../tools/Scribe-py"         # git clone https://github.com/aristoteleo/Scribe-py
+scribe_platform: "pipseq"
+scribe_regulator_list: "config/gene_lists/dmel_TF_GO0003700_FBgn.txt"  # build with snakemake_scripts/velocity/build_tf_list.py
+scribe_exclude_genes: "config/gene_lists/cell_cycle_FBgn.txt"        # S + G2/M genes from integrate_v2.py
+scribe_n_targets: 300
+scribe_max_regulators: 100
+scribe_max_cells: 5000
+scribe_n_chunks: 10
+scribe_chunk_time: "12:00:00"

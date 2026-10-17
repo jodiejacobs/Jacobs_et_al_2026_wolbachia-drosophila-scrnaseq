@@ -1381,3 +1381,8 @@ rule validate_platform_concordance:
 
         echo "Platform concordance validation complete"
         """
+
+##################################################################
+# RNA velocity + Scribe (pseudotime-independent); run: snakemake velocity_all
+##################################################################
+include: "rules/velocity_scribe.smk"
