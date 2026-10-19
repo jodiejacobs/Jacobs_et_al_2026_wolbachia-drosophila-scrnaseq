@@ -88,8 +88,8 @@ rule map_nac:
     threads: config["pipseeker_threads"]
     resources:
         slurm_partition = config["pipseeker_partition"],
-        mem_mb  = config["pipseeker_mem"],
-        runtime = hms_to_minutes(config["pipseeker_time"]),
+        mem_mb  = config.get("nac_mem", 128000),
+        runtime = hms_to_minutes(config.get("nac_time", "6:00:00")),
     shell:
         """
         exec > {log} 2>&1

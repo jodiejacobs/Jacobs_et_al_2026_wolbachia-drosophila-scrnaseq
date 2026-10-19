@@ -23,14 +23,18 @@ import urllib.request
 from collections import defaultdict
 
 ROOT = "GO:0003700"
-OBO_URL = "https://purl.obolibrary.org/obo/go/go-basic.obo"
+OBO_URL = "https://current.geneontology.org/ontology/go-basic.obo"
 GAF_URL = "https://s3ftp.flybase.org/releases/{release}/precomputed_files/go/gene_association.fb.gz"
 
 
 def fetch(url, dest):
+    # GO/FlyBase servers return 403 to urllib's default User-Agent
     if not os.path.exists(dest):
         print(f"Downloading {url}")
-        urllib.request.urlretrieve(url, dest)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (build_tf_list.py)"})
+        with urllib.request.urlopen(req) as r, open(dest, "wb") as fh:
+            while chunk := r.read(1 << 20):
+                fh.write(chunk)
     return dest
 
 

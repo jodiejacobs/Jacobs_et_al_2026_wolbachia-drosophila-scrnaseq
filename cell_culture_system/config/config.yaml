@@ -175,6 +175,8 @@ nac_genome_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophil
 nac_gtf: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.gtf"
 nac_ref_dir: "../reference/KB_Dmel_wMel_nac"
 nac_kallisto: "/private/home/jomojaco/kallisto/build/src/kallisto"  # needs kallisto >=0.50.1 for nac
+nac_mem: 128000        # per-sample kb count --workflow=nac (MB)
+nac_time: "6:00:00"   # nac index is larger than the transcript index; mapping is slower
 velocity_env: "/private/groups/russelllab/jodie/miniforge3/envs/velocity"
 velocity_platforms: ["pipseq", "10x"]
 velocity_neighbor_rep: "X_pca_harmony"   # or "recompute" (PCA + Harmony on spliced layer)
