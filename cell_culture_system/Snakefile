@@ -185,6 +185,9 @@ rule map_pipseq:
         conda activate kallisto_bustools
         set -u
 
+        # Remove partial kb output from a failed run; kb count fails if the folder exists
+        rm -rf {params.outdir}
+
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
             -i {params.kallisto_index} \
@@ -239,6 +242,9 @@ rule map_10x:
         conda activate kallisto_bustools
         set -u        
         
+        # Remove partial kb output from a failed run; kb count fails if the folder exists
+        rm -rf {params.outdir}
+
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
             -i {params.kallisto_index} \

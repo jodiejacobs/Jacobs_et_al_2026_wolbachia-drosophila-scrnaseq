@@ -94,6 +94,8 @@ rule map_nac:
         """
         exec > {log} 2>&1
         set +u; source {CONDA_BASE}/etc/profile.d/conda.sh; conda activate kallisto_bustools; set -u
+        # Remove partial kb output from a failed run; kb count fails if the folder exists
+        rm -rf {params.outdir}
         kb count --workflow=nac --kallisto {NAC_KALLISTO} \
             -i {input.idx} -g {input.t2g} -c1 {input.c1} -c2 {input.c2} \
             -x {params.tech} -o {params.outdir} -t {threads} --h5ad \
