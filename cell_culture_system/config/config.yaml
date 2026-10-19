@@ -194,3 +194,9 @@ scribe_max_regulators: 100
 scribe_max_cells: 5000
 scribe_n_chunks: 10
 scribe_chunk_time: "12:00:00"
+
+# count_16s_reads: bwa mem + sort of every R2 read; 2 h / 8 threads timed out on 10x libraries
+count_16s_threads: 16
+count_16s_mem: 32000
+count_16s_time: "12:00:00"
+count_16s_partition: "medium"

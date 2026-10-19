@@ -141,7 +141,12 @@ rule all:
             sample=["wolbachia_infection"]),
         expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
                sample_id=SAMPLE_IDS,
-               gene=config.get("target_genes", ["GQX67_05945"]))
+               gene=config.get("target_genes", ["GQX67_05945"])),
+        # RNA velocity + Scribe (same targets as velocity_all in rules/velocity_scribe.smk)
+        expand("results/velocity/velocity_{platform}.h5ad",
+               platform=config.get("velocity_platforms", ["pipseq", "10x"])),
+        "results/velocity/pseudotime_comparison/directionality_summary.csv",
+        f"results/scribe/{config.get('scribe_platform', 'pipseq')}/edges.csv",
 
 
 # Establish rule precedence
@@ -1292,11 +1297,11 @@ rule count_16s_reads:
         region = config.get("rRNA_16S_region", "GQX67_05945::NZ_CP046925.1:1167785-1169290")
     log:
         "logs/count_16s/{sample_id}_{gene}.log"
-    threads: 8
+    threads: config.get("count_16s_threads", 16)
     resources:
-        slurm_partition = "medium",
-        mem_mb          = 16000,
-        runtime         = hms_to_minutes("2:00:00")
+        slurm_partition = config.get("count_16s_partition", "medium"),
+        mem_mb          = config.get("count_16s_mem", 32000),
+        runtime         = hms_to_minutes(config.get("count_16s_time", "12:00:00"))
     shell:
         """
         exec > {log} 2>&1
