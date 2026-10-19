@@ -170,9 +170,9 @@ pseudotime_gene_mem: 128000   # tradeSeq is memory hungry — ~4GB per thread
 pseudotime_gene_time: "8:00:00"
 pseudotime_gene_time_partition: "medium"
 # ── RNA velocity (kb nac) + Scribe ── rules/velocity_scribe.smk
-# Same genome + GTF that built kallisto_index (snakemake_scripts/alignment/kb_notes.txt), so gene IDs match
-nac_genome_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.fa"
-nac_gtf: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S_fixed.gtf"
+# Combined Dmel + wMel + 16S genome/GTF; gene IDs must match kallisto_index's transcripts_to_genes.txt
+nac_genome_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster_wMel_combined_16S/Drosophila_melanogaster_wMel_combined_16S_fixed.fa"
+nac_gtf: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster_wMel_combined_16S/Drosophila_melanogaster_wMel_combined_16S_fixed.gtf"
 nac_ref_dir: "../reference/KB_Dmel_wMel_nac"
 nac_kallisto: "/private/home/jomojaco/kallisto/build/src/kallisto"  # needs kallisto >=0.50.1 for nac
 nac_mem: 128000        # per-sample kb count --workflow=nac (MB)
