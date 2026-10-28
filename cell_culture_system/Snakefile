@@ -115,8 +115,8 @@ rule all:
         "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
         # Validate PIPseq and 10X clustering
         "results/validate_pipseq/label_transfer_confusion_matrix.csv",
-        "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
-        "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
+        "results/validate_pipseq/directed_marker_overlap_with_pvals.csv",
+        "results/validate_pipseq/pseudobulk_spearman_matrix.csv",
         # Cell cycle
         "results/cellcycle/.done",
         "results/integrated/integrated_by_cellcycle.h5ad",
@@ -892,7 +892,7 @@ rule project_to_cell_cycle:
         config.get("cellcycle_projection_threads", 4)
     resources:
         slurm_partition = config.get("cellcycle_projection_partition", "medium"),
-        mem_mb          = config.get("cellcycle_projection_mem", 32000),
+        mem_mb          = config.get("cellcycle_projection_mem", 64000),
         runtime         = hms_to_minutes(config.get("cellcycle_projection_time", "2:00:00"))
     shell:
         """
@@ -1346,13 +1346,13 @@ rule validate_platform_concordance:
         h5ad = "results/integrated/integrated.h5ad"
     output:
         confusion  = "results/validate_pipseq/label_transfer_confusion_matrix.csv",
-        jaccard    = "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
-        pseudobulk = "results/validate_pipseq/pseudobulk_spearman_correlation.csv"
+        jaccard    = "results/validate_pipseq/directed_marker_overlap_with_pvals.csv",
+        pseudobulk = "results/validate_pipseq/pseudobulk_spearman_matrix.csv"
     params:
         # NOTE: default lacks the "../" prefix the nmf_* defaults use; check it
         # resolves from this directory if validate_platform_script isn't in config
         script          = config.get("validate_platform_script",
-                              "snakemake_scripts/analysis/validate_platform_concordance.py"),
+                              "../snakemake_scripts/analysis/validate_platform_concordance.py"),
         outdir          = "results/validate_pipseq",
         embedding       = config.get("validate_platform_embedding", "X_pca_harmony"),
         cluster_key     = config.get("validate_platform_cluster_key", "leiden"),
