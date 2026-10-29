@@ -258,7 +258,7 @@ def plot_pseudotime_by_cluster(pseudotime, metadata, fig_dir, sample):
         "cluster":    metadata[leiden_col].values,
     })
     clusters = sorted(df["cluster"].unique())
-    cmap = plt.cm.get_cmap("tab20")
+    cmap = plt.get_cmap("tab20")
     palette = {c: cmap(i % 20) for i, c in enumerate(clusters)}
 
     fig, ax = plt.subplots(figsize=(max(8, len(clusters) * 1.2), 5))
@@ -387,7 +387,7 @@ def plot_titer_vs_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=10):
         fig, axes = plt.subplots(nrows, ncols,
                                  figsize=(ncols * 4, nrows * 3.5), sharey=True)
         axes = np.array(axes).flatten()
-        cmap = plt.cm.get_cmap("tab20")
+        cmap = plt.get_cmap("tab20")
 
         for i, cluster in enumerate(clusters):
             ax = axes[i]
@@ -479,7 +479,7 @@ def analyze_cluster_pseudotime(pseudotime, metadata, fig_dir, sample, n_bins=20)
 
     clusters = sorted(df["cluster"].unique())
     n_clusters = len(clusters)
-    cmap = plt.cm.get_cmap("tab20")
+    cmap = plt.get_cmap("tab20")
     cluster_colors = {c: cmap(i % 20) for i, c in enumerate(clusters)}
 
     # ── Per-cluster summary stats ─────────────────────────────────────────────

@@ -198,7 +198,7 @@ def cell_cycle_correlations(adata, output_dir, sample_name,
                 adata.obs.loc[adata.obs[cc_phase_var] == ph, prog].dropna().values
                 for ph in phases
             ]
-            bp = ax.boxplot(data_for_box, labels=phases, patch_artist=True,
+            bp = ax.boxplot(data_for_box, tick_labels=phases, patch_artist=True,
                             showfliers=False, widths=0.5)
             for patch, ph in zip(bp["boxes"], phases):
                 patch.set_facecolor(palette.get(ph, "#aaa"))

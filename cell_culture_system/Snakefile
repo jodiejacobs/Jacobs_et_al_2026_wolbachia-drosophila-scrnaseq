@@ -892,7 +892,8 @@ rule project_to_cell_cycle:
         config.get("cellcycle_projection_threads", 4)
     resources:
         slurm_partition = config.get("cellcycle_projection_partition", "medium"),
-        mem_mb          = config.get("cellcycle_projection_mem", 64000),
+        # mem_mb          = config.get("cellcycle_projection_mem", 64000),
+        mem_mb          = 128000,
         runtime         = hms_to_minutes(config.get("cellcycle_projection_time", "2:00:00"))
     shell:
         """

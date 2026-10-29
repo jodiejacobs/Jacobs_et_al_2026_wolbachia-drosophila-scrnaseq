@@ -148,7 +148,7 @@ def plot_transcriptional_activity(adata, output_dir, sample_name):
         (axes[1], 'n_genes',  h_genes,  eta_genes,  'Genes Detected'),
     ]:
         box_data = [adata.obs[adata.obs['leiden'] == c][metric].values for c in clusters]
-        bp = ax.boxplot(box_data, labels=clusters, patch_artist=True,
+        bp = ax.boxplot(box_data, tick_labels=clusters, patch_artist=True,
                         showfliers=False, widths=0.6)
         for patch, c in zip(bp['boxes'], clusters):
             patch.set_facecolor(palette[c]); patch.set_alpha(0.7)
@@ -533,7 +533,7 @@ def plot_enrichment_network(sig_df, output_dir, sample_name,
     pos = (nx.spring_layout(G, weight='weight', k=2.5, iterations=100, seed=42)
            if G.number_of_edges() > 0 else nx.circular_layout(G))
 
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     cluster_list = sorted(set(nx.get_node_attributes(G, 'cluster').values()),
                           key=lambda x: int(x) if str(x).isdigit() else x)
     c_colors     = {c: cmap(i % 20) for i, c in enumerate(cluster_list)}

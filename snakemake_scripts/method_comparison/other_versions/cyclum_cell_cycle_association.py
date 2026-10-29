@@ -272,7 +272,7 @@ def analyze_cluster_cellcycle_association(adata, fig_dir, sample):
     # Get leiden colors
     leiden_colors = []
     clusters = sorted(adata.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     for i, cluster in enumerate(clusters):
         leiden_colors.append(cmap(i % 20))
     

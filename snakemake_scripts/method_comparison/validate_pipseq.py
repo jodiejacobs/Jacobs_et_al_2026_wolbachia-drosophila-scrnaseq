@@ -155,7 +155,7 @@ def plot_ctrl_comparison(combined, fig_dir, sample):
     # Get leiden colors for consistent coloring
     leiden_colors = []
     clusters = sorted(combined_ctrl.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     for i, cluster in enumerate(clusters):
         leiden_colors.append(cmap(i % 20))
     
@@ -364,7 +364,7 @@ def plot_full_dataset_analysis(combined, fig_dir, sample):
     # Get leiden colors for consistent coloring
     leiden_colors = []
     clusters = sorted(combined.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     for i, cluster in enumerate(clusters):
         leiden_colors.append(cmap(i % 20))
     

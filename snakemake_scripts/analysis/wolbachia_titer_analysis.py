@@ -93,7 +93,7 @@ def analyze_batch_sample_mapping(adata, output_dir):
     unique_samples = adata.obs['Sample'].unique()
     
     # Get a colormap with enough colors
-    cmap = plt.cm.get_cmap('tab20', len(unique_samples))
+    cmap = plt.get_cmap('tab20', len(unique_samples))
     
     # Create a dictionary mapping samples to colors
     sample_colors = {sample: cmap(i) for i, sample in enumerate(unique_samples)}
@@ -151,7 +151,7 @@ def analyze_wolbachia_titer(adata, output_dir):
     
     # Create a custom colormap for the batches
     batch_values = sorted(adata.obs['batch'].unique())
-    batch_cmap = plt.cm.get_cmap('Dark2', len(batch_values))
+    batch_cmap = plt.get_cmap('Dark2', len(batch_values))
     batch_colors = {batch: batch_cmap(i) for i, batch in enumerate(batch_values)}
     
     # Plot bars with colors by batch

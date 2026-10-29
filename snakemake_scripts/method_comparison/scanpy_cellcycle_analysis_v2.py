@@ -346,7 +346,7 @@ def analyze_cluster_cellcycle_association(adata, fig_dir, sample):
     sc.settings.figdir = fig_dir
 
     clusters = sorted(adata.obs[leiden_col].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     leiden_colors = [cmap(i % 20) for i in range(len(clusters))]
 
     # ── 1. Chi-square test ────────────────────────────────────────────────────
@@ -903,7 +903,7 @@ def analyze_titer(adata, fig_dir, sample, titer_col='titer'):
     phases   = [p for p in ['G1', 'S', 'G2M'] if p in obs['phase'].unique()]
 
     # Colour palettes
-    cmap_cluster = plt.cm.get_cmap('tab20')
+    cmap_cluster = plt.get_cmap('tab20')
     cluster_colors = {c: cmap_cluster(i % 20) for i, c in enumerate(clusters)}
     phase_colors   = {'G1': '#FF6B6B', 'S': '#4ECDC4', 'G2M': '#45B7D1'}
 

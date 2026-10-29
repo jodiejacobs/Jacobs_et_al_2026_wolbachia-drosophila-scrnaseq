@@ -336,7 +336,7 @@ def analyze_cluster_cellcycle_association(adata, fig_dir, sample):
     sc.settings.figdir = fig_dir
 
     clusters = sorted(adata.obs[leiden_col].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     leiden_colors = [cmap(i % 20) for i in range(len(clusters))]
 
     # ── 1. Chi-square test ────────────────────────────────────────────────────

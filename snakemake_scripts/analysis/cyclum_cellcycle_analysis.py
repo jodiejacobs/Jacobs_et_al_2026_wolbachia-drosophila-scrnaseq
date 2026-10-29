@@ -25,6 +25,8 @@ import os
 from sklearn.neighbors import NearestNeighbors
 import pandas as pd
 import numpy as np
+import matplotlib
+import matplotlib.colors
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import kruskal, mannwhitneyu
@@ -1105,7 +1107,7 @@ def analyze_cluster_cellcycle_association(adata, output_dir, sample_name):
     sc.settings.figdir = output_dir
 
     clusters      = sorted(adata.obs[leiden_col].unique())
-    cmap          = plt.cm.get_cmap('tab20')
+    cmap          = plt.get_cmap('tab20')
     leiden_colors = [cmap(i % 20) for i in range(len(clusters))]
 
     # ── Contingency table ─────────────────────────────────────────────────────

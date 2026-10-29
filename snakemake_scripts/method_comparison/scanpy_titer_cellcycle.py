@@ -470,7 +470,7 @@ def create_titer_cellcycle_plots(adata, fig_dir, sample, titer_col, h_stat, p_kw
     # Box plot overlay
     ax = axes[1]
     phase_data = [adata.obs[adata.obs['phase'] == p][titer_col] for p in phases]
-    bp = ax.boxplot(phase_data, labels=phases, patch_artist=True, 
+    bp = ax.boxplot(phase_data, tick_labels=phases, patch_artist=True, 
                     notch=True, showmeans=True)
     
     for patch, phase in zip(bp['boxes'], phases):
@@ -719,7 +719,7 @@ def analyze_cluster_cellcycle_association(adata, fig_dir, sample):
     
     leiden_colors = []
     clusters = sorted(adata.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     for i, cluster in enumerate(clusters):
         leiden_colors.append(cmap(i % 20))
     

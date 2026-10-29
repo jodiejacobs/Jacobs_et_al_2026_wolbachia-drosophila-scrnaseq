@@ -58,7 +58,7 @@ from scipy.stats import chi2_contingency, mannwhitneyu
 def _leiden_colors(adata, key="leiden_ref"):
     """Return one tab20 colour per cluster."""
     clusters = sorted(adata.obs[key].unique())
-    cmap = plt.cm.get_cmap("tab20")
+    cmap = plt.get_cmap("tab20")
     return [cmap(i % 20) for i in range(len(clusters))]
 
 

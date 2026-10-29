@@ -156,7 +156,7 @@ def plot_ctrl_comparison(combined, fig_dir, sample):
     print(f"Methods in Ctrl: {combined_ctrl.obs['method'].value_counts()}")
 
     clusters = sorted(combined_ctrl.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     leiden_colors = [cmap(i % 20) for i in range(len(clusters))]
 
     sc.pl.umap(combined_ctrl, color='bio_condition',
@@ -279,7 +279,7 @@ def plot_full_dataset_analysis(combined, fig_dir, sample):
     print("="*60)
 
     clusters = sorted(combined.obs['leiden'].unique())
-    cmap = plt.cm.get_cmap('tab20')
+    cmap = plt.get_cmap('tab20')
     leiden_colors = [cmap(i % 20) for i in range(len(clusters))]
 
     sc.pl.umap(combined, color='leiden',
